@@ -61,3 +61,30 @@ TEST(WeReadTouchGeometry, MapsLandscapePageOffsetAndPartialRow) {
   EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 10, 12, 530, 130), -1);
   EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 0, 0, 290, 130), -1);
 }
+
+TEST(WeReadTouchGeometry, FitsLargeCoversAndMultilineTitlesOnXuesuShelf) {
+  for (const Rect content : {Rect{0, 126, 300, 264}, Rect{4, 126, 392, 164}}) {
+    const bool landscape = content.width > 300;
+    const int titleLines = landscape ? 2 : 3;
+    const auto layout = weReadCompactShelfLayout(content, 20, 10, 26, titleLines, 112, 164);
+    ASSERT_EQ(layout.itemsPerPage, 2);
+    const auto left = weReadShelfItemGeometry(content, layout, 0, 2, 0);
+    const auto right = weReadShelfItemGeometry(content, layout, 0, 2, 1);
+    EXPECT_GE(left.cover.width, landscape ? 58 : 100);
+    EXPECT_GE(left.cover.height, landscape ? 85 : 150);
+    EXPECT_GT(left.title.width, left.cover.width);
+    EXPECT_EQ(left.title.height, titleLines * 26);
+    EXPECT_GE(left.title.y, left.cover.y + left.cover.height + 4);
+    EXPECT_LE(left.title.y + left.title.height, left.hit.y + left.hit.height);
+    EXPECT_GE(right.hit.x - (left.hit.x + left.hit.width), 6);
+    EXPECT_GE(left.hit.y, content.y);
+    EXPECT_LE(left.hit.y + left.hit.height, content.y + content.height);
+    EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 0, 5, right.title.x + 1, right.title.y + 1), 1);
+    EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 0, 5, left.hit.x + left.hit.width, left.cover.y), -1);
+
+    const auto last = weReadShelfItemGeometry(content, layout, 4, 5, 4);
+    EXPECT_NEAR(last.cover.x + last.cover.width / 2, content.x + content.width / 2, 1);
+    EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 4, 5, last.title.x + 1, last.title.y + 1), 4);
+    EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 4, 5, left.cover.x, left.cover.y), -1);
+  }
+}

@@ -23,6 +23,7 @@
 #include "CrossPointState.h"
 #include "NetworkStartup.h"
 #include "ReadingStatsStore.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WeReadBrowseActivity.h"
 #include "activities/apps/weread/WeReadTouchGeometry.h"
@@ -164,11 +165,17 @@ static_assert(!canIncrementShelfFrame(3, 9, 4, 10));
 
 WeReadShelfGridLayout shelfGridLayout(const GfxRenderer& renderer, const Rect& content, const int sidePadding,
                                       const int spacing) {
-  WeReadShelfGridLayout layout;
   const int titleHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int minimumGap = std::max(4, spacing / 2);
   const bool landscape = renderer.getOrientation() == GfxRenderer::Orientation::LandscapeClockwise ||
                          renderer.getOrientation() == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  if constexpr (FREEINK_DEVICE_XUESU_300) {
+    const int titleLineHeight = std::max(titleHeight, renderer.getLineHeight(CJK_UI_8_FONT_ID)) + 2;
+    return weReadCompactShelfLayout(content, sidePadding, spacing, titleLineHeight, landscape ? 2 : 3,
+                                    WeReadStore::kCoverThumbWidth, WeReadStore::kCoverThumbHeight);
+  }
+
+  WeReadShelfGridLayout layout;
+  const int minimumGap = std::max(4, spacing / 2);
   layout.columns = landscape ? kLandscapeShelfColumns : kPortraitShelfColumns;
   layout.rows = landscape ? kLandscapeShelfRows : kPortraitShelfRows;
   layout.itemsPerPage = layout.columns * layout.rows;
@@ -202,9 +209,8 @@ bool drawCachedCover(const GfxRenderer& renderer, const std::string& bookDir, co
                                 static_cast<float>(bounds.height) / bitmap.getHeight()});
   const int width = std::max(1, static_cast<int>(bitmap.getWidth() * scale));
   const int height = std::max(1, static_cast<int>(bitmap.getHeight() * scale));
-  renderer.drawBitmap(bitmap, bounds.x + (bounds.width - width) / 2, bounds.y + (bounds.height - height) / 2,
-                      bounds.width, bounds.height);
-  return true;
+  return renderer.drawBitmap(bitmap, bounds.x + (bounds.width - width) / 2, bounds.y + (bounds.height - height) / 2,
+                             bounds.width, bounds.height);
 }
 
 void drawTruncatedProgressTitle(GfxRenderer& renderer, const Rect& content, const int y, const char* title) {
@@ -2239,10 +2245,30 @@ void WeReadActivity::drawShelfGrid(const Rect& content, const int selectedIndex,
       renderer.drawIcon(CoverIcon, cover.x + (cover.width - 32) / 2, cover.y + (cover.height - 32) / 2, 32);
     }
 
-    const std::string title = renderer.truncatedText(SMALL_FONT_ID, book.title, layout.coverWidth);
-    const int titleWidth = renderer.getTextAdvanceX(SMALL_FONT_ID, title.c_str(), EpdFontFamily::REGULAR);
-    renderer.drawText(SMALL_FONT_ID, cover.x + std::max(0, (cover.width - titleWidth) / 2),
-                      cover.y + cover.height + layout.titleGap, title.c_str(), foregroundBlack);
+    const auto& titleBounds = geometry.title;
+    if constexpr (FREEINK_DEVICE_XUESU_300) {
+      namespace fui = freeink::ui;
+      fui::GfxRendererTarget target(renderer);
+      target.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
+      const fui::TextStyle style{.font = fui::GfxRendererTarget::FONT_SMALL,
+                                 .align = fui::TextAlign::Center,
+                                 .maxLines = static_cast<uint8_t>(layout.titleLines)};
+      const fui::Rect bounds{static_cast<int16_t>(titleBounds.x), static_cast<int16_t>(titleBounds.y),
+                             static_cast<int16_t>(titleBounds.width), static_cast<int16_t>(titleBounds.height)};
+      const GfxRenderer::ClipScope clip(renderer, titleBounds.x, titleBounds.y, titleBounds.width, titleBounds.height);
+      const int lineHeight = titleBounds.height / layout.titleLines;
+      int y = titleBounds.y;
+      fui::layoutText(target, bounds, book.title[0] ? book.title : tr(STR_UNNAMED), style,
+                      [&](const char* line, const fui::Rect lineBounds) {
+                        renderer.drawText(SMALL_FONT_ID, lineBounds.x, y, line, foregroundBlack);
+                        y += lineHeight;
+                      });
+    } else {
+      const std::string title = renderer.truncatedText(SMALL_FONT_ID, book.title, titleBounds.width);
+      const int titleWidth = renderer.getTextAdvanceX(SMALL_FONT_ID, title.c_str(), EpdFontFamily::REGULAR);
+      renderer.drawText(SMALL_FONT_ID, titleBounds.x + std::max(0, (titleBounds.width - titleWidth) / 2), titleBounds.y,
+                        title.c_str(), foregroundBlack);
+    }
   };
 
   if (incrementalFrame) {

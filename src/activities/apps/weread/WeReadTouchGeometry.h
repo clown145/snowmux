@@ -58,17 +58,45 @@ struct WeReadShelfGridLayout {
   int titleGap = 0;
   int availableX = 0;
   int availableWidth = 1;
+  int itemWidth = 0;  // Zero keeps the legacy title and hit widths tied to the cover.
+  int titleLines = 1;
 };
+
+inline WeReadShelfGridLayout weReadCompactShelfLayout(const Rect& content, const int sidePadding, const int spacing,
+                                                      const int titleLineHeight, const int titleLines,
+                                                      const int thumbWidth, const int thumbHeight) {
+  WeReadShelfGridLayout layout;
+  constexpr int columns = 2;
+  const int gap = std::max(10, spacing / 2);  // Two 2 px selection margins leave at least 6 px between tiles.
+  layout.columns = columns;
+  layout.itemsPerPage = columns;
+  layout.columnGap = gap;
+  layout.titleGap = std::max(4, spacing / 2);
+  layout.availableX = content.x + sidePadding;
+  layout.availableWidth = std::max(1, content.width - 2 * sidePadding);
+  layout.itemWidth = std::max(1, (layout.availableWidth - 3 * gap) / columns);
+  layout.titleLines = titleLines;
+
+  const int titleHeight = titleLineHeight * titleLines;
+  const int maxCoverHeight = std::max(1, content.height - 2 * gap - layout.titleGap - titleHeight);
+  const float scale = std::min(
+      {1.0f, static_cast<float>(layout.itemWidth) / thumbWidth, static_cast<float>(maxCoverHeight) / thumbHeight});
+  layout.coverWidth = std::max(1, static_cast<int>(thumbWidth * scale));
+  layout.coverHeight = std::max(1, static_cast<int>(thumbHeight * scale));
+  layout.itemHeight = layout.coverHeight + layout.titleGap + titleHeight;
+  return layout;
+}
 
 struct WeReadShelfItemGeometry {
   Rect cover;
+  Rect title;
   Rect hit;
 };
 
 inline WeReadShelfItemGeometry weReadShelfItemGeometry(const Rect& content, const WeReadShelfGridLayout& layout,
                                                        const int pageStart, const int pageEnd, const int index) {
   const int pageCount = pageEnd - pageStart;
-  if (layout.columns <= 0 || pageCount <= 0 || index < pageStart || index >= pageEnd) return {Rect{}, Rect{}};
+  if (layout.columns <= 0 || pageCount <= 0 || index < pageStart || index >= pageEnd) return {Rect{}, Rect{}, Rect{}};
 
   const int item = index - pageStart;
   const int row = item / layout.columns;
@@ -77,12 +105,15 @@ inline WeReadShelfItemGeometry weReadShelfItemGeometry(const Rect& content, cons
   const int visibleHeight = visibleRows * layout.itemHeight + std::max(0, visibleRows - 1) * layout.rowGap;
   const int startY = content.y + std::max(0, (content.height - visibleHeight) / 2);
   const int rowItems = std::min(layout.columns, pageCount - row * layout.columns);
-  const int rowWidth = rowItems * layout.coverWidth + std::max(0, rowItems - 1) * layout.columnGap;
-  const int coverX = layout.availableX + std::max(0, (layout.availableWidth - rowWidth) / 2) +
-                     column * (layout.coverWidth + layout.columnGap);
+  const int itemWidth = layout.itemWidth > 0 ? layout.itemWidth : layout.coverWidth;
+  const int rowWidth = rowItems * itemWidth + (rowItems - 1) * layout.columnGap;
+  const int itemX =
+      layout.availableX + std::max(0, (layout.availableWidth - rowWidth) / 2) + column * (itemWidth + layout.columnGap);
   const int coverY = startY + row * (layout.itemHeight + layout.rowGap);
-  const Rect cover{coverX, coverY, layout.coverWidth, layout.coverHeight};
-  return {cover, Rect{cover.x - 2, cover.y - 2, cover.width + 4, layout.itemHeight + 4}};
+  const Rect cover{itemX + (itemWidth - layout.coverWidth) / 2, coverY, layout.coverWidth, layout.coverHeight};
+  const int titleY = coverY + cover.height + layout.titleGap;
+  const Rect title{itemX, titleY, itemWidth, layout.itemHeight - cover.height - layout.titleGap};
+  return {cover, title, Rect{itemX - 2, coverY - 2, itemWidth + 4, layout.itemHeight + 4}};
 }
 
 inline int weReadShelfIndexFromPoint(const Rect& content, const WeReadShelfGridLayout& layout, const int selectedIndex,
