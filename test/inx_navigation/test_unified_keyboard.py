@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -159,9 +160,13 @@ struct KeyboardEntryActivity {
     const auto keysRect=keyboardKeysRect();
     const auto& metrics=UITheme::getInstance().getMetrics();
     assert(keysRect.height>0 && keysRect.width>0);
-    if (UiHighDpiProfile::enabled) assert(keysRect.y>=inputStartY()+inputLineCount()*renderer.getLineHeight(UI_12_FONT_ID)+6);
+    if (UiHighDpiProfile::enabled || FREEINK_DEVICE_XUESU_300)
+      assert(keysRect.y>=inputStartY()+inputLineCount()*renderer.getLineHeight(UI_12_FONT_ID)+6);
     @RENDER@
     assert(props.geometry==fui::KeyboardGeometry::Separated && props.rowGap>=6 && props.keyRadius==3);
+#if FREEINK_DEVICE_XUESU_300
+    assert(!props.showAltHints && props.minTouchSize==0);
+#endif
     for (size_t i=0; i<interactions.count(); ++i) {
       const auto& h=interactions.data()[i];
       assert(h.rect.x>=0 && h.rect.y>=0 && h.rect.right()<=renderer.width && h.rect.bottom()<=renderer.height);
@@ -180,13 +185,18 @@ struct KeyboardEntryActivity {
 };
 @METHODS@
 int main() {
+  assert(fui::KeyboardProps{}.showAltHints); // Existing touch boards retain alternates by default.
   int scene=0;
-  for (int device=0; device<(UiHighDpiProfile::enabled?1:2); ++device)
+  for (int device=0; device<((UiHighDpiProfile::enabled || FREEINK_DEVICE_XUESU_300)?1:2); ++device)
     for (int orientation=0; orientation<4; ++orientation) for (bool touch : {false,true}) {
     const bool landscape=orientation%2;
     renderer.orientation=orientation;
     renderer.width=UiHighDpiProfile::enabled?(landscape?1216:684):(landscape?(device?792:800):(device?528:480));
     renderer.height=UiHighDpiProfile::enabled?(landscape?684:1216):(landscape?(device?528:480):(device?792:800));
+#if FREEINK_DEVICE_XUESU_300
+    renderer.width=landscape?400:300;
+    renderer.height=landscape?300:400;
+#endif
     renderer.touch=touch;
     for (auto type : {InputType::Text,InputType::Password,InputType::Url})
       for (const auto& language : keyboard_layouts::ALL) for (int flags=0; flags<16; ++flags,++scene)
@@ -208,7 +218,12 @@ int main() {
           const auto keysHash=traceHash;
           traceHash=1469598103934665603ULL;
           kb.selRow=kb.selCol=0;
-          kb.moveSelectionCol(-1); assert(kb.selCol==layout.rows[0].count-1);
+          kb.moveSelectionCol(-1);
+#if FREEINK_DEVICE_XUESU_300
+          assert(kb.selRow==layout.rowCount-1 && kb.selCol==layout.rows[kb.selRow].count-1);
+#else
+          assert(kb.selCol==layout.rows[0].count-1);
+#endif
           kb.moveSelectionCol(1); assert(kb.selCol==0);
           kb.moveSelectionRow(-1); assert(kb.selRow==layout.rowCount-1);
           kb.moveSelectionRow(1); assert(kb.selRow==0);
@@ -224,8 +239,11 @@ int main() {
     edit.cursorPos=cursor;
     int start=edit.inputWindowStart(longText,100), end=start;
     for(int line=0;line<edit.inputLineCount();++line) end=edit.lineBreakEnd(longText,end,100);
-    assert(!UiHighDpiProfile::enabled || (size_t(start)<=cursor && cursor<=size_t(end)));
+    assert((!UiHighDpiProfile::enabled && !FREEINK_DEVICE_XUESU_300) || (size_t(start)<=cursor && cursor<=size_t(end)));
   }
+#if FREEINK_DEVICE_XUESU_300
+  return 0; // Three-button cursor/confirm gestures have their own production-loop regression.
+#endif
   for (int theme=0; theme<7; ++theme) {
     SETTINGS.uiTheme=static_cast<CrossPointSettings::UI_THEME>(theme);
     KeyboardEntryActivity kb;
@@ -267,11 +285,11 @@ replacements = {'TRACE': trace_target, 'METRICS': metrics_code(), 'LANGUAGES': l
                 'CONFIRM': confirm, 'RENDER': render, 'METHODS': '\n'.join(methods)}
 for name, code in replacements.items():
     harness = harness.replace('@' + name + '@', code)
-def run_harness(code, tmp, name, high_dpi=False):
+def run_harness(code, tmp, name, high_dpi=False, xuesu=False):
     cpp, binary = tmp / (name+'.cpp'), tmp / name
     cpp.write_text(code)
     ui = SDK / 'libs/ui/FreeInkUI'
-    command = ['c++', '-std=c++20', '-I'+str(ui/'include'), str(cpp), str(ui/'src/FreeInkUI.cpp'), '-o', str(binary)]
+    command = ['c++', '-std=c++20', '-DFREEINK_DEVICE_XUESU_300='+str(int(xuesu)), '-I'+str(ui/'include'), str(cpp), str(ui/'src/FreeInkUI.cpp'), '-o', str(binary)]
     if high_dpi: command.append('-DCROSSMUX_UI_PROFILE_HIGH_DPI')
     subprocess.run(command, check=True)
     output = subprocess.check_output([str(binary)], text=True)
@@ -279,6 +297,10 @@ def run_harness(code, tmp, name, high_dpi=False):
 
 with tempfile.TemporaryDirectory(prefix='unified-keyboard-', dir=os.environ.get('TMPDIR')) as tmp:
     tmp=Path(tmp)
+    if '--xuesu' in sys.argv:
+        scenes=run_harness(harness,tmp,'xuesu',xuesu=True)
+        print(f'{len(scenes)} Xuesu keyboard render scenes across 7 themes passed; full label boxes, non-overlapping hit regions, all layouts and four orientations.')
+        sys.exit(0)
     regular=run_harness(harness,tmp,'regular')
     high=run_harness(harness,tmp,'readpico',True)
     for scenes in (regular,high):

@@ -10,6 +10,9 @@
 
 #include "OpdsServerStore.h"
 #include "activities/CatalogActivity.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "components/OptionPopup.h"
+#endif
 #include "network/OpdsHttpTransport.h"
 
 struct DetailsSpec;
@@ -24,10 +27,18 @@ class OpdsBookBrowserActivity final : public CatalogActivity {
 
   void onEnter() override;
   void onExit() override;
+#if FREEINK_DEVICE_XUESU_300
+  void render(RenderLock&& lock) override;
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
 
  private:
   // Subclass actions after the base's ACTION_SEARCH/ACTION_CANCEL.
   static constexpr freeink::ui::ActionId ACTION_PAGE = ACTION_USER + 2;
+#if FREEINK_DEVICE_XUESU_300
+  OptionPopup paginationPopup;
+#endif
 
   std::vector<OpdsEntry> entries;
   // Row buffer, built whenever entries changes (fetchFeed()/releaseEntries())

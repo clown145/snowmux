@@ -288,7 +288,11 @@ void EpubReaderBookmarksActivity::buildScreen(UiScreen& screen) {
     const int helpLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
     const fui::Rect band = screen.takeBottom(static_cast<int16_t>(helpLineHeight + metrics.verticalSpacing));
     GUI.drawHelpText(renderer, Rect{band.x, band.y + metrics.verticalSpacing, band.width, helpLineHeight},
+#if FREEINK_DEVICE_XUESU_300
+                     tr(STR_XUESU_BOOKMARK_ACTIONS_HINT));
+#else
                      tr(STR_HOLD_OPEN_FOR_ACTIONS));
+#endif
   }
 
   // bookmarkSubtitles/bookmarkRowItems are built once whenever `bookmarks`

@@ -231,3 +231,34 @@ index 34de790..1a4f54b 100644
      state |= (1 << BTN_DOWN);
    // Power reads at its declared polarity (isDigitalPressed assumes active-low).
    if (isPowerButtonPhysicallyPressed() &&
+diff --git a/libs/ui/FreeInkUI/include/components/keyboard/keyboard.h b/libs/ui/FreeInkUI/include/components/keyboard/keyboard.h
+index 9097092..ab90739 100644
+--- a/libs/ui/FreeInkUI/include/components/keyboard/keyboard.h
++++ b/libs/ui/FreeInkUI/include/components/keyboard/keyboard.h
+@@ -131,6 +131,8 @@ struct KeyboardProps {
+   // letters, numbers, or symbols use the narrowest unit that fits any such
+   // row, while control-only rows continue to fill their available width.
+   bool uniformKeyWidth = true;
++  // Button-only devices can omit alternates that require a touch hold.
++  bool showAltHints = true;
+ };
+ 
+ // Preferred total height for touch entry. Match the height of a character key
+@@ -642,7 +644,7 @@ void keyboard(Frame<MaxInteractions>& frame, Rect rect, const KeyboardProps& pro
+     if (props.selectedIndex == selectedIndex) state |= props.inactiveSelection ? StateFocused : StateSelected;
+     if (!key.enabled || key.kind == KeyKind::Disabled) state |= StateDisabled;
+     const ActionId action = actionFor(key.kind);
+-    const bool hasAltHint = key.kind == KeyKind::Normal && key.alt;
++    const bool hasAltHint = props.showAltHints && key.kind == KeyKind::Normal && key.alt;
+     ButtonProps bp;
+     const char* label =
+         (key.kind == KeyKind::Space || key.kind == KeyKind::Delete || key.kind == KeyKind::Lang) ? nullptr : key.label;
+@@ -808,7 +810,7 @@ void keyboard(Frame<MaxInteractions>& frame, Rect rect, const KeyboardProps& pro
+     if (props.selectedIndex == selectedIndex) state |= props.inactiveSelection ? StateFocused : StateSelected;
+     if (!key.enabled || key.kind == KeyKind::Disabled) state |= StateDisabled;
+     const ActionId action = actionFor(key.kind);
+-    const bool hasAltHint = key.kind == KeyKind::Normal && key.alt;
++    const bool hasAltHint = props.showAltHints && key.kind == KeyKind::Normal && key.alt;
+     ButtonProps bp;
+     const char* label =
+         (key.kind == KeyKind::Space || key.kind == KeyKind::Delete || key.kind == KeyKind::Lang) ? nullptr : key.label;

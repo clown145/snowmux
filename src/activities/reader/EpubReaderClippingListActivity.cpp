@@ -198,7 +198,11 @@ void EpubReaderClippingListActivity::buildScreen(UiScreen& screen) {
     const int helpHeight = renderer.getLineHeight(UI_10_FONT_ID);
     const fui::Rect band = screen.takeBottom(static_cast<int16_t>(helpHeight + metrics.verticalSpacing));
     GUI.drawHelpText(renderer, Rect{band.x, band.y + metrics.verticalSpacing, band.width, helpHeight},
+#if FREEINK_DEVICE_XUESU_300
+                     tr(STR_XUESU_CLIPPING_ACTIONS_HINT));
+#else
                      tr(STR_HOLD_SELECT_TO_DELETE));
+#endif
   }
 
   fui::ListProps props;

@@ -18,6 +18,7 @@
 #include <Util.h>
 #include <WolfsslCrypto.h>
 
+#include <array>
 #include <cstring>
 #include <iterator>
 
@@ -146,6 +147,9 @@ void OpdsBookBrowserActivity::onEnter() {
 }
 
 void OpdsBookBrowserActivity::onExit() {
+#if FREEINK_DEVICE_XUESU_300
+  paginationPopup.dismiss();
+#endif
   releaseEntries();
   navigationHistory.clear();
   if (!detailCoverPath.empty()) {
@@ -162,6 +166,11 @@ void OpdsBookBrowserActivity::activateIndex(const int index) {
 }
 
 bool OpdsBookBrowserActivity::handleCustomInput() {
+#if FREEINK_DEVICE_XUESU_300
+  if (paginationPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
+  // These are the only navigation keys on Xuesu: leave selection and search
+  // with CatalogActivity. Feed pagination lives in the double-confirm menu.
+#else
   if (state == State::BROWSING &&
       (!pageNextHref.empty() || !pagePrevHref.empty() || !pageFirstHref.empty() || !pageLastHref.empty())) {
     // On a paginated feed the side buttons belong to feed pages exclusively.
@@ -181,8 +190,47 @@ bool OpdsBookBrowserActivity::handleCustomInput() {
       return true;
     }
   }
+#endif
   return CatalogActivity::handleCustomInput();
 }
+
+#if FREEINK_DEVICE_XUESU_300
+const char* OpdsBookBrowserActivity::xuesuQuickActionLabel() const {
+  if (state != State::BROWSING || paginationPopup.isActive()) return nullptr;
+  return (!pageNextHref.empty() || !pagePrevHref.empty() || !pageFirstHref.empty() || !pageLastHref.empty())
+             ? tr(STR_XUESU_CATALOG_PAGES)
+             : nullptr;
+}
+
+void OpdsBookBrowserActivity::runXuesuQuickAction() {
+  if (!xuesuQuickActionLabel()) return;
+  StrId labels[4];
+  std::array<int16_t, 4> pages{};
+  int count = 0;
+  const auto add = [&](const std::string& href, const StrId label, const int16_t page) {
+    if (href.empty()) return;
+    labels[count] = label;
+    pages[count++] = page;
+  };
+  add(pagePrevHref, StrId::STR_PREV_PAGE, PAGE_PREV);
+  add(pageNextHref, StrId::STR_NEXT_PAGE, PAGE_NEXT);
+  add(pageFirstHref, StrId::STR_XUESU_FIRST_PAGE, PAGE_FIRST);
+  add(pageLastHref, StrId::STR_XUESU_LAST_PAGE, PAGE_LAST);
+  // The existing popup owns at most four translated labels across input frames;
+  // stack labels cannot outlive this call. No feed entries or URLs are copied.
+  paginationPopup.show(StrId::STR_XUESU_CATALOG_PAGES, labels, count, 0, [this, pages](const int choice) {
+    fui::ActionEvent event{};
+    event.value = pages[choice];
+    onPageEvent(event, this);
+  });
+  requestUpdate();
+}
+
+void OpdsBookBrowserActivity::render(RenderLock&& lock) {
+  if (paginationPopup.processRender(renderer, mappedInput)) return;
+  CatalogActivity::render(std::move(lock));
+}
+#endif
 
 void OpdsBookBrowserActivity::onPageEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<OpdsBookBrowserActivity*>(user);
@@ -242,6 +290,21 @@ void OpdsBookBrowserActivity::buildScreen(UiScreen& screen) {
 // last links. Prev and Next always show when the feed is paginated (the
 // unavailable direction is disabled); First/Last appear only when advertised.
 void OpdsBookBrowserActivity::buildPaginationBar(UiScreen& screen) {
+#if FREEINK_DEVICE_XUESU_300
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const bool hasPageCount = pageCurrent > 0 && pageTotal > 0;
+  const fui::Rect band =
+      screen.takeBottom(static_cast<int16_t>(lineHeight * (hasPageCount ? 2 : 1) + metrics.verticalSpacing));
+  GUI.drawHelpText(renderer, Rect{band.x, band.y + metrics.verticalSpacing, band.width, lineHeight},
+                   tr(STR_XUESU_CATALOG_PAGES_HINT));
+  if (hasPageCount) {
+    char pageText[32];
+    snprintf(pageText, sizeof(pageText), "%d/%d", pageCurrent, pageTotal);
+    GUI.drawHelpText(renderer, Rect{band.x, band.y + metrics.verticalSpacing + lineHeight, band.width, lineHeight},
+                     pageText);
+  }
+#else
   // Backward arrows on the left, forward arrows on the right, "Page N of M"
   // between them when the feed reports its pagination.
   fui::TabItem left[2], right[2];
@@ -291,6 +354,7 @@ void OpdsBookBrowserActivity::buildPaginationBar(UiScreen& screen) {
                                    static_cast<int16_t>(slotY + (slotH - lh) / 2), zoneW, lh},
                          pageText, centered);
   }
+#endif
 }
 
 void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
