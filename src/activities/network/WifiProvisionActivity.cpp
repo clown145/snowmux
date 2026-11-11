@@ -17,6 +17,7 @@
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/html/PhoneSetupPageHtml.generated.h"
 #include "network/html/WifiSetupPageHtml.generated.h"
 #include "network/html/assets/crosspoint_iconSvg.generated.h"
 #include "network/html/assets/webCss.generated.h"
@@ -58,15 +59,19 @@ void sendGzip(WebServer& web, const char* contentType, const char* data, const s
 void WifiProvisionActivity::onEnter() {
   Activity::onEnter();
   sessionStart = millis();
-  WIFI_STORE.loadFromFile();
-  if (!NetworkStartup::setMode(renderer, WIFI_AP_STA)) {
+  previousMode = WiFi.getMode();
+  if (!form) WIFI_STORE.loadFromFile();
+  const auto mode = form && !WiFi.STA.connected() ? WIFI_AP : WIFI_AP_STA;
+  if (!NetworkStartup::setMode(renderer, mode)) {
     setState(State::Unavailable);
     return;
   }
   ownsRadio = true;
-  WiFi.setAutoReconnect(false);
-  WiFi.setSleep(false);
-  WiFi.disconnect(false, false, 1000);
+  if (!form) {
+    WiFi.setAutoReconnect(false);
+    WiFi.setSleep(false);
+    WiFi.disconnect(false, false, 1000);
+  }
   const IPAddress portalIp(192, 168, 4, 1);
   if (!WiFi.softAPConfig(portalIp, portalIp, IPAddress(255, 255, 255, 0), IPAddress{}, portalIp)) {
     LOG_ERR("WSET", "Could not advertise portal DNS over DHCP");
@@ -103,16 +108,25 @@ void WifiProvisionActivity::onEnter() {
   });
   const char* headers[] = {"Content-Type"};
   web->collectHeaders(headers, std::size(headers));
-  web->on("/", HTTP_GET,
-          [this] { sendGzip(*web, "text/html; charset=utf-8", WifiSetupPageHtml, WifiSetupPageHtmlCompressedSize); });
+  web->on("/", HTTP_GET, [this] {
+    if (form)
+      sendGzip(*web, "text/html; charset=utf-8", PhoneSetupPageHtml, PhoneSetupPageHtmlCompressedSize);
+    else
+      sendGzip(*web, "text/html; charset=utf-8", WifiSetupPageHtml, WifiSetupPageHtmlCompressedSize);
+  });
   web->on("/", HTTP_HEAD, [this] { web->send(200, "text/html; charset=utf-8", ""); });
   web->on("/assets/web.css", HTTP_GET,
           [this] { sendGzip(*web, "text/css; charset=utf-8", webCss, webCssCompressedSize); });
   web->on("/assets/crosspoint-icon.svg", HTTP_GET,
           [this] { sendGzip(*web, "image/svg+xml", crosspoint_iconSvg, crosspoint_iconSvgCompressedSize); });
-  web->on("/networks", HTTP_GET, [this] { sendNetworks(); });
-  web->on("/scan", HTTP_POST, [this] { startScan(); });
-  web->on("/connect", HTTP_POST, [this] { startConnection(); });
+  if (form) {
+    web->on("/form", HTTP_GET, [this] { sendForm(); });
+    web->on("/form", HTTP_POST, [this] { submitForm(); });
+  } else {
+    web->on("/networks", HTTP_GET, [this] { sendNetworks(); });
+    web->on("/scan", HTTP_POST, [this] { startScan(); });
+    web->on("/connect", HTTP_POST, [this] { startConnection(); });
+  }
   web->on("/status", HTTP_GET, [this] { sendStatus(); });
   web->onNotFound([this] {
     if (isPortalRead(web->method())) {
@@ -123,9 +137,11 @@ void WifiProvisionActivity::onEnter() {
   });
   web->begin();
   startPortalDns();
-  esp_wifi_scan_stop();
-  WiFi.scanDelete();
-  WiFi.scanNetworks(true, false, false, 120);
+  if (!form) {
+    esp_wifi_scan_stop();
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true, false, false, 120);
+  }
   setState(State::Ready);
   LOG_INF("WSET", "Setup hotspot ready");
 }
@@ -134,16 +150,60 @@ void WifiProvisionActivity::onExit() {
   portalDns.stop();
   web.reset();
   if (ownsRadio) {
-    esp_wifi_scan_stop();
-    WiFi.scanDelete();
-    if (handoff) {
+    if (form) {
+      WiFi.softAPdisconnect(true);
+      WiFi.mode(previousMode);
+    } else if (handoff) {
+      esp_wifi_scan_stop();
+      WiFi.scanDelete();
       WiFi.softAPdisconnect(true);
       WiFi.setAutoReconnect(true);
     } else {
+      esp_wifi_scan_stop();
+      WiFi.scanDelete();
       WiFi.mode(WIFI_OFF);
     }
   }
+  form.reset();
   Activity::onExit();
+}
+
+void WifiProvisionActivity::sendForm() {
+  JsonDocument doc;
+  form->describe(doc);
+  doc["saved"] = state == State::Saved;
+  sendJson(*web, 200, doc);
+}
+
+void WifiProvisionActivity::submitForm() {
+  if (state == State::Saved) {
+    web->send(200);  // A retried request cannot create another server.
+    return;
+  }
+  if (web->header("Content-Type") != "application/json") {
+    web->send(415);
+    return;
+  }
+  const String body = web->arg("plain");
+  JsonDocument doc;
+  if (body.length() > 8192 || deserializeJson(doc, body)) {
+    web->send(400);
+    return;
+  }
+  switch (form->accept(doc)) {
+    case PhoneSetupForm::Result::Invalid:
+      web->send(400);
+      return;
+    case PhoneSetupForm::Result::SaveFailed:
+      setState(State::SaveFailed);
+      web->send(500);
+      return;
+    case PhoneSetupForm::Result::Saved:
+      joinedAt = millis();
+      setState(State::Saved);
+      web->send(200);
+      return;
+  }
 }
 
 void WifiProvisionActivity::setState(const State next) {
@@ -267,6 +327,9 @@ void WifiProvisionActivity::sendStatus() {
       doc["state"] = "connected";
       doc["ip"] = stationAddress;
       break;
+    case State::Saved:
+      doc["state"] = "saved";
+      break;
     case State::Failed:
       doc["state"] = "failed";
       break;
@@ -283,28 +346,28 @@ void WifiProvisionActivity::sendStatus() {
 void WifiProvisionActivity::complete(const bool connected) {
   ActivityResult result;
   result.isCancelled = !connected;
-  handoff = connected && keepStation;
-  if (connected) result.data = WifiResult{true, ssid, stationAddress};
+  handoff = !form && connected && keepStation;
+  if (!form && connected) result.data = WifiResult{true, ssid, stationAddress};
   setResult(std::move(result));
   finish();
 }
 
 void WifiProvisionActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    complete(state == State::Connected);
+    complete(state == State::Connected || state == State::Saved);
     return;
   }
   if (web) web->handleClient();
   const auto phase = state.load();
   using Button = MappedInputManager::Button;
-  if (phase != State::Connected && phase != State::Unavailable &&
+  if (phase != State::Connected && phase != State::Saved && phase != State::Unavailable &&
       (mappedInput.wasReleased(Button::NavPrevious) || mappedInput.wasReleased(Button::NavNext))) {
     showPassword.store(!showPassword.load());
     requestUpdate();
   }
   if (phase == State::Connecting) {
     checkConnection();
-  } else if (phase == State::Connected) {
+  } else if (phase == State::Connected || phase == State::Saved) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || millis() - joinedAt >= kSuccessDisplayTime) {
       complete(true);
     }
@@ -318,7 +381,8 @@ void WifiProvisionActivity::render(RenderLock&&) {
   auto& theme = UITheme::getInstance();
   const auto& metrics = theme.getMetrics();
   const auto safe = theme.getScreenSafeArea(renderer, true);
-  GUI.drawHeader(renderer, SubpageLayout::headerRect(safe, metrics), tr(STR_WIFI_HOTSPOT_SETUP));
+  GUI.drawHeader(renderer, SubpageLayout::headerRect(safe, metrics),
+                 form ? tr(STR_PHONE_SETUP) : tr(STR_WIFI_HOTSPOT_SETUP));
   const auto content =
       SubpageLayout::insetHorizontal(SubpageLayout::contentRect(safe, metrics), metrics.contentSidePadding);
   const auto phase = state.load();
@@ -336,8 +400,9 @@ void WifiProvisionActivity::render(RenderLock&&) {
     const int qrSide = std::min({content.width, content.height - (5 + statusRows) * rowHeight, kMaximumQrSide});
     const bool canShowQr = qrSide >= kMinimumQrSide;
     const bool showQr = canShowQr && !showPassword.load();
-    const int rows = phase == State::Connected ? 2 : (showQr ? 5 : (canShowQr ? 7 : 6)) + statusRows;
-    const int bodyHeight = rows * rowHeight + (phase != State::Connected && showQr ? qrSide : 0);
+    const bool done = phase == State::Connected || phase == State::Saved;
+    const int rows = done ? 2 : (showQr ? 5 : (canShowQr ? 7 : 6)) + statusRows;
+    const int bodyHeight = rows * rowHeight + (!done && showQr ? qrSide : 0);
     int y = SubpageLayout::centeredTop(content, bodyHeight);
     const auto line = [&](const char* text, const bool bold = false) {
       const Rect row{content.x, y, content.width, lineHeight};
@@ -345,7 +410,10 @@ void WifiProvisionActivity::render(RenderLock&&) {
                                        bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
       y += rowHeight;
     };
-    if (phase == State::Connected) {
+    if (phase == State::Saved) {
+      line(tr(STR_PHONE_SETUP_SAVED), true);
+      line(tr(STR_PHONE_SETUP_RETURN));
+    } else if (phase == State::Connected) {
       line(tr(STR_CONNECTED), true);
       line(stationAddress.c_str());
     } else {

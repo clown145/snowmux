@@ -2,6 +2,7 @@
 
 This document describes the HTTP, WebSocket, WebDAV, and discovery endpoints
 available while CrossMux is in File Transfer or Calibre Wireless mode.
+The final section separately documents the Xuesu foreground setup hotspot.
 
 - HTTP server: port 80
 - WebSocket upload server: port 81
@@ -796,3 +797,38 @@ Run `python3 scripts/tests/test_webserver_startup_failure.py` for injected
 allocation/socket failures, cleanup, repeated stop, retry, and AP startup guards.
 Physical acceptance additionally requires AP and STA transfers; host stubs do
 not exercise the actual WiFi driver or prove that every listener is reachable.
+
+## Xuesu temporary phone setup
+
+On Xuesu, free-text entry and connection settings open the existing Wi-Fi setup
+hotspot in form mode. This is a separate foreground server, not an additional
+route on the File Transfer server. It stops when the Activity exits or after
+five minutes; successful submission returns to the caller after confirmation
+or eight seconds. The device advertises a random-password hotspot and its
+literal HTTP address. The page shares the Wi-Fi setup page's CSS and branding.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/` | Phone form page |
+| `GET` | `/form` | Title, field metadata, current non-secret values and `saved` |
+| `POST` | `/form` | Validate and submit the entire field-value array |
+| `GET` | `/status` | State including `ready`, `save_failed` and `saved` |
+
+Form metadata contains up to six fields: `label`, `maxBytes`, `required`,
+`secret`, `url`, and either `value` or secret-only `hasValue`. Passwords and
+custom headers are never returned in metadata. POST requires
+`Content-Type: application/json` and an exact-length `{"values":[...]}` array.
+A string replaces a field; `null` preserves the existing value of a secret
+field; an empty string clears it if optional. Text is bounded to 512 UTF-8
+bytes per field (individual forms may set smaller limits); NUL and newlines
+are rejected. URL fields require `http://` or `https://`, or may be empty when
+optional. JSON parsing rejects bodies larger than 8 KiB.
+
+Responses: `200` submitted (also on retries after success), `400` invalid
+values/JSON, `415` unsupported content type, and `500` persistence failure.
+Failed persistence retains the prior configuration and allows retry. OPDS and
+KOReader changes are published in memory only after SD commit. Generic text
+entry instead returns a `KeyboardResult` to the existing caller. The ordinary
+Wi-Fi `/networks`, `/scan`, and `/connect` routes remain exclusive to Wi-Fi
+provisioning mode; form mode preserves a connected station and restores the
+prior wireless mode on exit.

@@ -32,6 +32,9 @@ class OpdsSettingsActivity final : public UiListActivity {
   int getMenuItemCount() const;
   void handleSelection();
   bool saveServer();
+#if FREEINK_DEVICE_XUESU_300
+  void openPhoneSetup();
+#endif
 
   // Row storage: at most 7 rows (Name/URL/Username/Password/2 custom headers
   // + Delete, see BASE_ITEMS in the .cpp), so a fixed-capacity array avoids

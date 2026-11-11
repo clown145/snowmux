@@ -68,6 +68,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
 
   // Credential management
   void setCredentials(const std::string& user, const std::string& pass);
+  bool saveConnectionSettings(const std::string& user, const std::string& pass, const std::string& url,
+                              const std::array<HttpHeader, MAX_CUSTOM_HEADERS>& headers);
   const std::string& getUsername() const { return username; }
   const std::string& getPassword() const { return password; }
 

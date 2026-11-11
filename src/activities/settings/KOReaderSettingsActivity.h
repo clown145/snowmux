@@ -25,6 +25,9 @@ class KOReaderSettingsActivity final : public UiListActivity {
   void activateIndex(int index) override;
   bool handleCustomInput() override;
   const char* headerTitle() const override;
+#if FREEINK_DEVICE_XUESU_300
+  void openPhoneSetup();
+#endif
 
   // Row storage: MENU_ITEMS is a compile-time constant, so fixed-capacity
   // storage avoids any heap allocation for the row list. Labels are set once

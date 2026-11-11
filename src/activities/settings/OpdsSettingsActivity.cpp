@@ -9,6 +9,9 @@
 #include "OpdsServerStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "activities/network/WifiProvisionActivity.h"
+#endif
 
 namespace fui = freeink::ui;
 
@@ -37,6 +40,9 @@ OpdsSettingsActivity::OpdsSettingsActivity(GfxRenderer& renderer, MappedInputMan
 }
 
 int OpdsSettingsActivity::getMenuItemCount() const {
+#if FREEINK_DEVICE_XUESU_300
+  return isNewServer ? 1 : 2;
+#endif
   return isNewServer ? BASE_ITEMS : BASE_ITEMS + 1;  // +1 for Delete
 }
 
@@ -58,7 +64,59 @@ void OpdsSettingsActivity::onEnter() {
       serverIndex = -1;
     }
   }
+#if FREEINK_DEVICE_XUESU_300
+  fieldRowItems[0].label = tr(STR_PHONE_SETUP);
+  fieldRowItems[1].label = tr(STR_DELETE_SERVER);
+  fieldRowItems[1].actionValue = 1;
+  if (isNewServer) openPhoneSetup();
+#endif
 }
+
+#if FREEINK_DEVICE_XUESU_300
+void OpdsSettingsActivity::openPhoneSetup() {
+  auto form = makeUniqueNoThrow<PhoneSetupForm>();
+  if (!form) {
+    LOG_ERR("OPS", "OOM: phone form (%u bytes)", static_cast<unsigned>(sizeof(PhoneSetupForm)));
+    return;
+  }
+  using Kind = PhoneSetupForm::Kind;
+  form->title = tr(STR_OPDS_SERVERS);
+  form->count = 6;
+  form->fields[0] = {tr(STR_SERVER_NAME), editServer.name, 63};
+  form->fields[1] = {tr(STR_OPDS_SERVER_URL), editServer.url, 127, Kind::Url, true};
+  form->fields[2] = {tr(STR_USERNAME), editServer.username, 63};
+  form->fields[3] = {tr(STR_PASSWORD), editServer.password, 63, Kind::Password};
+  form->fields[4] = {tr(STR_CUSTOM_HEADER_1), formatHttpHeaderLine(editServer.customHeaders[0]), 160, Kind::Password};
+  form->fields[5] = {tr(STR_CUSTOM_HEADER_2), formatHttpHeaderLine(editServer.customHeaders[1]), 160, Kind::Password};
+  form->submit = [this](const PhoneSetupForm::Values& values) {
+    OpdsServer candidate;
+    candidate.name = values[0];
+    candidate.url = values[1];
+    candidate.username = values[2];
+    candidate.password = values[3];
+    for (size_t i = 0; i < candidate.customHeaders.size(); ++i) {
+      parseHttpHeaderLine(values[4 + i], candidate.customHeaders[i]);
+      if (!values[4 + i].empty() && !isValidHttpHeader(candidate.customHeaders[i]))
+        return PhoneSetupForm::Result::Invalid;
+    }
+    const bool saved = isNewServer ? OPDS_STORE.addServer(candidate)
+                                   : OPDS_STORE.updateServer(static_cast<size_t>(serverIndex), candidate);
+    if (!saved) return PhoneSetupForm::Result::SaveFailed;
+    editServer = std::move(candidate);
+    if (isNewServer) serverIndex = static_cast<int>(OPDS_STORE.getCount()) - 1;
+    isNewServer = false;
+    return PhoneSetupForm::Result::Saved;
+  };
+  startActivityForResultWith<WifiProvisionActivity>(
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled)
+          finish();
+        else
+          requestUpdate();
+      },
+      std::move(form));
+}
+#endif
 
 void OpdsSettingsActivity::activateIndex(const int index) {
   nav.selected = index;
@@ -99,6 +157,19 @@ bool OpdsSettingsActivity::saveServer() {
 }
 
 void OpdsSettingsActivity::handleSelection() {
+#if FREEINK_DEVICE_XUESU_300
+  if (nav.selected == 0) {
+    openPhoneSetup();
+  } else if (nav.selected == 1 && !isNewServer) {
+    if (OPDS_STORE.removeServer(static_cast<size_t>(serverIndex)))
+      finish();
+    else {
+      showSaveError = true;
+      requestUpdate();
+    }
+  }
+  return;
+#endif
   // Each field edit is saved immediately so partially configured servers
   // survive navigation and power-loss scenarios.
   if (nav.selected == 0) {
@@ -197,6 +268,10 @@ void OpdsSettingsActivity::buildScreen(UiScreen& screen) {
   // fieldRowItems' labels/actionValue were set once in the constructor; only
   // the live value pointers (already pointing at editServer's own fields, no
   // new strings built) need refreshing here.
+#if FREEINK_DEVICE_XUESU_300
+  fieldRowItems[0].value = nullptr;
+  fieldRowItems[1].value = nullptr;
+#else
   fieldRowItems[0].value = editServer.name.empty() ? tr(STR_NOT_SET) : editServer.name.c_str();
   fieldRowItems[1].value = editServer.url.empty() ? tr(STR_NOT_SET) : editServer.url.c_str();
   fieldRowItems[2].value = editServer.username.empty() ? tr(STR_NOT_SET) : editServer.username.c_str();
@@ -206,6 +281,7 @@ void OpdsSettingsActivity::buildScreen(UiScreen& screen) {
     fieldRowItems[CUSTOM_HEADER_1_INDEX + i].value =
         headerDisplayBuf[i].empty() ? tr(STR_NOT_SET) : headerDisplayBuf[i].c_str();
   }
+#endif
 
   fui::ListProps props;
   props.items = fieldRowItems;

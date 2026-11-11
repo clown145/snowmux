@@ -920,7 +920,7 @@ void OpdsBookBrowserActivity::promptLcpPassphrase(const bool retry) {
   const char* title = retry                             ? tr(STR_LCP_WRONG_PASSPHRASE)
                       : !pendingLcpLicense.hint.empty() ? pendingLcpLicense.hint.c_str()
                                                         : tr(STR_LCP_PASSPHRASE);
-  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, title);
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, title, "", 512, InputType::Password);
   if (!keyboard) {
     fail(StrId::STR_MEMORY_ERROR);
     return;

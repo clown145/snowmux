@@ -13,6 +13,9 @@
 #include "components/UITheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "fontIds.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "activities/network/WifiProvisionActivity.h"
+#endif
 
 namespace fui = freeink::ui;
 
@@ -137,6 +140,46 @@ const fui::KeyboardLayout URL_SNIPPET_LAYOUT{URL_SNIP_ROWS, 4};
 
 void KeyboardEntryActivity::onEnter() {
   Activity::onEnter();
+#if FREEINK_DEVICE_XUESU_300
+  // All remaining free-text callers (search, paths and passphrases included)
+  // share the phone flow. Never require cycling a keyboard with three keys.
+  auto form = makeUniqueNoThrow<PhoneSetupForm>();
+  if (!form) {
+    LOG_ERR("INPUT", "OOM: phone form (%u bytes)", static_cast<unsigned>(sizeof(PhoneSetupForm)));
+    onCancel();
+    return;
+  }
+  form->title = title;
+  form->count = 1;
+  auto kind = PhoneSetupForm::Kind::Text;
+  switch (inputType) {
+    case InputType::Text:
+      break;
+    case InputType::Password:
+      kind = PhoneSetupForm::Kind::Password;
+      break;
+    case InputType::Url:
+      kind = PhoneSetupForm::Kind::Url;
+      break;
+  }
+  form->fields[0] = {title.c_str(), text,
+                     maxLength ? std::min(maxLength, PhoneSetupForm::MAX_FIELD_BYTES) : PhoneSetupForm::MAX_FIELD_BYTES,
+                     kind};
+  form->submit = [this](const PhoneSetupForm::Values& values) {
+    text = values[0];
+    return PhoneSetupForm::Result::Saved;
+  };
+  if (!startActivityForResultWith<WifiProvisionActivity>(
+          [this](const ActivityResult& result) {
+            if (result.isCancelled)
+              onCancel();
+            else
+              onComplete(std::move(text));
+          },
+          std::move(form)))
+    onCancel();
+  return;
+#endif
   cursorPos = text.length();
   // URL layers are EN-arranged app tables; everything else opens on the UI
   // language's layout, or on an enabled one if the user switched that off.
@@ -658,6 +701,9 @@ fui::Rect KeyboardEntryActivity::keyboardKeysRect() const {
 }
 
 void KeyboardEntryActivity::loop() {
+#if FREEINK_DEVICE_XUESU_300
+  return;  // The child setup portal owns input until it returns a completed value.
+#endif
   int tx = 0;
   int ty = 0;
 
@@ -944,6 +990,9 @@ void KeyboardEntryActivity::loop() {
 }
 
 void KeyboardEntryActivity::render(RenderLock&&) {
+#if FREEINK_DEVICE_XUESU_300
+  return;  // Do not flash a character grid while the phone portal is being pushed.
+#endif
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();

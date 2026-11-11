@@ -126,6 +126,34 @@ void KOReaderCredentialStore::setCredentials(const std::string& user, const std:
   LOG_DBG("KRS", "Set credentials for user: %s", user.c_str());
 }
 
+bool KOReaderCredentialStore::saveConnectionSettings(const std::string& user, const std::string& pass,
+                                                     const std::string& url,
+                                                     const std::array<HttpHeader, MAX_CUSTOM_HEADERS>& headers) {
+  for (const auto& header : headers) {
+    if ((!header.name.empty() || !header.value.empty()) && !isValidHttpHeader(header)) return false;
+  }
+  std::lock_guard<std::mutex> lock(storeMutex);
+  // The same one-document allocation as saveToFile; unrelated sync settings
+  // stay in the snapshot, and live credentials change only after SD commit.
+  JsonDocument doc;
+  toJson(doc);
+  doc["username"] = user;
+  doc["password_obf"] = obfuscation::obfuscateToBase64(pass);
+  doc["serverUrl"] = url;
+  auto list = doc["headers"].to<JsonArray>();
+  for (const auto& header : headers) {
+    auto item = list.add<JsonObject>();
+    item["name"] = header.name;
+    item["value_obf"] = obfuscation::obfuscateToBase64(header.value);
+  }
+  if (!writeDocToFile(getFilePath(), doc, true)) return false;
+  username = user;
+  password = pass;
+  serverUrl = url;
+  customHeaders = headers;
+  return true;
+}
+
 std::string KOReaderCredentialStore::getMd5Password() const {
   if (password.empty()) {
     return "";

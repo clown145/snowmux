@@ -13,6 +13,9 @@
 #include "MappedInputManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "activities/network/WifiProvisionActivity.h"
+#endif
 
 namespace fui = freeink::ui;
 
@@ -58,11 +61,50 @@ bool KOReaderSettingsActivity::handleCustomInput() {
   return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
+#if FREEINK_DEVICE_XUESU_300
+void KOReaderSettingsActivity::openPhoneSetup() {
+  auto form = makeUniqueNoThrow<PhoneSetupForm>();
+  if (!form) {
+    LOG_ERR("KRS", "OOM: phone form (%u bytes)", static_cast<unsigned>(sizeof(PhoneSetupForm)));
+    return;
+  }
+  using Kind = PhoneSetupForm::Kind;
+  form->title = tr(STR_KOREADER_SYNC);
+  form->count = 5;
+  form->fields[0] = {tr(STR_KOREADER_USERNAME), KOREADER_STORE.getUsername(), 64};
+  form->fields[1] = {tr(STR_KOREADER_PASSWORD), KOREADER_STORE.getPassword(), 64, Kind::Password};
+  form->fields[2] = {tr(STR_SYNC_SERVER_URL), KOREADER_STORE.getServerUrl(), 128, Kind::Url};
+  form->fields[3] = {tr(STR_CUSTOM_HEADER_1), formatHttpHeaderLine(KOREADER_STORE.getCustomHeaders()[0]), 160,
+                     Kind::Password};
+  form->fields[4] = {tr(STR_CUSTOM_HEADER_2), formatHttpHeaderLine(KOREADER_STORE.getCustomHeaders()[1]), 160,
+                     Kind::Password};
+  form->submit = [](const PhoneSetupForm::Values& values) {
+    std::array<HttpHeader, KOREADER_MAX_CUSTOM_HEADERS> headers;
+    for (size_t i = 0; i < headers.size(); ++i) {
+      parseHttpHeaderLine(values[3 + i], headers[i]);
+      if (!values[3 + i].empty() && !isValidHttpHeader(headers[i])) return PhoneSetupForm::Result::Invalid;
+    }
+    return KOREADER_STORE.saveConnectionSettings(values[0], values[1], values[2], headers)
+               ? PhoneSetupForm::Result::Saved
+               : PhoneSetupForm::Result::SaveFailed;
+  };
+  startActivityForResultWith<WifiProvisionActivity>([this](const ActivityResult&) { requestUpdate(); },
+                                                    std::move(form));
+}
+#endif
+
 void KOReaderSettingsActivity::activateIndex(const int index) {
   if (optionPopup.isActive()) return;
   // Activation opens a keyboard/sub-activity or repaints a new value; a
   // lingering flash would gray an unrelated row.
   app.clearTapFlash();
+#if FREEINK_DEVICE_XUESU_300
+  if (index == IDX_USERNAME || index == IDX_PASSWORD || index == IDX_SERVER_URL || index == IDX_CUSTOM_HEADER_1 ||
+      index == IDX_CUSTOM_HEADER_2) {
+    openPhoneSetup();
+    return;
+  }
+#endif
   if (index == IDX_USERNAME) {
     // Username
     startActivityForResultWith<KeyboardEntryActivity>(

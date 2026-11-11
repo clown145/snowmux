@@ -6,21 +6,24 @@
 #include <algorithm>
 #include <cstring>
 
+namespace {
+void encodeServer(JsonObject obj, const OpdsServer& server) {
+  obj["name"] = server.name;
+  obj["url"] = server.url;
+  obj["username"] = server.username;
+  obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
+  JsonArray headers = obj["headers"].to<JsonArray>();
+  for (const auto& header : server.customHeaders) {
+    JsonObject headerObj = headers.add<JsonObject>();
+    headerObj["name"] = header.name;
+    headerObj["value_obf"] = obfuscation::obfuscateToBase64(header.value);
+  }
+}
+}  // namespace
+
 void OpdsServerStore::toJson(JsonDocument& doc) const {
   JsonArray arr = doc["servers"].to<JsonArray>();
-  for (const auto& server : servers) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["name"] = server.name;
-    obj["url"] = server.url;
-    obj["username"] = server.username;
-    obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
-    JsonArray headers = obj["headers"].to<JsonArray>();
-    for (const auto& header : server.customHeaders) {
-      JsonObject headerObj = headers.add<JsonObject>();
-      headerObj["name"] = header.name;
-      headerObj["value_obf"] = obfuscation::obfuscateToBase64(header.value);
-    }
-  }
+  for (const auto& server : servers) encodeServer(arr.add<JsonObject>(), server);
 }
 
 bool OpdsServerStore::fromJson(JsonVariantConst doc) {
@@ -66,6 +69,7 @@ bool OpdsServerStore::fromJson(JsonVariantConst doc) {
 }
 
 bool OpdsServerStore::addServer(const OpdsServer& server) {
+  std::lock_guard<std::mutex> lock(storeMutex);
   for (const auto& header : server.customHeaders) {
     if (!header.name.empty() && !isValidHttpHeader(header)) {
       LOG_ERR("OPS", "Invalid custom HTTP header");
@@ -77,12 +81,20 @@ bool OpdsServerStore::addServer(const OpdsServer& server) {
     return false;
   }
 
+  // Reserve the fixed eight-record limit before committing; reuse the existing
+  // serialization document instead of cloning every server for rollback.
+  servers.reserve(MAX_SERVERS);
+  JsonDocument doc;
+  toJson(doc);
+  encodeServer(doc["servers"].as<JsonArray>().add<JsonObject>(), server);
+  if (!writeDocToFile(getFilePath(), doc, true)) return false;
   servers.push_back(server);
   LOG_DBG("OPS", "Added server: %s", server.name.c_str());
-  return saveToFile();
+  return true;
 }
 
 bool OpdsServerStore::updateServer(size_t index, const OpdsServer& server) {
+  std::lock_guard<std::mutex> lock(storeMutex);
   for (const auto& header : server.customHeaders) {
     if (!header.name.empty() && !isValidHttpHeader(header)) {
       LOG_ERR("OPS", "Invalid custom HTTP header");
@@ -93,19 +105,28 @@ bool OpdsServerStore::updateServer(size_t index, const OpdsServer& server) {
     return false;
   }
 
+  JsonDocument doc;
+  toJson(doc);
+  encodeServer(doc["servers"][index].to<JsonObject>(), server);
+  if (!writeDocToFile(getFilePath(), doc, true)) return false;
   servers[index] = server;
   LOG_DBG("OPS", "Updated server: %s", server.name.c_str());
-  return saveToFile();
+  return true;
 }
 
 bool OpdsServerStore::removeServer(size_t index) {
+  std::lock_guard<std::mutex> lock(storeMutex);
   if (index >= servers.size()) {
     return false;
   }
 
+  JsonDocument doc;
+  toJson(doc);
+  doc["servers"].as<JsonArray>().remove(index);
+  if (!writeDocToFile(getFilePath(), doc, true)) return false;
   LOG_DBG("OPS", "Removed server: %s", servers[index].name.c_str());
   servers.erase(servers.begin() + static_cast<ptrdiff_t>(index));
-  return saveToFile();
+  return true;
 }
 
 const OpdsServer* OpdsServerStore::getServer(size_t index) const {

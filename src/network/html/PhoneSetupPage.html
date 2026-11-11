@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CrossMux</title>
+  <link rel="stylesheet" href="/assets/web.css">
+  <link rel="icon" type="image/svg+xml" href="/assets/crosspoint-icon.svg">
+  <style>
+    .web-ui .setup-page { max-width: 32rem; }
+    .setup-page form, .setup-page .field { display: grid; gap: .9rem; }
+    .setup-page label { display: grid; gap: .35rem; color: var(--label-color); }
+    .setup-page input { min-width: 0; width: 100%; box-sizing: border-box; }
+    .setup-page .field { gap: .35rem; margin-bottom: 1rem; }
+    .setup-page .field-options { display: flex; flex-wrap: wrap; gap: 1rem; }
+    .setup-page .field-options label { display: flex; align-items: center; gap: .4rem; }
+    .setup-page .field-options input { width: auto; }
+    .setup-page .setup-description, #status { color: var(--label-color); }
+    #status { margin: 1rem 0 0; overflow-wrap: anywhere; }
+    #status:empty { display: none; }
+  </style>
+</head>
+<body class="web-ui">
+  <header class="brand">
+    <div class="brand-inner">
+      <h1><a class="brand-link" href="/"><img class="brand-logo" src="/assets/crosspoint-icon.svg" alt="" width="32" height="32">CrossMux</a></h1>
+    </div>
+  </header>
+  <main class="page-content setup-page">
+    <section class="card" aria-labelledby="heading">
+      <h2 id="heading">手机配置</h2>
+      <p id="intro" class="setup-description">在手机填写，提交后返回雪酥。</p>
+      <form id="setup">
+        <div id="fields"></div>
+        <button id="save" class="save-btn" type="submit" disabled>提交</button>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script>
+    const zh = navigator.language.toLowerCase().startsWith('zh');
+    const $ = id => document.getElementById(id);
+    const text = (cn, en) => zh ? cn : en;
+    const setStatus = (cn, en) => { $('status').textContent = text(cn, en); };
+    const inputs = [];
+    let busy = false;
+    if (!zh) {
+      document.documentElement.lang = 'en';
+      $('heading').textContent = 'Phone setup';
+      $('intro').textContent = 'Enter the details on your phone, then return to the reader.';
+      $('save').textContent = 'Submit';
+    }
+    function checkOption(container, labelText) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      label.append(input, document.createTextNode(labelText));
+      container.append(label);
+      return input;
+    }
+    function saved() {
+      busy = true;
+      for (const item of inputs) if (item.field.secret) item.input.value = '';
+      for (const control of $('setup').elements) control.disabled = true;
+      setStatus('已提交，请回到雪酥继续。热点即将关闭。', 'Submitted. Continue on the reader. The hotspot will close shortly.');
+    }
+    async function load() {
+      try {
+        const response = await fetch('/form', {cache: 'no-store'});
+        if (!response.ok) throw new Error('load');
+        const form = await response.json();
+        $('heading').textContent = form.title;
+        document.title = form.title + ' · CrossMux';
+        for (const field of form.fields) {
+          const group = document.createElement('div');
+          group.className = 'field';
+          const label = document.createElement('label');
+          const caption = document.createElement('span');
+          caption.textContent = field.label;
+          const input = document.createElement('input');
+          input.type = field.secret ? 'password' : field.url ? 'url' : 'text';
+          input.autocapitalize = 'none';
+          input.autocomplete = 'off';
+          input.spellcheck = false;
+          input.maxLength = field.maxBytes;
+          input.required = field.required && !field.hasValue;
+          input.value = field.value || '';
+          if (field.url) input.placeholder = 'https://';
+          label.append(caption, input);
+          group.append(label);
+          const item = {field, input, clear: null};
+          if (field.secret) {
+            const options = document.createElement('div');
+            options.className = 'field-options';
+            const reveal = checkOption(options, text('显示', 'Show'));
+            reveal.onchange = () => { input.type = reveal.checked ? 'text' : 'password'; };
+            if (field.hasValue) {
+              input.placeholder = text('已设置；留空保留', 'Already set; leave blank to keep');
+              item.clear = checkOption(options, text('清除已保存内容', 'Clear saved value'));
+              item.clear.onchange = () => {
+                input.disabled = item.clear.checked;
+                if (item.clear.checked) input.value = '';
+              };
+            }
+            group.append(options);
+          }
+          $('fields').append(group);
+          inputs.push(item);
+        }
+        $('save').disabled = false;
+        if (form.saved) saved();
+      } catch (_) {
+        setStatus('页面未加载，请保持连接雪酥热点后刷新。', 'Could not load. Stay connected to the reader hotspot and reload.');
+      }
+    }
+    $('setup').onsubmit = async event => {
+      event.preventDefault();
+      if (busy) return;
+      const values = [];
+      for (const {field, input, clear} of inputs) {
+        const value = clear && clear.checked ? '' : input.value;
+        if (new TextEncoder().encode(value).length > field.maxBytes) {
+          setStatus(field.label + ' 太长，请缩短后重试。', field.label + ' is too long. Shorten it and try again.');
+          return;
+        }
+        values.push(field.secret && value === '' && field.hasValue && !(clear && clear.checked) ? null : value);
+      }
+      busy = $('save').disabled = true;
+      try {
+        const response = await fetch('/form', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({values})
+        });
+        if (response.ok) { saved(); return; }
+        if (response.status === 400) setStatus('请检查地址、字段长度和请求头格式。', 'Check the address, field lengths and header format.');
+        else setStatus('保存失败，请检查 SD 卡后重试。原配置仍然保留。', 'Save failed. Check the SD card and retry. The previous configuration is unchanged.');
+      } catch (_) {
+        const status = await fetch('/status').then(r => r.json()).catch(() => null);
+        if (status && status.state === 'saved') { saved(); return; }
+        setStatus('提交结果未确认，请保持连接后重试。', 'Submission was not confirmed. Stay connected and retry.');
+      }
+      busy = $('save').disabled = false;
+    };
+    load();
+  </script>
+</body>
+</html>
