@@ -18,7 +18,8 @@ namespace {
 
 // Stream into "<path>.tmp" and reject incomplete output before replacing the target.
 // Streaming avoids a second buffer for large analytics documents.
-bool saveJsonDocumentToFile(const char* moduleName, const char* path, const JsonDocument& doc) {
+bool saveJsonDocumentToFile(const char* moduleName, const char* path, const JsonDocument& doc,
+                           const bool keepPrevious = false) {
   if (!path || *path == '\0') {
     LOG_ERR(moduleName, "Missing JSON path for write");
     return false;
@@ -40,7 +41,9 @@ bool saveJsonDocumentToFile(const char* moduleName, const char* path, const Json
   memcpy(tempPath.get() + pathLength, ".tmp", sizeof(".tmp"));
 
   HalStorage::StorageLock lock;
-  if (!Storage.exists(path) && Storage.exists(tempPath.get()) && !Storage.rename(tempPath.get(), path)) {
+  if (!Storage.exists(path) && (Storage.exists(tempPath.get()) ||
+                                (keepPrevious && Storage.exists((std::string(path) + ".rollback").c_str()))) &&
+      !PersistableStoreBase::recoverTempFile(path)) {
     LOG_ERR(moduleName, "Cannot recover staged JSON for %s", path);
     return false;
   }
@@ -66,6 +69,7 @@ bool saveJsonDocumentToFile(const char* moduleName, const char* path, const Json
     return false;
   }
 
+  if (keepPrevious) return PersistableStoreBase::replaceStagedFile(path, tempPath.get());
   if (Storage.exists(path) && !Storage.remove(path)) {
     LOG_ERR(moduleName, "Could not remove JSON file before replace: %s", path);
     return false;
@@ -141,7 +145,7 @@ bool JsonSettingsIO::saveReadingStats(const ReadingStatsStore& store, const char
     }
   }
 
-  return saveJsonDocumentToFile("RST", path, doc);
+  return saveJsonDocumentToFile("RST", path, doc, true);
 }
 
 bool JsonSettingsIO::loadReadingStats(ReadingStatsStore& store, const char* json) {

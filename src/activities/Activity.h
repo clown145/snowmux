@@ -70,6 +70,11 @@ class Activity {
   virtual bool defersContentSelection() const;
   virtual bool hasContentSelection() const { return true; }
   bool usesMainTabBar() const;
+#if FREEINK_DEVICE_XUESU_300
+  virtual bool allowsXuesuQuickPanel() const { return usesMainTabBar(); }
+  virtual const char* xuesuQuickActionLabel() const { return nullptr; }
+  virtual void runXuesuQuickAction() {}
+#endif
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 
   // Start a new activity without destroying the current one

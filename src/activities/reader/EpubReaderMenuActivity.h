@@ -45,8 +45,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks,
-                                  bool hasClippings, MenuAction& selectedAction);
+                                  const uint8_t currentOrientation, size_t footnoteCount, bool hasBookmarks,
+                                  bool hasClippings, MenuAction& selectedAction, bool fromReadingPage);
 
   void onEnter() override;
   void onExit() override;
@@ -61,7 +61,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // only refreshes rows whose values reflect live state.
   static constexpr size_t MAX_MENU_ITEMS = 19;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
-  void buildMenuRowItems();
+  void buildMenuRowItems(size_t footnoteCount);
+  std::string progressSummary(bool compact) const;
 
   int listCount() const override { return static_cast<int>(menuItems.size()); }
   void buildScreen(UiScreen& screen) override;
@@ -79,6 +80,10 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // Fixed menu layout
   std::vector<MenuItem> menuItems;
   MenuAction& selectedAction;
+#if FREEINK_DEVICE_XUESU_300
+  bool focusPageFootnotes = false;
+  char pageFootnotesLabel[48] = {};
+#endif
 
   OptionPopup optionPopup{true};
   std::string title = "Reader Menu";

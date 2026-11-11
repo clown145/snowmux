@@ -38,7 +38,7 @@ class AppsMenuActivity final : public UiListActivity {
   Rect appContentRect() const;
   void rebuildRowItems();
   void openSelected();
-  void drawIconGrid(UiScreen& screen, const Rect& rect, int visibleCount, bool showSelection) const;
+  void drawIconGrid(UiScreen& screen, const Rect& rect, int visibleCount, bool showSelection);
 
   // Allocated once on entry and reused for every repaint. The app catalog is
   // bounded to 32 entries; dynamic storage avoids pinning the maximum in every

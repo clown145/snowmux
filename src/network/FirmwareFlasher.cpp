@@ -273,7 +273,7 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
 }
 
 Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, bool alreadyValidated) {
-#if FREEINK_DEVICE_PICCO
+#if FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300
   return Result::NO_PARTITION;
 #endif
   // Resolve destination first so we can size-check during validation. The full image-integrity

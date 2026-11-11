@@ -5,6 +5,9 @@
 
 #include "util/HomeButtonInput.h"
 #include "util/RemoteButtonInput.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "util/XuesuConfirmInput.h"
+#endif
 
 class GfxRenderer;
 namespace freeink {
@@ -57,6 +60,9 @@ class MappedInputManager {
 #endif
   bool injectRemoteClick(RemoteButton button);
   bool hasRemoteClick() const { return remoteInput.button != RemoteButton::None; }
+#if FREEINK_DEVICE_XUESU_300
+  bool resolveXuesuConfirmShortcut(bool enabled, uint32_t screenVisit) const;
+#endif
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
   // One-shot threshold event while the button is down; consumes its release.
@@ -184,6 +190,12 @@ class MappedInputManager {
   mutable bool bleHasCaptured = false;
   mutable uint8_t bleCapturedKind = 0xFF;
   mutable uint8_t bleCapturedValue = 0;
+#if FREEINK_DEVICE_XUESU_300
+  mutable XuesuConfirmInput xuesuConfirmInput;
+  mutable uint32_t xuesuConfirmVisit = 0;
+  mutable bool xuesuConfirmFiltered = false;
+  mutable bool xuesuConfirmSingle = false;
+#endif
 #if FREEINK_CAP_TOUCH
   bool powerConfirmClickFrame = false;
 #endif

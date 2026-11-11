@@ -33,6 +33,478 @@ def run_cpp(program, include_dirs=(), defines=(), extra_sources=()):
 
 
 class ReadingUiRegressionTest(unittest.TestCase):
+    def test_xuesu_quick_panel_reuses_one_selection_order_for_context_and_global_actions(self):
+        source = (ROOT / 'src/activities/util/FrontlightPanelActivity.cpp').read_text(encoding='utf-8')
+        loop = method(source, 'void FrontlightPanelActivity::loop()')
+        start = loop.index('#if FREEINK_DEVICE_XUESU_300')
+        end = loop.index('#endif', start)
+        tile_order = source[source.index('constexpr int kSleepTile'):source.index('constexpr int16_t kXuesuTileHeight')]
+        run_cpp(r'''
+#include <cassert>
+#include <iterator>
+#include "activities/ActivityResult.h"
+struct MappedInputManager {
+ enum class Button { Confirm };
+ bool confirm = false;
+ bool wasReleased(Button) const { return confirm; }
+};
+struct Navigator {
+ int direction = 0;
+ template<class Fn> void onPreviousPress(Fn action) { if (direction == -1) action(); }
+ template<class Fn> void onNextPress(Fn action) { if (direction == 1) action(); }
+};
+''' + tile_order + r'''
+struct FrontlightPanelActivity {
+ MappedInputManager mappedInput;
+ Navigator buttonNavigator;
+ int selectedQuickTile = 0;
+ const char* contextAction = nullptr;
+ bool closed = false;
+ int tile = -1;
+ ActivityResult result{};
+ void setResult(ActivityResult value) { result = std::move(value); }
+ void close() { closed = true; }
+ void runTile(int index) { tile = index; }
+ void requestUpdate() {}
+ void loop() {
+''' + loop[start:end] + r'''
+#endif
+ }
+};
+int main() {
+ FrontlightPanelActivity panel;
+ panel.mappedInput.confirm = true;
+ panel.loop();
+ assert(panel.tile == kSleepTile);
+
+ panel = {};
+ panel.contextAction = "File Actions";
+ panel.mappedInput.confirm = true;
+ panel.loop();
+ assert(panel.closed && panel.tile == -1);
+ assert(std::get<QuickPanelResult>(panel.result.data) == QuickPanelResult::ContextAction);
+
+ for (int direction : {-1, 1}) {
+  panel = {};
+  panel.contextAction = "File Actions";
+  panel.buttonNavigator.direction = direction;
+  panel.loop();
+  panel.mappedInput.confirm = true;
+  panel.loop();
+  assert(!panel.closed);
+  assert(panel.tile == (direction < 0 ? kXuesuTileActions[3] : kSleepTile));
+ }
+}
+''', include_dirs=(ROOT / 'src',), defines=('FREEINK_DEVICE_XUESU_300=1',))
+
+    def test_xuesu_confirm_distinguishes_short_double_and_back(self):
+        run_cpp(r'''
+#include "util/XuesuConfirmInput.h"
+#include <cassert>
+int main() {
+ using Action = XuesuConfirmInput::Action;
+ XuesuConfirmInput input;
+
+ assert(input.update(100, true, false, false) == Action::None);
+ assert(input.update(400, false, false, false) == Action::None);
+ assert(input.update(401, false, false, false) == Action::Single);
+ assert(input.update(402, false, false, false) == Action::None);
+
+ assert(input.update(500, true, false, false) == Action::None);
+ assert(input.update(700, true, false, false) == Action::Double);
+ assert(input.update(850, false, false, false) == Action::None);
+
+ assert(input.update(900, true, false, false) == Action::None);
+ assert(input.update(1150, false, true, false) == Action::None);
+ assert(input.update(1220, true, false, false) == Action::Double);
+
+ assert(input.update(1400, true, false, false) == Action::None);
+ assert(input.update(1500, false, true, false) == Action::None);
+ assert(input.update(2000, false, true, true) == Action::None);
+ assert(input.update(2010, false, false, true) == Action::None);
+ assert(input.update(2400, false, false, false) == Action::None);
+
+ assert(input.update(2500, true, false, false) == Action::None);
+ input.reset();
+ assert(input.update(2900, false, false, false) == Action::None);
+}
+''', include_dirs=(ROOT / 'src',))
+
+    def test_xuesu_editors_only_submit_from_save_row(self):
+        loops = '\n'.join(
+            method((ROOT / f'src/activities/{path}.cpp').read_text(encoding='utf-8'),
+                   f'void {path.rsplit("/", 1)[-1]}::loop()')
+            for path in ('settings/DateTimeSettingsActivity', 'apps/reading-stats/ReadingDateSelectionActivity',
+                         'apps/reading-stats/BookReadingAdjustmentActivity')
+        )
+        run_cpp(r'''
+#include <cassert>
+#include <initializer_list>
+#include "activities/ActivityResult.h"
+constexpr int FIELD_COUNT = 3;
+struct MappedInputManager {
+ enum class Button { Idle, Up, Down, Confirm, Back };
+ Button event = Button::Idle;
+ bool wasReleased(Button b) const { return b == event; }
+ bool isPressed(Button) const { return false; }
+};
+using Button = MappedInputManager::Button;
+struct ButtonNavigator {
+ MappedInputManager& input;
+ static int nextIndex(int i,int n) { return (i+1)%n; }
+ static int previousIndex(int i,int n) { return (i+n-1)%n; }
+ template<class Fn> void onRelease(std::initializer_list<Button> keys, Fn handler) {
+  for (Button key : keys) if (input.wasReleased(key)) { handler(); return; }
+ }
+ template<class Fn> void onNextRelease(Fn handler) { onRelease({Button::Down},handler); }
+ template<class Fn> void onPreviousRelease(Fn handler) { onRelease({Button::Up},handler); }
+};
+struct Editor {
+ MappedInputManager mappedInput;
+ ButtonNavigator buttonNavigator{mappedInput};
+ int opened=0, saved=0, cancelled=0;
+ void openSelectedField() { ++opened; }
+ void requestUpdate() {}
+ void finish() { ++cancelled; }
+ void setResult(ActivityResult&& result) { assert(result.isCancelled); }
+};
+struct DateTimeSettingsActivity : Editor {
+ static constexpr int EDIT_FIELD_COUNT = 5;
+ int selectedEditField = 0;
+ bool waitForConfirmRelease_ = false;
+ struct { bool invalidated() const { return false; } } app;
+ struct Touch { bool routed=false; explicit operator bool() const { return false; } };
+ Touch routeTouch(MappedInputManager&) { return {}; }
+ void confirmManualEdit() { ++saved; }
+ void cancelManualEdit() { ++cancelled; }
+ void loop();
+};
+struct ReadingDateSelectionActivity : Editor {
+ int selectedField=0;
+ void finishWithDate() { ++saved; }
+ void loop();
+};
+struct BookReadingAdjustmentActivity : Editor {
+ int selectedField=0;
+ struct {
+  template<class Fn> bool handleInput(MappedInputManager&, Fn) { return false; }
+ } adjustmentPicker;
+ void applyAdjustment() { ++saved; }
+ void loop();
+};
+''' + loops + r'''
+template<class Activity> void exercise() {
+ Activity activity;
+ const auto click = [&](Button button) {
+  activity.mappedInput.event=button;
+  activity.loop();
+ };
+ click(Button::Confirm);
+ assert(activity.opened==1 && activity.saved==0);
+ click(Button::Down);
+ click(Button::Confirm);
+ assert(activity.opened==2 && activity.saved==0);
+ click(Button::Up);
+ click(Button::Up);
+ click(Button::Confirm);
+ assert(activity.opened==2 && activity.saved==1);
+ click(Button::Back);
+ assert(activity.cancelled==1);
+}
+int main() {
+ exercise<DateTimeSettingsActivity>();
+ exercise<ReadingDateSelectionActivity>();
+ exercise<BookReadingAdjustmentActivity>();
+}
+''', include_dirs=(ROOT / 'src',), defines=('FREEINK_DEVICE_XUESU_300=1',))
+
+    def test_inx_compact_wrap_preserves_unspaced_chinese_labels(self):
+        sdk = ROOT / 'freeink-sdk/libs/ui/FreeInkUI/include'
+        run_cpp(r'''
+#include <FreeInkUICore.h>
+#include <cassert>
+#include <string>
+namespace fui = freeink::ui;
+struct Target : fui::DrawTarget {
+ fui::Size measureText(fui::FontId, const char* value, fui::TextStyle) const override {
+  int16_t width = 0;
+  for (auto p = reinterpret_cast<const unsigned char*>(value); *p; ++p)
+   if ((*p & 0xc0) != 0x80) width += 10;
+  return {width, 20};
+ }
+ int16_t lineHeight(fui::FontId) const override { return 20; }
+ void fill(fui::Rect, fui::Paint, uint8_t, uint8_t) override {}
+ void stroke(fui::Rect, fui::Paint, uint8_t, uint8_t, uint8_t) override {}
+ void line(fui::Point, fui::Point, uint8_t, fui::Paint) override {}
+ void triangle(fui::Point, fui::Point, fui::Point, fui::Paint) override {}
+ void text(fui::Rect, const char*, fui::TextStyle) override {}
+ void bitmap(fui::Rect, fui::BitmapRef, fui::BitmapMode, fui::Paint, fui::Rotation) override {}
+};
+int main() {
+ const auto* title = reinterpret_cast<const char*>(u8"一二三四五六七八九十甲乙");
+ Target target;
+ fui::TextStyle style;
+ style.maxLines = 2;
+ const auto size = fui::measureWrappedText(target, title, style, 60);
+ assert(size.height == 40);
+ std::string combined;
+ fui::layoutText(target, fui::Rect{0, 6, 60, size.height}, title, style, [&](const char* line, fui::Rect rect) {
+  assert(rect.width <= 60 && rect.y >= 6 && rect.bottom() <= 46);
+  combined += line;
+ });
+ assert(combined == title);
+}
+''', include_dirs=[sdk])
+
+    def test_xuesu_file_grid_wraps_chinese_titles_inside_wider_cards(self):
+        sdk = ROOT / 'freeink-sdk/libs/ui/FreeInkUI/include'
+        source = (ROOT / 'src/activities/home/FileBrowserActivity.cpp').read_text(encoding='utf-8')
+        run_cpp(r'''
+#include <FreeInkUICore.h>
+#include <components/lists/list.h>
+#include <cassert>
+#include <string>
+#include <vector>
+#include "InxItemLayout.h"
+namespace fui = freeink::ui;
+enum class UIIcon { Book, Folder, Image };
+constexpr uint8_t BookLarge[1]{}, Book24Icon[1]{}, FolderLarge[1]{}, Folder24Icon[1]{}, ImageLarge[1]{}, Image24Icon[1]{};
+const auto* filename = reinterpret_cast<const char*>(u8"一二三四五六七八九十");
+struct GfxRenderer {
+ struct ClipScope { ClipScope(const GfxRenderer&,int,int,int,int) {} };
+ void fillRect(int,int,int,int,bool) const {}
+ void drawIcon(const uint8_t*,int,int,int) const {}
+ void drawIconInverted(const uint8_t*,int,int,int) const {}
+};
+struct UITheme {
+ static UITheme& getInstance() { static UITheme t; return t; }
+ static UIIcon getFileIcon(const std::string&) { return UIIcon::Book; }
+ struct { int scrollBarWidth=4,scrollBarRightOffset=5; } metrics;
+ const auto& getMetrics() const { return metrics; }
+ void drawSideScrollBar(const GfxRenderer&,Rect,int,int,int) {}
+};
+#define GUI UITheme::getInstance()
+struct Target : fui::DrawTarget {
+ std::vector<fui::Rect> labelBounds;
+ fui::Size measureText(fui::FontId, const char* value, fui::TextStyle) const override {
+  int16_t width = 0;
+  for (auto p = reinterpret_cast<const unsigned char*>(value); *p; ++p)
+   if ((*p & 0xc0) != 0x80) width += 25;
+  return {width, 28};
+ }
+ int16_t lineHeight(fui::FontId) const override { return 28; }
+ void fill(fui::Rect, fui::Paint, uint8_t, uint8_t) override {}
+ void stroke(fui::Rect, fui::Paint, uint8_t, uint8_t, uint8_t) override {}
+ void line(fui::Point, fui::Point, uint8_t, fui::Paint) override {}
+ void triangle(fui::Point, fui::Point, fui::Point, fui::Paint) override {}
+ void bitmap(fui::Rect, fui::BitmapRef, fui::BitmapMode, fui::Paint, fui::Rotation) override {}
+ void text(fui::Rect rect, const char* label, fui::TextStyle style) override {
+  assert(style.maxLines == 2 && rect.height == 56);
+  std::string result;
+  fui::layoutText(*this, rect, label, style, [&](const char* line, const fui::Rect bounds) {
+   assert(bounds.y >= rect.y && bounds.bottom() <= rect.bottom());
+   result += line;
+  });
+  assert(result == filename);
+  labelBounds.push_back(rect);
+ }
+};
+struct UiScreen {
+ Target draw;
+ Target& target() { return draw; }
+ struct { fui::TextStyle bodyText; } tokens;
+ auto& theme() { return tokens; }
+ struct {
+  std::vector<fui::Rect> cells;
+  void hit(fui::Rect rect, int, int16_t, unsigned) { cells.push_back(rect); }
+ } hitTargets;
+ auto& frame() { return hitTargets; }
+};
+struct FileBrowserActivity {
+ static constexpr int ACTION_ROW=1;
+ std::vector<std::string> files=std::vector<std::string>(20,filename);
+ GfxRenderer renderer;
+ struct { int top=0,selected=0; } nav;
+ int capacity=0;
+ int listCount() const { return files.size(); }
+ bool showMainTabContentSelection() const { return true; }
+ void syncPagedViewport(int n) { capacity=n; nav.top=nav.selected/n*n; }
+ void prewarmRowGlyphs(int) {}
+ static void provideRow(void*,uint16_t,fui::ListItem& item) { item.label=filename; }
+ void drawIconGrid(UiScreen&,fui::Rect);
+};
+''' + method(source, 'void FileBrowserActivity::drawIconGrid(') + r'''
+int main() {
+ FileBrowserActivity browser;
+ UiScreen screen;
+ const fui::Rect content{0,86,300,280};
+ browser.nav.selected=7;
+ browser.drawIconGrid(screen,content);
+ const auto& cells=screen.hitTargets.cells;
+ const auto& labels=screen.draw.labelBounds;
+ assert(browser.capacity>=4 && browser.capacity%2==0 && browser.nav.top>0);
+ assert(labels.size()==cells.size() && cells.size()==static_cast<size_t>(browser.capacity));
+ assert(cells[0].y==cells[1].y && cells[1].y<cells[2].y);
+ for (size_t i=0;i<cells.size();++i) {
+  assert(labels[i].x>=cells[i].x && labels[i].right()<=cells[i].right());
+  assert(labels[i].y>=cells[i].y && labels[i].bottom()<=cells[i].bottom());
+  assert(cells[i].right()<=content.right()-9 && cells[i].bottom()<=content.bottom());
+ }
+}
+''', include_dirs=[sdk, ROOT / 'src'], defines=('FREEINK_DEVICE_XUESU_300=1',))
+
+    def test_xuesu_heatmap_keeps_all_calendar_rows_above_the_legend(self):
+        source = (ROOT / 'src/activities/apps/reading-stats/ReadingHeatmapActivity.cpp').read_text()
+        run_cpp(r'''
+#include <algorithm>
+#include <cassert>
+constexpr int SUMMARY_CARD_GAP = 8;
+''' + method(source, 'struct HeatmapLayout') + ';\n'
+            + method(source, 'HeatmapLayout compactHeatmapLayout(')
+            + method(source, 'int heatmapCellAt(') + r'''
+int main() {
+ for (const int height : {300, 400}) {
+  const int width = height == 400 ? 300 : 400;
+  for (const int fontHeight : {20, 25, 29}) {
+   const auto l = compactHeatmapLayout(width, height, 76, fontHeight, fontHeight + 3);
+   assert(l.contentTop + l.monthHeaderHeight < l.summaryTop);
+   assert(l.summaryTop + 2 * l.summaryCardHeight + SUMMARY_CARD_GAP < l.gridTop);
+   assert(l.cellWidth > 0 && l.cellHeight > 0);
+   assert(l.gridTop + 6 * l.cellHeight + 5 * l.cellGap < l.legendTop);
+   assert(l.legendTop + l.legendHeight <= height);
+   assert(l.sidePadding + 7 * l.cellWidth + 6 * l.cellGap <= width - l.sidePadding);
+   for (int cell = 0; cell < 42; ++cell) {
+    const int x = l.sidePadding + cell % 7 * (l.cellWidth + l.cellGap);
+    const int y = l.gridTop + cell / 7 * (l.cellHeight + l.cellGap);
+    assert(heatmapCellAt(l, x, y) == cell);
+    assert(heatmapCellAt(l, x + l.cellWidth, y) == -1);
+   }
+   assert(heatmapCellAt(l, l.sidePadding, l.legendTop) == -1);
+  }
+ }
+}
+''')
+
+    def test_achievement_filter_can_select_an_empty_category(self):
+        source = (ROOT / 'src/activities/apps/reading-stats/AchievementsActivity.cpp').read_text()
+        run_cpp(r'''
+#include <algorithm>
+#include <cassert>
+#include <vector>
+struct Achievement { struct { bool unlocked; } state; };
+struct AchievementsActivity {
+ enum class FilterTab { Pending, Completed };
+ FilterTab selectedTab = FilterTab::Pending;
+ std::vector<Achievement> achievements{{{false}}, {{false}}};
+ std::vector<int> visibleIndexes;
+ int selectedIndex = 0;
+ void rebuildVisibleIndexes();
+};
+''' + method(source, 'void AchievementsActivity::rebuildVisibleIndexes()') + r'''
+int main() {
+ using Tab = AchievementsActivity::FilterTab;
+ AchievementsActivity screen;
+ screen.rebuildVisibleIndexes();
+ assert(screen.visibleIndexes.size() == 2);
+ screen.selectedTab = Tab::Completed;
+ screen.selectedIndex = 1;
+ screen.rebuildVisibleIndexes();
+ assert(screen.selectedTab == Tab::Completed && screen.visibleIndexes.empty() && screen.selectedIndex == 0);
+ screen.achievements[1].state.unlocked = true;
+ screen.rebuildVisibleIndexes();
+ assert(screen.selectedTab == Tab::Completed && screen.visibleIndexes.size() == 1 && screen.visibleIndexes[0] == 1);
+}
+''')
+
+    def test_xuesu_text_settings_confirm_follows_the_visible_focus(self):
+        source = (ROOT / 'src/activities/settings/TextSettingsActivity.cpp').read_text()
+        program = r'''
+#include <array>
+#include <cassert>
+struct MappedInputManager {
+ enum class Button { None, Back, Confirm };
+ Button released = Button::None;
+ bool wasReleased(Button button) const { return released == button; }
+};
+struct ButtonNavigator {
+ int direction = 0;
+ void onPreviousPress(auto action) const { if (direction < 0) action(); }
+ void onNextPress(auto action) const { if (direction > 0) action(); }
+ void onPreviousContinuous(auto) const {}
+ void onNextContinuous(auto) const {}
+ static int previousPageIndex(int, int, int) { return 0; }
+ static int nextPageIndex(int, int, int) { return 0; }
+};
+struct RenderLock { explicit RenderLock(auto&) {} };
+struct TextSettingsActivity {
+ enum class Tab { Family, Size, Layout, Style, Count };
+ enum class ExitDestination { Previous };
+ struct Nav {
+  int selected = 0;
+  bool followOnBuild = false;
+  int inputPageRows() const { return 2; }
+ };
+ std::array<Nav, 4> nav{{{1}, {2}, {1}, {1}}};
+ Tab tab_ = Tab::Family;
+ int currentFamilyIndex_ = 0, currentSizeIndex_ = 1, activated = -1;
+ bool exited = false;
+ MappedInputManager mappedInput;
+ ButtonNavigator buttonNavigator;
+ int listCount() const { return tab_ == Tab::Family ? 1 : 5; }
+ int ringPos() const { return nav[static_cast<int>(tab_)].selected; }
+ Nav& activeNav() { return nav[static_cast<int>(tab_)]; }
+ void moveRingTo(int pos) { activeNav().selected = pos; }
+ void rebuildRowItems() {}
+ void requestUpdate() {}
+ void activateIndex(int index) { activated = index; }
+ void exitAfterFinalFont(ExitDestination) { exited = true; }
+ bool handleButtons();
+ void navigateButtons();
+ void switchTab(int direction);
+};
+'''
+        program += '\n'.join(method(source, signature) for signature in (
+            'bool TextSettingsActivity::handleButtons()',
+            'void TextSettingsActivity::navigateButtons()',
+            'void TextSettingsActivity::switchTab(',
+        ))
+        program += r'''
+int main() {
+ using Tab = TextSettingsActivity::Tab;
+ using Button = MappedInputManager::Button;
+ TextSettingsActivity activity;
+ const auto release = [&](Button button) {
+  activity.mappedInput.released = button;
+  assert(activity.handleButtons());
+ };
+ const auto step = [&](int direction) {
+  activity.buttonNavigator.direction = direction;
+  activity.navigateButtons();
+ };
+ release(Button::Confirm);
+ assert(activity.tab_ == Tab::Family && activity.activated == 0);
+ step(-1);
+ assert(activity.tab_ == Tab::Family && activity.ringPos() == 0);
+ step(1);
+ assert(activity.tab_ == Tab::Size && activity.ringPos() == 0);
+ release(Button::Confirm);
+ assert(activity.tab_ == Tab::Size && activity.ringPos() == 2 && activity.activated == 0);
+ step(1);
+ release(Button::Confirm);
+ assert(activity.activated == 2 && activity.ringPos() == 3);
+ step(1);
+ step(1);
+ step(1);
+ assert(activity.tab_ == Tab::Size && activity.ringPos() == 0);
+ step(1);
+ release(Button::Confirm);
+ assert(activity.tab_ == Tab::Layout && activity.ringPos() == 1);
+ release(Button::Back);
+ assert(activity.exited && activity.activated == 2);
+}
+'''
+        run_cpp(program, defines=['FREEINK_DEVICE_XUESU_300=1'])
+
     def test_home_grid_repairs_empty_xtc_and_preserves_epub_markers(self):
         home = (ROOT / 'src/activities/home/HomeActivity.cpp').read_text()
         ui = (ROOT / 'src/components/UITheme.cpp').read_text()
@@ -321,6 +793,7 @@ int main() {
 #include <cassert>
 #include <cstring>
 #include <initializer_list>
+#include <string>
 #include <vector>
 struct Rect { int x,y,width,height; };
 constexpr int UI_12_FONT_ID=1, UI_10_FONT_ID=2, SMALL_FONT_ID=3;
@@ -334,6 +807,9 @@ struct GfxRenderer {
  int getScreenWidth() const {return width;}
  int getScreenHeight() const {return height;}
  int getLineHeight(int font) const {return font==1?titleHeight:font==2?statusHeight:smallHeight;}
+ std::string truncatedText(int,const char* text,int width) const {
+   return std::string(text).substr(0, std::max(0,width)/14);
+ }
  void clearScreen() const {blocks.clear();}
  void drawImage(const unsigned char*,int x,int y,int w,int h) const {blocks.push_back({x,y,w,h});}
  void drawCenteredText(int font,int y,const char* text,bool=true,EpdFontFamily::Style=EpdFontFamily::REGULAR) const {
@@ -344,6 +820,8 @@ struct GfxRenderer {
 struct UITheme {
  static UITheme& getInstance() {static UITheme instance;return instance;}
  Rect getScreenSafeArea(const GfxRenderer& r) {return r.safe;}
+ struct Metrics { int contentSidePadding=20; };
+ Metrics getMetrics() const {return {};}
  static void drawCenteredText(const GfxRenderer& r,Rect safe,int font,int y,const char* text,bool=true,
                               EpdFontFamily::Style=EpdFontFamily::REGULAR) {
    int width=std::strlen(text)*14;
@@ -356,7 +834,8 @@ int main() {
  for(Rect size : {Rect{0,0,684,1216},Rect{0,0,600,1000}})
  for(int orientation=0;orientation<4;++orientation)
  for(int extra : {0,12}) for(const char* status : {"Booting...","Sleeping..."})
- for(const char* version : std::initializer_list<const char*>{nullptr,"1.6.5-readpico-rc+abcdef123456"}) {
+ for(const char* version : std::initializer_list<const char*>{nullptr,"1.6.5-readpico-rc+abcdef123456",
+     "dev-xuesu-300-with-a-long-build-version-and-source-revision-0123456789abcdef"}) {
    GfxRenderer r;
    r.width=orientation%2?size.height:size.width;
    r.height=orientation%2?size.width:size.height;
@@ -382,6 +861,7 @@ int main() {
      assert(r.blocks[1].y==r.getScreenHeight()/2+70);
      assert(r.blocks[2].y==r.getScreenHeight()/2+95);
      if(version) assert(r.blocks[3].y==r.getScreenHeight()-30);
+     if(version) assert(r.blocks[3].x>=20 && r.blocks[3].x+r.blocks[3].width<=r.width-20);
    }
  }
 }
@@ -662,7 +1142,7 @@ class GfxRenderer {
 };
 struct UITheme {
   bool tabs=true;
-  Rect safe{}, drawn{};
+  Rect safe{}, drawn{}, focusFrame{};
   ThemeMetrics metrics=InxMetrics::values;
   MainTab selected=MainTab::None;
   int headers=0;
@@ -673,13 +1153,14 @@ struct UITheme {
   Rect getScreenSafeArea(const GfxRenderer&,bool,bool=false) { return safe; }
   void drawMainTabStatusBar(const GfxRenderer&,Rect) {}
   void drawMainTabBar(const GfxRenderer&,Rect rect,MainTab tab) { drawn=rect; selected=tab; }
+  void drawSelectionFrame(const GfxRenderer&,Rect rect,int) { focusFrame=rect; }
   void drawHeader(const GfxRenderer&,Rect rect,const char*,const char*) { drawn=rect; ++headers; }
 };
 #define GUI UITheme::getInstance().getTheme()
 struct Activity {
   GfxRenderer renderer;
   MainTab tab=MainTab::Recent;
-  bool bottom=false;
+  bool bottom=false, backReturnsToTabs=false;
   bool deferred=false,chosen=false;
   int edgeSelections=0;
   struct { bool hasTouch() const { return true; } } mappedInput;
@@ -689,7 +1170,7 @@ struct Activity {
   bool hasMainTabStatusBar() const { return usesMainTabBar() && bottom; }
   MainTabLayout mainTabLayout() const;
   MainTab mainTab() const { return tab; }
-  bool mainTabBackReturnsToTabs() const { return false; }
+  bool mainTabBackReturnsToTabs() const { return backReturnsToTabs; }
   bool defersContentSelection() const { return deferred; }
   bool hasContentSelection() const { return chosen; }
   void selectMainTabContentEdge(MainTabContentEdge) { chosen=true;++edgeSelections; }
@@ -727,6 +1208,12 @@ ActivityManager activityManager;
 ''' + method(activity, 'bool Activity::showMainTabContentSelection(') + method(activity, 'bool Activity::usesMainTabBar(') + 'int BaseTheme::headerStatusHeight() { return MainTabs::statusBarHeight; }\n' + method(activity, 'MainTabLayout Activity::mainTabLayout(') + method(activity, 'void Activity::drawPageHeader(') + method(manager, 'bool ActivityManager::handleMainTabInput(') + r'''
 int main() {
   auto& theme=UITheme::getInstance();
+  using Button=MappedInputManager::Button;
+#if FREEINK_DEVICE_XUESU_300
+  constexpr auto previous=Button::Up, next=Button::Down;
+#else
+  constexpr auto previous=Button::Left, next=Button::Right;
+#endif
   for (const Rect safe : {Rect{5,5,674,1203},Rect{8,5,1203,674},Rect{5,8,674,1203},Rect{5,5,1203,674},Rect{0,0,480,800}}) {
     theme.safe=safe;
     for (bool bottom : {false,true}) for (MainTab current : MainTabs::values) {
@@ -771,11 +1258,11 @@ int main() {
         assert(!m.handleMainTabInput() && m.updates==before+1 && !m.mainTabTouchFocusPending);
         assert(!m.handleMainTabInput() && m.updates==before+1);
       }
-      for (auto button : {MappedInputManager::Button::Left,MappedInputManager::Button::Right}) {
+      for (auto button : {previous,next}) {
         ActivityManager m; m.currentActivity=&page; m.mainTabFocus=MainTabFocus::Tabs;
         m.mappedInput.tapped=false; m.mappedInput.released=button;
         assert(m.handleMainTabInput());
-        assert(m.destination==MainTabs::adjacent(current,button==MappedInputManager::Button::Left ? -1 : 1));
+        assert(m.destination==MainTabs::adjacent(current,button==previous ? -1 : 1));
       }
     }
   }
@@ -805,9 +1292,34 @@ int main() {
   ActivityManager m; m.currentActivity=&page; assert(!m.handleMainTabInput());
   theme.tabs=true; page.tab=MainTab::None; page.drawPageHeader(legacy,"picker");
   assert(theme.headers==2 && !m.handleMainTabInput());
+#if FREEINK_DEVICE_XUESU_300
+  const auto portrait = MainTabs::layout(Rect{0,0,300,400}, 10, 52, false, 20, true);
+  assert(portrait.statusBar.y == 10 && portrait.statusBar.height == 20);
+  assert(portrait.statusBar.y + portrait.statusBar.height == portrait.tabBar.y);
+  assert(portrait.tabBar.y + portrait.tabBar.height == portrait.content.y);
+  assert(portrait.content.y + portrait.content.height == 400);
+  theme.safe=Rect{0,0,300,400};
+  page.tab=MainTab::Recent;
+  page.backReturnsToTabs=true;
+  m.mappedInput.tapped=false;
+  m.mappedInput.released=Button::Confirm;
+  // Home content lets the book's handler see the first confirm release.
+  assert(!m.handleMainTabInput() && m.mainTabFocus==MainTabFocus::Content);
+  m.mappedInput.released=Button::Back;
+  assert(m.handleMainTabInput() && m.mainTabFocus==MainTabFocus::Tabs);
+  activityManager.mainTabFocus=MainTabFocus::Tabs;
+  page.drawPageHeader(legacy,"picker");
+  const auto bar=page.mainTabLayout().tabBar;
+  const auto bounds=MainTabs::tabBounds(0,bar.width);
+  assert(theme.focusFrame.x==bar.x+bounds.left && theme.focusFrame.width==bounds.right-bounds.left);
+  assert(theme.focusFrame.y>bar.y && theme.focusFrame.y+theme.focusFrame.height<bar.y+bar.height);
+  m.mappedInput.released=Button::Down;
+  assert(m.handleMainTabInput() && m.destination==MainTab::Library);
+#endif
 }
 '''
         run_cpp(program, include_dirs=(ROOT / 'src', ROOT / 'lib/hal'))
+        run_cpp(program, include_dirs=(ROOT / 'src', ROOT / 'lib/hal'), defines=('FREEINK_DEVICE_XUESU_300=1',))
 
     def test_home_standby_owns_a_complete_back_gesture_across_transitions(self):
         source = (ROOT / 'src/activities/ActivityManager.cpp').read_text()
@@ -1123,7 +1635,7 @@ unsigned char progressOf(const ReadingBookStats*) { return 50; }
 void drawSparseInk(const GfxRenderer& r,Rect) { assert(r.clipped); }
 void drawProgressBadge(const GfxRenderer& r,Rect,unsigned char) { assert(r.clipped); }
 void drawDottedSeparator(const GfxRenderer& r,int,int,int) { assert(r.clipped); }
-void drawBookText(const GfxRenderer& r,const RecentBook&,int x,int,int width,bool) {
+void drawBookText(const GfxRenderer& r,const RecentBook&,int x,int,int width,bool,int=-1) {
   assert(r.clipped && x>=r.clip.x+kPagePadding && x+width<=r.clip.x+r.clip.width-kPagePadding);
   if (r.flow) assert(x==r.clip.x+kPagePadding && width==r.clip.width-2*kPagePadding);
 }
@@ -1190,9 +1702,11 @@ struct InxRecentActivity {
     return Rect{theme.safe.x,theme.safe.y+top,theme.safe.width,theme.safe.height-top};
   }
   Rect contentRect() const;
+  Rect flowCarouselRect(const Rect&) const;
   const ReadingBookStats* statsAt(int) const { return nullptr; }
   bool showMainTabContentSelection() const { return true; }
   InxRecentLayout layout() const { return chosen; }
+  int itemsPerPage() const;
   void setThumbnailHeight(int height) { assert(height>0); }
   void drawBookCover(int,Rect) { assert(renderer.clipped); ++coverCalls; }
   void drawPageHeader(Rect rect,const char*) {
@@ -1211,7 +1725,10 @@ struct InxRecentActivity {
   void drawFooter();
   void render(RenderLock&&) { renderer.clearScreen(); drawChrome(); UiScreen screen; buildScreen(screen); drawFooter(); renderer.displayBuffer(); }
 };
-''' + 'int BaseTheme::headerStatusHeight() { return HeaderStatusMetrics::stripHeight; }\n' + method(source, 'Rect InxRecentActivity::contentRect(') + method(source, 'Rect fitCoverRect(') + '\n'.join(
+''' + 'int BaseTheme::headerStatusHeight() { return HeaderStatusMetrics::stripHeight; }\n' + '\n'.join(
+            line for line in source.splitlines() if line.startswith('constexpr int kFlow')) + '\n' + method(
+            source, 'int flowProgressOffset(') + method(source, 'Rect InxRecentActivity::contentRect(') + method(
+            source, 'Rect InxRecentActivity::flowCarouselRect(') + method(source, 'int InxRecentActivity::itemsPerPage(') + method(source, 'Rect fitCoverRect(') + '\n'.join(
             method(source, 'void InxRecentActivity::draw'+layout+'(')
             for layout in ('Flow', 'Grid', 'List', 'Icons', 'Cover')) +
                 method(source, 'void InxRecentActivity::buildScreen(') + method(source, 'void InxRecentActivity::drawChrome(') + method(source, 'void InxRecentActivity::drawFooter(') + r'''
@@ -1618,50 +2135,60 @@ int main(int argc,char** argv) {
 """)
 
 
-    def test_txt_spacing_keeps_cache_fields_byte_aligned(self):
-        import re
-        # Immutable legacy schema fixture; active TXT books now use EPUB sections.
-        source = subprocess.check_output(['git', '-C', str(ROOT), 'show',
-            '593c8dbc8feb404d740108a3db281c4eeae3e33e:src/activities/reader/TxtReaderActivity.cpp'], text=True)
-        read = method(source, 'bool readPodChecked(')
-        write = method(source, 'bool writePodChecked(')
-        expression = re.search(
-            r'!writePodChecked\(f, (.*SETTINGS\.extraParagraphSpacing.*?)\)\s*\|\|\s*!writePodChecked\(f, complete\)',
-            source).group(1)
+    def test_reader_spacing_keeps_section_header_byte_aligned(self):
+        # TXT and EPUB now share this active schema; no historical checkout needed.
+        source = (ROOT / 'lib/Epub/Epub/Section.cpp').read_text(encoding='utf-8')
+        write = method(source, 'void Section::writeSectionFileHeader(')
+        header_size = re.search(r'constexpr uint32_t HEADER_SIZE = [^;]+;', source).group(0)
+        versions = '\n'.join(re.search(r'constexpr uint8_t ' + name + r' = [^;]+;', source).group(0)
+                             for name in ('SECTION_FILE_VERSION', 'SECTION_FILE_INCOMPLETE_VERSION'))
         run_cpp(r'''
 #include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include "ReaderRenderSpec.h"
+#define LOG_DBG(...) ((void)0)
 struct HalFile {
   std::vector<uint8_t> bytes;
-  size_t position=0;
-  size_t write(const uint8_t* data,size_t size) {bytes.insert(bytes.end(),data,data+size);return size;}
-  int read(uint8_t* data,size_t size) {
-    if(position+size>bytes.size()) return 0;
-    std::memcpy(data,bytes.data()+position,size);position+=size;return static_cast<int>(size);
-  }
+  explicit operator bool() const { return true; }
 };
-struct {uint8_t extraParagraphSpacing=0;} SETTINGS;
-''' + 'template<typename T>\n' + read + '\ntemplate<typename T>\n' + write + r'''
+namespace serialization {
+template<class T> void writePod(HalFile& file,const T& value) {
+  const auto* data=reinterpret_cast<const uint8_t*>(&value);
+  file.bytes.insert(file.bytes.end(),data,data+sizeof(value));
+}
+}
+struct Section {
+  HalFile file;
+  uint16_t pageCount=0;
+  void writeSectionFileHeader(const ReaderRenderSpec&);
+};
+template<class T> T read(const HalFile& file,size_t offset) {
+  assert(offset+sizeof(T)<=file.bytes.size());
+  T value; std::memcpy(&value,file.bytes.data()+offset,sizeof(T));return value;
+}
+''' + versions + '\n' + header_size + '\n' + write + r'''
 int main() {
   for(uint8_t level=0;level<=5;++level) {
-    SETTINGS.extraParagraphSpacing=level;
-    HalFile f;
-    assert(writePodChecked(f, ''' + expression + r'''));
-    const uint8_t complete=1, encoding=1;
-    const uint32_t pageCount=7;
-    assert(writePodChecked(f,complete));assert(writePodChecked(f,encoding));assert(writePodChecked(f,pageCount));
-    assert(f.bytes.size()==7);
-    HalFile reopened=f;
-    uint8_t spacing=255,loadedComplete=0,loadedEncoding=0;uint32_t loadedPages=0;
-    assert(readPodChecked(reopened,spacing));assert(readPodChecked(reopened,loadedComplete));
-    assert(readPodChecked(reopened,loadedEncoding));assert(readPodChecked(reopened,loadedPages));
-    assert(spacing==(level!=0) && loadedComplete==1 && loadedEncoding==1 && loadedPages==7);
-    assert(reopened.position==reopened.bytes.size());
+    ReaderRenderSpec spec;
+    spec.extraParagraphSpacing=level;
+    spec.firstLineIndent=2;spec.paragraphIndentSpaces=4;spec.paragraphAlignment=3;
+    spec.verticalBottomAlign=true;spec.viewportWidth=300;spec.viewportHeight=400;
+    spec.characterSpacing=-2;spec.wordSpacingPercent=125;
+    Section section;section.pageCount=513;section.writeSectionFileHeader(spec);
+    const auto& f=section.file;
+    assert(f.bytes.size()==HEADER_SIZE && HEADER_SIZE==47);
+    assert(read<uint8_t>(f,0)==SECTION_FILE_INCOMPLETE_VERSION);
+    assert(read<uint8_t>(f,9)==level); // All six levels survive, not just a bool.
+    assert(read<uint8_t>(f,10)==2 && read<uint8_t>(f,11)==4 && read<uint8_t>(f,12)==3);
+    assert(read<bool>(f,13) && read<uint16_t>(f,14)==300 && read<uint16_t>(f,16)==400);
+    assert(read<int8_t>(f,23)==-2 && read<uint8_t>(f,24)==125);
+    assert(read<uint16_t>(f,25)==513);
+    for(size_t offset=27;offset<HEADER_SIZE;offset+=sizeof(uint32_t)) assert(read<uint32_t>(f,offset)==0);
   }
 }
-''')
+''', include_dirs=[ROOT / 'lib/Epub/Epub', ROOT / 'lib/Epub'])
 
 
     def test_inx_corner_status_and_touch_home_footer(self):
@@ -1853,30 +2380,32 @@ struct BaseTheme {
   static int headerStatusHeight();
   static void applyHeaderStatus(const GfxRenderer&,freeink::ui::HeaderProps&,bool=false);
   static freeink::ui::Rect headerBand(const GfxRenderer&,freeink::ui::Rect,freeink::ui::HeaderProps&);
-  static void drawHeaderStatus(const GfxRenderer&,Rect,const char*=nullptr);
+  static void drawHeaderStatus(const GfxRenderer&,Rect,const char*=nullptr,bool=false);
 };
 '''.replace('const char*=nullptr','const char* = nullptr') + methods + r'''
 int main() {
   for (int width : {480,800,684,1216}) for (int inset : {0,18}) for (int offset : {0,6})
   for (bool hide : {false,true}) for (bool clock : {false,true}) for (bool valid : {false,true})
-  for (bool hour12 : {false,true}) for (bool charging : {false,true}) for (int percent : {0,1,99,100}) {
+  for (bool hour12 : {false,true}) for (bool charging : {false,true}) for (int percent : {0,1,99,100})
+  for (bool forceClock : {false,true}) {
     GfxRenderer r;r.width=width;r.left=inset;r.right=inset;r.top=inset;
     BoardConfig::ACTIVE={offset,inset?24:0};gpio.charging=charging;powerManager.percent=percent;
     SETTINGS.hideBatteryPercentage=hide?CrossPointSettings::HIDE_ALWAYS:CrossPointSettings::SHOW;
     SETTINGS.clockShowInHeader=clock;SETTINGS.clockFormat=hour12;TimeUtils::valid=valid;
     const int y=inset+HeaderStatusMetrics::topPadding;
     const Rect slot{inset,y,width-2*inset,BaseTheme::headerStatusHeight()};
-    BaseTheme::drawHeaderStatus(r,slot,"2026-10-25");
+    BaseTheme::drawHeaderStatus(r,slot,"2026-10-25",forceClock);
     const GfxRenderer::Op *battery=nullptr,*date=nullptr,*time=nullptr,*label=nullptr;
     for (const auto& op:r.ops) {
       if (op.stroke) battery=&op;
       if (op.text=="2026-10-25") date=&op;
-      if (op.text=="23:59" || op.text=="12:59 PM") time=&op;
+      if (op.text=="23:59" || op.text=="12:59 PM" || op.text=="--:--") time=&op;
       if (op.text.find('%')!=std::string::npos) label=&op;
       assert(op.rect.x>=slot.x && op.rect.right()<=slot.x+slot.width);
       assert(op.rect.y>=slot.y+offset && op.rect.bottom()<=slot.y+slot.height);
     }
-    assert(battery && date && bool(time)==(clock&&valid) && bool(label)==!hide);
+    assert(battery && date && bool(time)==(forceClock||(clock&&valid)) && bool(label)==!hide);
+    if (time) assert((time->text=="--:--")==!valid);
     assert(battery->rect.x==width-inset-(22+std::max(0,BoardConfig::ACTIVE.cornerRadius-inset))-metrics.batteryWidth-2);
     if (time) {
       assert(std::abs((time->rect.y*2+time->rect.height)-(battery->rect.y*2+battery->rect.height))<=1);

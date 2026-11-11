@@ -33,6 +33,10 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   // rather than the Tap default. Seeded from the setting in onEnter().
   uint8_t touchModeRestore = CrossPointSettings::TOUCH_READER_ON;
   int panelBottom = 0;
+#if FREEINK_DEVICE_XUESU_300
+  int selectedQuickTile = 0;
+  const char* contextAction = nullptr;
+#endif
 
   // Quick settings, left to right: night mode, refresh, orientation, touch, Bluetooth.
   static constexpr int kTileCount = 5;
@@ -75,6 +79,9 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
 
  public:
   explicit FrontlightPanelActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+#if FREEINK_DEVICE_XUESU_300
+  void setContextAction(const char* label) { contextAction = label; }
+#endif
   void onEnter() override;
   void onExit() override;
   void loop() override;

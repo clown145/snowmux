@@ -82,6 +82,20 @@ TEST(InxNavigation, PlacesTabsWithoutOverlappingContent) {
   EXPECT_EQ(touchBottom.content.y + touchBottom.content.height, 435);
 }
 
+TEST(InxNavigation, CompactRecentReservesTwoTitleLinesAndOneProgressRow) {
+  for (const bool bottom : {false, true}) {
+    const auto tabs = MainTabs::layout(Rect{0, 0, 300, 400}, 5, bottom ? MainTabs::bottomBarHeight : 84, bottom);
+    const Rect content{tabs.content.x, tabs.content.y + 8, tabs.content.width, tabs.content.height - 40};
+    const auto flow = InxRecentGeometry::compactFlow(content, 28, 19);
+    EXPECT_GT(flow.cover.height, content.height / 2);
+    EXPECT_GE(flow.title.y - (flow.cover.y + flow.cover.height), 6);
+    EXPECT_EQ(flow.title.height, 56);
+    EXPECT_GE(flow.progress.y - (flow.title.y + flow.title.height), 6);
+    EXPECT_EQ(flow.progress.y + flow.progress.height, content.y + content.height);
+    EXPECT_EQ(flow.title.width, 284);
+  }
+}
+
 TEST(InxNavigation, SharesTabDrawingAndHitBoundsIncludingGaps) {
   for (const int width : {480, 552, 768, 800, 527}) {
     for (size_t i = 0; i < MainTabs::values.size(); ++i) {
@@ -350,6 +364,26 @@ TEST(InxNavigation, ValidatesItemLayoutsAndGridBounds) {
     EXPECT_EQ(InxGridGeometry::indexFromPoint(cell.x - 1, cell.y, 527, 377, 0, 12), -1);
     EXPECT_EQ(InxGridGeometry::indexFromPoint(cell.x, cell.y + cell.height, 527, 377, 0, 12), -1);
   }
+}
+
+TEST(InxNavigation, FitsFileAndAppTilesInShortViewports) {
+  constexpr int labelHeight = 22;
+  for (const int iconSize : {24, 32}) {
+    for (const Rect content : {Rect{0, 0, 300, 214}, Rect{0, 0, 300, 283}, Rect{0, 0, 480, 600}}) {
+      const int rows = InxGridGeometry::fittingRows(content.height, labelHeight, iconSize);
+      EXPECT_LE(rows, InxGridGeometry::rows);
+      for (int slot = 0; slot < rows * InxGridGeometry::columns; ++slot) {
+        const Rect cell = InxGridGeometry::cellBounds(slot, content.width, content.height, rows);
+        EXPECT_GE(InxGridGeometry::maximumIconSize(cell, labelHeight), iconSize);
+        const int iconTop = InxGridGeometry::tileTop(cell, labelHeight, iconSize);
+        const int labelBottom = iconTop + iconSize + InxGridGeometry::iconLabelGap + labelHeight;
+        EXPECT_GE(iconTop, cell.y);
+        EXPECT_LE(labelBottom, cell.y + cell.height);
+        EXPECT_LE(cell.y + cell.height, content.height);
+      }
+    }
+  }
+  EXPECT_LT(InxGridGeometry::fittingRows(214, labelHeight, 24), InxGridGeometry::rows);
 }
 
 TEST(InxNavigation, MatchesAppGridCellsAtRoundedBoundaries) {

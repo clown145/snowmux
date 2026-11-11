@@ -313,6 +313,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (keyboardLayouts != 0) {
     doc["keyboardLayouts"] = keyboardLayouts;
   }
+#if FREEINK_DEVICE_XUESU_300
+  if (xuesuBatteryFullMv != 0) {
+    doc["xuesuBatteryFullMv"] = xuesuBatteryFullMv;
+  }
+#endif
 
   bleturner::writeJson(ble, doc);
 }
@@ -636,6 +641,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (doc["keyboardLayouts"].is<uint16_t>()) {
     keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
   }
+#if FREEINK_DEVICE_XUESU_300
+  xuesuBatteryFullMv = doc["xuesuBatteryFullMv"] | uint16_t{0};
+#endif
 
   if (!bleturner::readJson(ble, doc)) {
     ble.enabled = bluetoothEnabled ? 1 : 0;

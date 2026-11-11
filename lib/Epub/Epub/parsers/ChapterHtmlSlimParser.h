@@ -243,6 +243,8 @@ class ChapterHtmlSlimParser {
 
   // Footnote link tracking
   bool insideFootnoteLink = false;
+  bool semanticNoteRef = false;
+  unsigned imageNoteNumber = 0;
   int footnoteLinkDepth = -1;
   uint8_t currentFootnoteLinkId = 0;
   FootnoteEntry currentFootnote = {};

@@ -120,6 +120,14 @@ void EpubReaderClippingListActivity::onRowLongPress(const int index) {
   showDeleteConfirmation();
 }
 
+#if FREEINK_DEVICE_XUESU_300
+const char* EpubReaderClippingListActivity::xuesuQuickActionLabel() const {
+  return !confirmPopup.isActive() && nav.selected >= 0 && nav.selected < listCount()
+             ? tr(STR_XUESU_DELETE_CLIPPING)
+             : nullptr;
+}
+#endif
+
 void EpubReaderClippingListActivity::showDeleteConfirmation() {
   if (listCount() == 0 || confirmPopup.isActive()) return;
   confirmingDelete = true;

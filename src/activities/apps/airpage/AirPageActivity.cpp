@@ -117,9 +117,12 @@ void AirPageActivity::onEnter() {
   uploadUrl_ += "/?id=";
   uploadUrl_ += deviceId;
   char displayParams[48];
+  // AirPage negotiates an image format, not the physical panel's output levels.
+  // Black-and-white panels can receive gray4 and dither it on the device.
+  const unsigned transferGrayLevels = renderer.getGrayscaleLevels() == 16 ? 16 : 4;
   snprintf(displayParams, sizeof(displayParams), "&w=%u&h=%u&mode=gray%u",
            static_cast<unsigned>(renderer.getDisplayHeight()), static_cast<unsigned>(renderer.getDisplayWidth()),
-           static_cast<unsigned>(renderer.getGrayscaleLevels()));
+           transferGrayLevels);
   uploadUrl_ += displayParams;
 
   downloadUrl_.reserve(64 + deviceId.size());
@@ -1050,7 +1053,8 @@ const char* AirPageActivity::refreshActionText() const {
 void AirPageActivity::renderQr(const Rect& viewport) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int reservedTextHeight = lineHeight * 2 + metrics.verticalSpacing * 2;
+  const int textRows = FREEINK_DEVICE_XUESU_300 ? 4 : 2;
+  const int reservedTextHeight = lineHeight * textRows + metrics.verticalSpacing * textRows;
   const int qrSize =
       std::max(1, std::min(viewport.width - metrics.contentSidePadding * 2, viewport.height - reservedTextHeight));
   const Rect qrBounds{viewport.x + (viewport.width - qrSize) / 2, viewport.y, qrSize, qrSize};
@@ -1064,6 +1068,15 @@ void AirPageActivity::renderQr(const Rect& viewport) {
     GUI.drawHelpText(renderer,
                      Rect{viewport.x, hintY + lineHeight + metrics.verticalSpacing, viewport.width, lineHeight}, state);
   }
+#if FREEINK_DEVICE_XUESU_300
+  const int actionY = hintY + 2 * (lineHeight + metrics.verticalSpacing);
+  GUI.drawHelpText(renderer, Rect{viewport.x, actionY, viewport.width, lineHeight}, tr(STR_AIRPAGE_XUESU_KEYS));
+  char refreshHint[96];
+  snprintf(refreshHint, sizeof(refreshHint), tr(STR_AIRPAGE_XUESU_REFRESH), refreshActionText());
+  GUI.drawHelpText(renderer,
+                   Rect{viewport.x, actionY + lineHeight + metrics.verticalSpacing, viewport.width, lineHeight},
+                   refreshHint);
+#endif
 }
 
 void AirPageActivity::renderStatus(const Rect& viewport, const char* msg) {

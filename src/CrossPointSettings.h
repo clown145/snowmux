@@ -433,7 +433,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // CLOCK_DST_MODE: follow the zone's DST rule, or force it on/off.
   uint8_t clockDst = CLOCK_DST_AUTO;
   // Show the clock opposite the battery in every header band that draws one.
-  uint8_t clockShowInHeader = 0;
+  uint8_t clockShowInHeader = FREEINK_DEVICE_XUESU_300 ? 1 : 0;
   // Set once an NTP sync succeeds. Used to skip re-syncing on every WiFi connect.
   // Resetting to 0 (e.g. via the web UI) forces a re-sync on next WiFi connect.
   uint8_t clockHasBeenSynced = 0;
@@ -655,6 +655,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
   uint8_t slideSwitchAction = SLIDE_SWITCH_FRONTLIGHT;
   uint16_t keyboardLayouts = 0;
+#if FREEINK_DEVICE_XUESU_300
+  uint16_t xuesuBatteryFullMv = 0;
+#endif
   // Bluetooth page turner, saved under the keys lib/BlePageTurner reads and writes (BlePageTurnerJson.h).
   bleturner::Config ble;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.

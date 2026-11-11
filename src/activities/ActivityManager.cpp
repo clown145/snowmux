@@ -17,6 +17,7 @@
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
 #include "OpdsServerStore.h"
+#include "RecentBooksStore.h"
 #include "apps/2048/Game2048Activity.h"
 #include "apps/AppsMenuActivity.h"
 #include "apps/airpage/AirPageActivity.h"
@@ -161,6 +162,13 @@ void ActivityManager::loop() {
   }
 
   if (currentActivity && pendingAction.load() == PendingAction::None) {
+#if FREEINK_DEVICE_XUESU_300
+    const char* quickAction = currentActivity->xuesuQuickActionLabel();
+    const bool doubleConfirm =
+        mappedInput.resolveXuesuConfirmShortcut(quickAction || currentActivity->allowsXuesuQuickPanel(), screenVisit);
+#else
+    constexpr bool doubleConfirm = false;
+#endif
     if (handleMainTabInput()) {
       resetHomeStandbyInput();
       return;
@@ -189,16 +197,31 @@ void ActivityManager::loop() {
             mappedInput.wasScreenTapped(tx, ty) && ty >= 0 && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
       }
     }
-    if (mappedInput.hasTouch() && currentActivity->name != "FrontlightPanel" &&
-        (statusBarTap || mappedInput.wasLightPanelGesture())) {
-      haptic_feedback::touchAction();
+    const bool touchPanel = mappedInput.hasTouch() && currentActivity->name != "FrontlightPanel" &&
+                            (statusBarTap || mappedInput.wasLightPanelGesture());
+    if (doubleConfirm || touchPanel) {
+      if (touchPanel) haptic_feedback::touchAction();
       resetHomeStandbyInput();
       auto panel = makeUniqueNoThrow<FrontlightPanelActivity>(renderer, mappedInput);
       if (!panel) {
         LOG_ERR("ACT", "OOM: frontlight panel (%u bytes)", static_cast<unsigned>(sizeof(FrontlightPanelActivity)));
         return;
       }
+#if FREEINK_DEVICE_XUESU_300
+      panel->setContextAction(quickAction);
+      currentActivity->startActivityForResult(std::move(panel), [this](const ActivityResult& result) {
+        const auto* action = std::get_if<QuickPanelResult>(&result.data);
+        if (!action) return;
+        if (*action == QuickPanelResult::ContextAction) {
+          if (currentActivity->xuesuQuickActionLabel()) currentActivity->runXuesuQuickAction();
+          return;
+        }
+        if (SETTINGS.sleepScreen == CrossPointSettings::QUICK_RESUME) requestUpdateAndWait();
+        requestSleep();
+      });
+#else
       pushActivity(std::move(panel));
+#endif
       return;
     }
 
@@ -415,18 +438,26 @@ bool ActivityManager::handleMainTabInput() {
     return true;
   }
 
+  using Button = MappedInputManager::Button;
+#if FREEINK_DEVICE_XUESU_300
+  // The page keys switch tabs while the tab bar has focus.
+  constexpr auto previousTabKey = Button::Up;
+  constexpr auto nextTabKey = Button::Down;
+#else
+  constexpr auto previousTabKey = Button::Left;
+  constexpr auto nextTabKey = Button::Right;
+#endif
   switch (mainTabFocus) {
     case MainTabFocus::Tabs:
-      if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      if (mappedInput.wasReleased(previousTabKey)) {
         goToMainTab(MainTabs::adjacent(currentTab, -1));
         return true;
       }
-      if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      if (mappedInput.wasReleased(nextTabKey)) {
         goToMainTab(MainTabs::adjacent(currentTab, 1));
         return true;
       }
-      if (mappedInput.isPressed(MappedInputManager::Button::Left) ||
-          mappedInput.isPressed(MappedInputManager::Button::Right)) {
+      if (mappedInput.isPressed(previousTabKey) || mappedInput.isPressed(nextTabKey)) {
         return true;
       }
 
@@ -527,7 +558,7 @@ void ActivityManager::goToUsbDrive() {
 }
 
 void ActivityManager::goToSettings(const SettingsSection openSection) {
-  if (SETTINGS.uiTheme == CrossPointSettings::INX && openSection == SettingsSection::End) {
+  if (!FREEINK_DEVICE_XUESU_300 && SETTINGS.uiTheme == CrossPointSettings::INX && openSection == SettingsSection::End) {
     replaceActivityWith<SettingsActivity>(openSection);
   } else {
     replaceActivityWith<SettingsListActivity>(openSection);
@@ -623,7 +654,11 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
     UserGuide::installIfPending(static_cast<Language>(SETTINGS.language) == Language::ZH_CN);
   }
   if (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::INX) {
+#if FREEINK_DEVICE_XUESU_300
+    mainTabFocus = RECENT_BOOKS.getBooks().empty() ? MainTabFocus::Tabs : MainTabFocus::Content;
+#else
     mainTabFocus = MainTabFocus::Tabs;
+#endif
     mainTabEntryReleasePending = false;
     goToInxRecent();
     return;
@@ -706,6 +741,12 @@ void ActivityManager::popActivity() {
   }
   pendingAction = PendingAction::Pop;
 }
+
+#if FREEINK_DEVICE_XUESU_300
+bool ActivityManager::showsMainTabStatusBar() const {
+  return currentActivity && pendingAction.load() == PendingAction::None && currentActivity->hasMainTabStatusBar();
+}
+#endif
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
 

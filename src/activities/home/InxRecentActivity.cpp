@@ -24,6 +24,14 @@ namespace {
 constexpr int kGap = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap : 8;
 constexpr int kPagePadding = UiHighDpiProfile::enabled ? UiHighDpiProfile::contentPadding : 18;
 constexpr int kProgressHeight = 6;
+constexpr int kFlowDividerGap = 10;
+constexpr int kFlowTextGap = 15;
+constexpr int kFlowMetricsGap = UiHighDpiProfile::enabled ? 48 : 34;
+
+int flowProgressOffset(const GfxRenderer& renderer) {
+  return UiHighDpiProfile::enabled ? renderer.getLineHeight(UI_10_FONT_ID) + renderer.getLineHeight(SMALL_FONT_ID) + 24
+                                   : 58;
+}
 
 const char* titleOf(const RecentBook& book) { return book.title.empty() ? book.path.c_str() : book.title.c_str(); }
 
@@ -75,14 +83,14 @@ void drawMetric(const GfxRenderer& renderer, const int x, const int y, const cha
 }
 
 void drawBookText(const GfxRenderer& renderer, const RecentBook& book, const int x, const int y, const int width,
-                  const bool author) {
+                  const bool author, const int authorOffset = -1) {
   const std::string title = renderer.truncatedText(UI_10_FONT_ID, titleOf(book), width, EpdFontFamily::BOLD);
   renderer.drawText(UI_10_FONT_ID, x, y, title.c_str(), true, EpdFontFamily::BOLD);
   if (author && !book.author.empty()) {
     const std::string subtitle = renderer.truncatedText(SMALL_FONT_ID, book.author.c_str(), width);
-    renderer.drawText(SMALL_FONT_ID, x,
-                      y + (UiHighDpiProfile::enabled ? renderer.getLineHeight(UI_10_FONT_ID) + 6 : 27),
-                      subtitle.c_str());
+    const int offset =
+        authorOffset >= 0 ? authorOffset : (UiHighDpiProfile::enabled ? renderer.getLineHeight(UI_10_FONT_ID) + 6 : 27);
+    renderer.drawText(SMALL_FONT_ID, x, y + offset, subtitle.c_str());
   }
 }
 }  // namespace
@@ -108,7 +116,7 @@ bool InxRecentActivity::handleListSwipe(const MappedInputManager::SwipeDir swipe
   if (!flowSwipe) {
     return UiListActivity::handleListSwipe(swipe, startX, startY);
   }
-  const Rect carousel = InxRecentGeometry::flowCarouselRect(contentRect());
+  const Rect carousel = flowCarouselRect(contentRect());
   if (startX < carousel.x || startX >= carousel.x + carousel.width || startY < carousel.y ||
       startY >= carousel.y + carousel.height)
     return false;
@@ -128,16 +136,30 @@ InxRecentLayout InxRecentActivity::layout() const {
   return value < InxRecentLayout::Count ? value : InxRecentLayout::Flow;
 }
 
+int InxRecentActivity::itemsPerPage() const {
+  const auto list = InxRecentGeometry::listLayout(contentRect(), renderer.getLineHeight(UI_10_FONT_ID),
+                                                  renderer.getLineHeight(SMALL_FONT_ID));
+  return InxRecentGeometry::itemsPerPage(layout(), list.rows);
+}
+
 Rect InxRecentActivity::contentRect() const {
   Rect content = pageContentRect();
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int topInset = mainTabsAtBottom() && !hasMainTabStatusBar() ? BaseTheme::headerStatusHeight() : 0;
-  content.y += topInset + metrics.verticalSpacing;
-  content.height -= topInset + metrics.verticalSpacing * 2;
-  if (!mainTabsAtBottom()) {
+  int spacing = metrics.verticalSpacing;
+#if FREEINK_DEVICE_XUESU_300
+  if (layout() == InxRecentLayout::Flow) spacing /= 2;
+#endif
+  content.y += topInset + spacing;
+  content.height -= topInset + spacing * 2;
+  if (!mainTabsAtBottom() && !hasMainTabStatusBar()) {
     content.height -= std::max(0, InxRecentGeometry::footerReservedHeight - metrics.buttonHintsHeight);
   }
   return content;
+}
+
+Rect InxRecentActivity::flowCarouselRect(const Rect& content) const {
+  return InxRecentGeometry::flowCarouselRect(content);
 }
 
 const ReadingBookStats* InxRecentActivity::statsAt(const int index) const {
@@ -364,11 +386,57 @@ bool InxRecentActivity::prepareNextMissingCover() {
   return false;
 }
 
+#if FREEINK_DEVICE_XUESU_300
+void InxRecentActivity::drawCompactFlow(UiScreen& screen, const Rect& content) {
+  namespace fui = freeink::ui;
+  auto titleStyle = screen.theme().titleText;
+  titleStyle.bold = true;
+  titleStyle.align = fui::TextAlign::Center;
+  titleStyle.maxLines = 2;
+  const auto regions = InxRecentGeometry::compactFlow(content, screen.target().lineHeight(titleStyle.font),
+                                                      renderer.getLineHeight(SMALL_FONT_ID));
+
+  if (regions.cover.height > 4) {
+    const Rect cover =
+        fitCoverRect(Rect{regions.cover.x, regions.cover.y + 2, regions.cover.width, regions.cover.height - 4});
+    setThumbnailHeight(cover.height);
+    drawBookCover(selected, cover);
+    if (showMainTabContentSelection()) GUI.drawSelectionFrame(renderer, cover, 2);
+  }
+
+  const auto& title = regions.title;
+  const fui::Rect titleBox{static_cast<int16_t>(title.x), static_cast<int16_t>(title.y),
+                           static_cast<int16_t>(title.width), static_cast<int16_t>(title.height)};
+  // The SDK layout wraps a long word at UTF-8 character boundaries.
+  fui::layoutText(screen.target(), titleBox, titleOf((*books)[selected]), titleStyle,
+                  [&](const char* line, const fui::Rect lineRect) {
+                    screen.target().text(fui::Rect{titleBox.x, lineRect.y, titleBox.width, lineRect.height}, line,
+                                         titleStyle);
+                  });
+
+  const auto& footer = regions.progress;
+  const uint8_t progress = progressOf(statsAt(selected));
+  char percent[8];
+  snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
+  const int barWidth = footer.width / 2;
+  drawMiniProgress(renderer, Rect{footer.x, footer.y + (footer.height - kProgressHeight) / 2, barWidth, kProgressHeight},
+                   progress);
+  renderer.drawText(SMALL_FONT_ID, footer.x + barWidth + kGap, footer.y, percent);
+
+  if (books->size() > 1) {
+    char position[16];
+    snprintf(position, sizeof(position), "%d/%u", selected + 1, static_cast<unsigned>(books->size()));
+    const int width = renderer.getTextWidth(SMALL_FONT_ID, position);
+    renderer.drawText(SMALL_FONT_ID, footer.x + footer.width - width, footer.y, position);
+  }
+}
+#endif
+
 void InxRecentActivity::drawFlow(UiScreen& screen, const Rect& content) {
   const bool showSelection = showMainTabContentSelection();
   const int count = static_cast<int>(books->size());
   const RecentBook& book = (*books)[selected];
-  const Rect carousel = InxRecentGeometry::flowCarouselRect(content);
+  const Rect carousel = flowCarouselRect(content);
   drawSparseInk(renderer, carousel);
 
   const auto centerSize = InxCoverGeometry::fit(carousel.width, std::max(1, carousel.height * 94 / 100));
@@ -391,17 +459,15 @@ void InxRecentActivity::drawFlow(UiScreen& screen, const Rect& content) {
                      ACTION_ROW, static_cast<int16_t>(selected), freeink::ui::InputTouch | freeink::ui::InputLongPress);
   if (showSelection && selected == nav.selected) GUI.drawSelectionFrame(renderer, center);
 
-  const int dividerY = carousel.y + carousel.height + 10;
+  const int dividerY = carousel.y + carousel.height + kFlowDividerGap;
   renderer.drawLine(content.x, dividerY, content.x + content.width - 1, dividerY, true);
-  const int textY = dividerY + 15;
+  const int textY = dividerY + kFlowTextGap;
   const int textX = content.x + kPagePadding;
   drawBookText(renderer, book, textX, textY, content.width - kPagePadding * 2, true);
 
   const ReadingBookStats* stats = statsAt(selected);
   const uint8_t progress = progressOf(stats);
-  const int progressY = textY + (UiHighDpiProfile::enabled ? renderer.getLineHeight(UI_10_FONT_ID) +
-                                                                 renderer.getLineHeight(SMALL_FONT_ID) + 24
-                                                           : 58);
+  const int progressY = textY + flowProgressOffset(renderer);
   const int progressWidth = std::max(24, (content.width - kPagePadding * 2) / 2);
   drawMiniProgress(renderer, Rect{textX, progressY, progressWidth, kProgressHeight}, progress);
   char percent[8];
@@ -409,7 +475,7 @@ void InxRecentActivity::drawFlow(UiScreen& screen, const Rect& content) {
   renderer.drawText(SMALL_FONT_ID, textX + progressWidth + 12,
                     progressY - (renderer.getLineHeight(SMALL_FONT_ID) - kProgressHeight) / 2, percent);
 
-  const int metricsTop = progressY + (UiHighDpiProfile::enabled ? 48 : 34);
+  const int metricsTop = progressY + kFlowMetricsGap;
   const int metricWidth = (content.width - kPagePadding * 2 - kGap) / 2;
   const int metricHeight = std::max(1, (content.y + content.height - metricsTop) / 2);
   const std::string total = stats ? ReadingStatsAnalytics::formatDurationHm(stats->totalReadingMs) : "0m";
@@ -455,8 +521,10 @@ void InxRecentActivity::drawGrid(UiScreen& screen, const Rect& content) {
 void InxRecentActivity::drawList(UiScreen& screen, const Rect& content) {
   const bool showSelection = showMainTabContentSelection();
   const int start = nav.top;
-  const int rowHeight = content.height / 5;
-  for (int slot = 0; slot < 5 && start + slot < static_cast<int>(books->size()); ++slot) {
+  const auto list = InxRecentGeometry::listLayout(content, renderer.getLineHeight(UI_10_FONT_ID),
+                                                  renderer.getLineHeight(SMALL_FONT_ID));
+  const int rowHeight = list.rowHeight;
+  for (int slot = 0; slot < list.rows && start + slot < static_cast<int>(books->size()); ++slot) {
     const int index = start + slot;
     const Rect row{content.x, content.y + slot * rowHeight, content.width, rowHeight};
     screen.frame().hit(freeink::ui::Rect{static_cast<int16_t>(row.x), static_cast<int16_t>(row.y),
@@ -468,11 +536,12 @@ void InxRecentActivity::drawList(UiScreen& screen, const Rect& content) {
     drawBookCover(index, cover);
     const int textX = cover.x + cover.width + 14;
     const int textWidth = row.x + row.width - kPagePadding - textX;
-    drawBookText(renderer, (*books)[index], textX, row.y + 14, textWidth, true);
+    drawBookText(renderer, (*books)[index], textX, row.y + list.titleTop, textWidth, true,
+                 list.authorTop - list.titleTop);
     drawMiniProgress(renderer,
-                     Rect{textX, row.y + row.height - 15, std::max(24, textWidth * 80 / 100), kProgressHeight},
+                     Rect{textX, row.y + list.progressTop, std::max(24, textWidth * 80 / 100), kProgressHeight},
                      progressOf(statsAt(index)));
-    if (slot + 1 < 5 && start + slot + 1 < static_cast<int>(books->size())) {
+    if (slot + 1 < list.rows && start + slot + 1 < static_cast<int>(books->size())) {
       drawDottedSeparator(renderer, row.x + kGap, row.y + row.height - 1, row.width - kGap * 2);
     }
   }
@@ -527,7 +596,7 @@ void InxRecentActivity::drawChrome() {
 }
 
 void InxRecentActivity::buildScreen(UiScreen& screen) {
-  syncPagedViewport(InxRecentGeometry::itemsPerPage(layout()));
+  syncPagedViewport(itemsPerPage());
   selected = nav.top;
   const Rect content = contentRect();
 
@@ -538,7 +607,11 @@ void InxRecentActivity::buildScreen(UiScreen& screen) {
     } else {
       switch (layout()) {
         case InxRecentLayout::Flow:
+#if FREEINK_DEVICE_XUESU_300
+          drawCompactFlow(screen, content);
+#else
           drawFlow(screen, content);
+#endif
           break;
         case InxRecentLayout::Grid:
           drawGrid(screen, content);
@@ -587,7 +660,7 @@ void InxRecentActivity::drawFooter() {
 void InxRecentActivity::render(RenderLock&& lock) {
   UiListActivity::render(std::move(lock));
   visibleStart.store(nav.top);
-  visibleCount.store(std::min(InxRecentGeometry::itemsPerPage(layout()), std::max(0, listCount() - nav.top)));
+  visibleCount.store(std::min(itemsPerPage(), std::max(0, listCount() - nav.top)));
   LOG_DBG("INX", "Recent view=%d rows=%d layout=%d", visibleStart.load(), visibleCount.load(),
           static_cast<int>(layout()));
   prepareNextMissingCover();

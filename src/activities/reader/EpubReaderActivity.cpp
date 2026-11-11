@@ -526,7 +526,7 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
   return static_cast<int>(bookProgressFor(position) * 100.0f + 0.5f);
 }
 
-void EpubReaderActivity::openReaderMenu() {
+void EpubReaderActivity::openReaderMenu(const bool fromReadingPage) {
   pendingManualTurn = 0;
   if (usesToolbarMenu()) {
     // Reached from a child activity's result handler (footnotes, bookmarks,
@@ -551,9 +551,10 @@ void EpubReaderActivity::openReaderMenu() {
   // Child screens (chapter list, text settings) release the section to free its
   // pagination buffers; chapterPosition() covers that with the cached position.
   const ChapterPosition position = chapterPosition();
-  const int currentPage = position.displayPage();
-  const int totalPages = position.totalPages;
   const int bookProgressPercent = bookPercentFor(position);
+  // While a child screen is forcing repagination, the old footnote list
+  // belongs to the previous layout and cannot be opened.
+  const size_t footnoteCount = FREEINK_DEVICE_XUESU_300 && !section ? 0 : currentPageFootnotes.size();
   startActivityForResultWith<EpubReaderMenuActivity>(
       [this](const ActivityResult& result) {
         READING_STATS.resumeSession();
@@ -567,7 +568,7 @@ void EpubReaderActivity::openReaderMenu() {
         }
       },
       epub->getTitle(), position.displayPage(), position.totalPages, bookProgressPercent, SETTINGS.orientation,
-      !currentPageFootnotes.empty(), !cachedBookmarks.empty(), CLIPPINGS.hasClippings(), selectedMenuAction);
+      footnoteCount, !cachedBookmarks.empty(), CLIPPINGS.hasClippings(), selectedMenuAction, fromReadingPage);
 }
 
 ReaderRenderSpec EpubReaderActivity::effectiveRenderSpec(const uint16_t width, const uint16_t height) const {
@@ -1241,7 +1242,7 @@ void EpubReaderActivity::loop() {
         if (usesToolbarMenu() && section)
           openOverlay(Overlay::Toolbar);
         else
-          openReaderMenu();
+          openReaderMenu(true);
         return;
       default:
         break;
@@ -1272,7 +1273,7 @@ void EpubReaderActivity::loop() {
       pendingManualTurn = 0;
       openOverlay(Overlay::Toolbar);
     } else {
-      openReaderMenu();
+      openReaderMenu(true);
     }
     return;  // no build step before the menu shows
   }
@@ -2096,7 +2097,7 @@ bool EpubReaderActivity::remoteShortcut(const bool readerMenu) {
   else if (usesToolbarMenu())
     openOverlay(Overlay::Toolbar);
   else
-    openReaderMenu();
+    openReaderMenu(true);
   return true;
 }
 
@@ -3983,13 +3984,20 @@ void EpubReaderActivity::handleOverlayInput() {
       closeOverlayToPage();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+#if FREEINK_DEVICE_XUESU_300
+    constexpr auto previousTool = MappedInputManager::Button::NavPrevious;
+    constexpr auto nextTool = MappedInputManager::Button::NavNext;
+#else
+    constexpr auto previousTool = MappedInputManager::Button::Left;
+    constexpr auto nextTool = MappedInputManager::Button::Right;
+#endif
+    if (mappedInput.wasReleased(previousTool)) {
       focusedTool = (focusedTool + 2) % 3;
       panelCursorShown = true;
       fastRedraw();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    if (mappedInput.wasReleased(nextTool)) {
       focusedTool = (focusedTool + 1) % 3;
       panelCursorShown = true;
       fastRedraw();
@@ -3999,11 +4007,13 @@ void EpubReaderActivity::handleOverlayInput() {
       openOverlay(toolOverlay(focusedTool));
       return;
     }
+#if !FREEINK_DEVICE_XUESU_300
     const bool prev = mappedInput.wasReleased(MappedInputManager::Button::Up);
     const bool next = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (prev || next) {
       gotoChapter(chapterIndex + (next ? 1 : -1));
     }
+#endif
     return;
   }
 

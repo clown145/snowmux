@@ -51,6 +51,10 @@ class EpubReaderBookmarksActivity final : public UiListActivity {
 
   void startRename();
   void showBookmarkActions();
+#if FREEINK_DEVICE_XUESU_300
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override { showBookmarkActions(); }
+#endif
 
   // Opens the Cancel/Delete confirmation for the selected bookmark.
   void showDeleteConfirmation();

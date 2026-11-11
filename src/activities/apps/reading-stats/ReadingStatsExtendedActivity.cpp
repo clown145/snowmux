@@ -202,13 +202,31 @@ int getScrollableContentBottom(const GfxRenderer&, const ThemeMetrics&) {
          CHART_HEIGHT;
 }
 
-int getMaxScrollOffset(const GfxRenderer& renderer, const ThemeMetrics& metrics) {
+struct ExtendedStatsLayout {
+  int contentTop;
+  int recentTop;
+  int chartTop;
+  int viewportTop;
+  int viewportBottom;
+  int maxScrollOffset;
+  bool scrollSummary;
+};
+
+ExtendedStatsLayout extendedStatsLayout(const GfxRenderer& renderer, const ThemeMetrics& metrics) {
   const int summaryTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int recentTop = summaryTop + SUMMARY_CARD_HEIGHT * 3 + SUMMARY_GAP * 2 + metrics.verticalSpacing;
-  const int chartViewportTop = recentTop + RECENT_CARD_HEIGHT + metrics.verticalSpacing;
-  const int visibleHeight =
-      renderer.getScreenHeight() - metrics.buttonHintsHeight - CHART_BOTTOM_GAP - chartViewportTop;
-  return std::max(0, getScrollableContentBottom(renderer, metrics) - visibleHeight);
+  const int chartTop = recentTop + RECENT_CARD_HEIGHT + metrics.verticalSpacing;
+  const int bottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - CHART_BOTTOM_GAP;
+  // Keep the summary fixed only when a complete chart can fit below it.
+  // Small screens scroll the summary and both charts through one viewport.
+  const bool scrollSummary = bottom - chartTop < CHART_HEADER_HEIGHT + CHART_TOP_GAP + CHART_HEIGHT;
+  const int viewportTop = scrollSummary ? summaryTop : chartTop;
+  const int contentBottom = chartTop + getScrollableContentBottom(renderer, metrics);
+  return {summaryTop, recentTop, chartTop, viewportTop, bottom, std::max(0, contentBottom - bottom), scrollSummary};
+}
+
+int getMaxScrollOffset(const GfxRenderer& renderer, const ThemeMetrics& metrics) {
+  return extendedStatsLayout(renderer, metrics).maxScrollOffset;
 }
 
 void drawReadingChart(const GfxRenderer& renderer, const Rect& rect, const std::vector<ChartBar>& bars,
@@ -329,13 +347,13 @@ void ReadingStatsExtendedActivity::render(RenderLock&&) {
   const int pageWidth = renderer.getScreenWidth();
   const int sidePadding = metrics.contentSidePadding;
   const int cardWidth = (pageWidth - sidePadding * 2 - SUMMARY_GAP) / 2;
-  const int summaryTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int recentTop = summaryTop + SUMMARY_CARD_HEIGHT * 3 + SUMMARY_GAP * 2 + metrics.verticalSpacing;
-  const int chartViewportTop = recentTop + RECENT_CARD_HEIGHT + metrics.verticalSpacing;
-  const int chartViewportBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - CHART_BOTTOM_GAP;
-  const int maxScrollOffset = getMaxScrollOffset(renderer, metrics);
+  const auto layout = extendedStatsLayout(renderer, metrics);
+  const int maxScrollOffset = layout.maxScrollOffset;
   scrollOffset = std::clamp(scrollOffset, 0, maxScrollOffset);
-  const int dailyChartHeaderTop = chartViewportTop - scrollOffset;
+  const int summaryOffset = layout.scrollSummary ? scrollOffset : 0;
+  const int summaryTop = layout.contentTop - summaryOffset;
+  const int recentTop = layout.recentTop - summaryOffset;
+  const int dailyChartHeaderTop = layout.chartTop - scrollOffset;
   const int dailyChartTop = dailyChartHeaderTop + CHART_HEADER_HEIGHT + CHART_TOP_GAP;
   const int annualChartHeaderTop = dailyChartTop + CHART_HEIGHT + CHART_SECTION_GAP;
   const int annualChartTop = annualChartHeaderTop + CHART_HEADER_HEIGHT + CHART_TOP_GAP;
@@ -352,7 +370,8 @@ void ReadingStatsExtendedActivity::render(RenderLock&&) {
     // Clip the scrolling charts to their viewport so headers/bars/baselines that
     // scroll past the screen edges are dropped silently instead of spamming
     // "Outside range". Masks below stay outside the scope (clip already cleared).
-    const GfxRenderer::ClipScope clip(renderer, 0, chartViewportTop, pageWidth, chartViewportBottom - chartViewportTop);
+    const GfxRenderer::ClipScope clip(renderer, 0, layout.viewportTop, pageWidth,
+                                      layout.viewportBottom - layout.viewportTop);
 
     GUI.drawSubHeader(renderer, Rect{0, dailyChartHeaderTop, pageWidth, CHART_HEADER_HEIGHT}, tr(STR_DAILY_READING),
                       nullptr);
@@ -366,35 +385,46 @@ void ReadingStatsExtendedActivity::render(RenderLock&&) {
                      annualReadingBars, false);
   }
 
-  renderer.fillRect(0, 0, pageWidth, chartViewportTop, false);
-  if (chartViewportBottom < renderer.getScreenHeight()) {
-    renderer.fillRect(0, chartViewportBottom, pageWidth, renderer.getScreenHeight() - chartViewportBottom, false);
+  // Theme subheaders may set their own clip. Erase any chart text that
+  // escaped into the pinned summary before repainting its cards.
+  if (!layout.scrollSummary) {
+    renderer.fillRect(0, layout.contentTop, pageWidth, layout.viewportTop - layout.contentTop, false);
   }
 
+  {
+    const GfxRenderer::ClipScope clip(renderer, 0, layout.contentTop, pageWidth,
+                                      layout.viewportBottom - layout.contentTop);
+    drawMetricCard(renderer, Rect{sidePadding, summaryTop, cardWidth, SUMMARY_CARD_HEIGHT}, tr(STR_STREAK),
+                   std::to_string(READING_STATS.getCurrentStreakDays()));
+    drawMetricCard(renderer, Rect{sidePadding + cardWidth + SUMMARY_GAP, summaryTop, cardWidth, SUMMARY_CARD_HEIGHT},
+                   tr(STR_MAX_STREAK), std::to_string(READING_STATS.getMaxStreakDays()));
+    drawMetricCard(renderer,
+                   Rect{sidePadding, summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_GAP, cardWidth, SUMMARY_CARD_HEIGHT},
+                   tr(STR_DAILY_GOAL), dailyGoalValue, todayReadingMs >= getDailyReadingGoalMs());
+    drawMetricCard(renderer,
+                   Rect{sidePadding + cardWidth + SUMMARY_GAP, summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_GAP,
+                        cardWidth, SUMMARY_CARD_HEIGHT},
+                   tr(STR_READING_TIME), ReadingStatsAnalytics::formatDurationHm(READING_STATS.getTotalReadingMs()));
+    drawMetricCard(
+        renderer,
+        Rect{sidePadding, summaryTop + (SUMMARY_CARD_HEIGHT + SUMMARY_GAP) * 2, cardWidth, SUMMARY_CARD_HEIGHT},
+        tr(STR_BOOKS_FINISHED), std::to_string(READING_STATS.getBooksFinishedCount()));
+    drawMetricCard(renderer,
+                   Rect{sidePadding + cardWidth + SUMMARY_GAP, summaryTop + (SUMMARY_CARD_HEIGHT + SUMMARY_GAP) * 2,
+                        cardWidth, SUMMARY_CARD_HEIGHT},
+                   tr(STR_BOOKS_STARTED), std::to_string(READING_STATS.getBooksStartedCount()));
+
+    drawRecentWindowCard(renderer, Rect{sidePadding, recentTop, cardWidth, RECENT_CARD_HEIGHT}, "7D", last7DaysValue);
+    drawRecentWindowCard(renderer,
+                         Rect{sidePadding + cardWidth + SUMMARY_GAP, recentTop, cardWidth, RECENT_CARD_HEIGHT}, "30D",
+                         last30DaysValue);
+  }
+
+  renderer.fillRect(0, 0, pageWidth, layout.contentTop, false);
+  if (layout.viewportBottom < renderer.getScreenHeight()) {
+    renderer.fillRect(0, layout.viewportBottom, pageWidth, renderer.getScreenHeight() - layout.viewportBottom, false);
+  }
   HeaderDateUtils::drawHeaderWithDate(renderer, tr(STR_READING_STATS), tr(STR_MORE_DETAILS));
-
-  drawMetricCard(renderer, Rect{sidePadding, summaryTop, cardWidth, SUMMARY_CARD_HEIGHT}, tr(STR_STREAK),
-                 std::to_string(READING_STATS.getCurrentStreakDays()));
-  drawMetricCard(renderer, Rect{sidePadding + cardWidth + SUMMARY_GAP, summaryTop, cardWidth, SUMMARY_CARD_HEIGHT},
-                 tr(STR_MAX_STREAK), std::to_string(READING_STATS.getMaxStreakDays()));
-  drawMetricCard(renderer,
-                 Rect{sidePadding, summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_GAP, cardWidth, SUMMARY_CARD_HEIGHT},
-                 tr(STR_DAILY_GOAL), dailyGoalValue, todayReadingMs >= getDailyReadingGoalMs());
-  drawMetricCard(renderer,
-                 Rect{sidePadding + cardWidth + SUMMARY_GAP, summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_GAP, cardWidth,
-                      SUMMARY_CARD_HEIGHT},
-                 tr(STR_READING_TIME), ReadingStatsAnalytics::formatDurationHm(READING_STATS.getTotalReadingMs()));
-  drawMetricCard(
-      renderer, Rect{sidePadding, summaryTop + (SUMMARY_CARD_HEIGHT + SUMMARY_GAP) * 2, cardWidth, SUMMARY_CARD_HEIGHT},
-      tr(STR_BOOKS_FINISHED), std::to_string(READING_STATS.getBooksFinishedCount()));
-  drawMetricCard(renderer,
-                 Rect{sidePadding + cardWidth + SUMMARY_GAP, summaryTop + (SUMMARY_CARD_HEIGHT + SUMMARY_GAP) * 2,
-                      cardWidth, SUMMARY_CARD_HEIGHT},
-                 tr(STR_BOOKS_STARTED), std::to_string(READING_STATS.getBooksStartedCount()));
-
-  drawRecentWindowCard(renderer, Rect{sidePadding, recentTop, cardWidth, RECENT_CARD_HEIGHT}, "7D", last7DaysValue);
-  drawRecentWindowCard(renderer, Rect{sidePadding + cardWidth + SUMMARY_GAP, recentTop, cardWidth, RECENT_CARD_HEIGHT},
-                       "30D", last30DaysValue);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", scrollOffset > 0 ? tr(STR_DIR_UP) : "",
                                             scrollOffset < maxScrollOffset ? tr(STR_DIR_DOWN) : "");

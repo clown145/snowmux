@@ -51,7 +51,9 @@ class InxRecentActivity final : public RecentBooksActivity {
   int thumbnailHeight = 0;
 
   InxRecentLayout layout() const;
+  int itemsPerPage() const;
   Rect contentRect() const;
+  Rect flowCarouselRect(const Rect& content) const;
   const ReadingBookStats* statsAt(int index) const;
   void setThumbnailHeight(int displayHeight);
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
@@ -67,6 +69,9 @@ class InxRecentActivity final : public RecentBooksActivity {
   int initialConfirmIndex() const override;
 
   void drawFlow(UiScreen& screen, const Rect& content);
+#if FREEINK_DEVICE_XUESU_300
+  void drawCompactFlow(UiScreen& screen, const Rect& content);
+#endif
   void drawGrid(UiScreen& screen, const Rect& content);
   void drawList(UiScreen& screen, const Rect& content);
   void drawIcons(UiScreen& screen, const Rect& content);

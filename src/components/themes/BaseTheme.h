@@ -367,7 +367,7 @@ class BaseTheme {
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
                           bool backButton = true) const;
   static void drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
-                                  bool backButton, bool upstreamStyle);
+                                  bool backButton, bool upstreamStyle, bool compact = false);
   // Fill the battery/clock status chrome (settings + theme metrics) into
   // header props, so FUI-native screens drawing their own interactive header
   // carry the same band as drawHeader. Status text is styled with the
@@ -377,7 +377,8 @@ class BaseTheme {
   static void applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::HeaderProps& props,
                                 bool upstreamStyle = false);
   // Status-only overlay: reuse the shared header chrome without changing INX's title or navigation.
-  static void drawHeaderStatus(const GfxRenderer& renderer, Rect rect, const char* date = nullptr);
+  static void drawHeaderStatus(const GfxRenderer& renderer, Rect rect, const char* date = nullptr,
+                               bool forceClock = false);
   static int headerStatusHeight();
   // The header band every screen draws in: the caller's full-width rect inset
   // by the board's side insets, its top edge lowered by the board's

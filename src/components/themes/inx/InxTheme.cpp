@@ -39,6 +39,38 @@ constexpr int kHintBarInset = (kHintWidth - kHintBarWidth) / 2;
 constexpr int kHintBarHeight = 5;
 constexpr int kHintGap = 4;
 
+#if FREEINK_DEVICE_XUESU_300
+void drawFittedLabel(const GfxRenderer& renderer, const Rect bounds, int fontId, const char* label, const bool black,
+                     const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+  if (!label || !*label || bounds.width <= 0 || bounds.height <= 0) return;
+  const GfxRenderer::ClipScope clip(renderer, bounds.x, bounds.y, bounds.width, bounds.height);
+  int lineHeight = renderer.getLineHeight(fontId);
+  if (renderer.getTextWidth(fontId, label, style) <= bounds.width) {
+    renderer.drawText(fontId, bounds.x, bounds.y + std::max(0, (bounds.height - lineHeight) / 2), label, black, style);
+    return;
+  }
+
+  if (lineHeight * 2 > bounds.height - 6) {
+    fontId = SMALL_FONT_ID;
+    lineHeight = renderer.getLineHeight(fontId);
+  }
+  namespace fui = freeink::ui;
+  fui::GfxRendererTarget target(renderer);
+  target.setFont(fui::GfxRendererTarget::FONT_BODY, fontId);
+  fui::TextStyle textStyle;
+  textStyle.font = fui::GfxRendererTarget::FONT_BODY;
+  textStyle.bold = style == EpdFontFamily::BOLD;
+  textStyle.maxLines = lineHeight > 0 && lineHeight * 2 <= bounds.height - 6 ? 2 : 1;
+  const auto width = static_cast<int16_t>(bounds.width);
+  const int height = fui::measureWrappedText(target, label, textStyle, width).height;
+  const int y = bounds.y + std::max(0, (bounds.height - height) / 2);
+  const fui::Rect textBox{static_cast<int16_t>(bounds.x), static_cast<int16_t>(y), width, static_cast<int16_t>(height)};
+  fui::layoutText(target, textBox, label, textStyle, [&](const char* line, const fui::Rect row) {
+    renderer.drawText(fontId, row.x, row.y, line, black, style);
+  });
+}
+#endif
+
 void drawHintText(const GfxRenderer& renderer, const char* label, const int x, const int contentY,
                   const int contentBottom) {
   const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label);
@@ -259,6 +291,7 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
   const int pageEnd = std::min(itemCount, pageStart + pageItems);
   const bool hasScrollBar = itemCount > pageItems;
   const int contentRight = rect.x + rect.width - (hasScrollBar ? 10 : 0);
+  const int textPadding = FREEINK_DEVICE_XUESU_300 ? 12 : kRowPadding;
   const int iconSize = rowSubtitle != nullptr ? kMenuIconSize : kListIconSize;
   const bool selectionVisible = showSelection;
 
@@ -268,7 +301,7 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
     const bool selected = selectionVisible && index == selectedIndex;
     if (selected) renderer.fillRect(rect.x, rowY, rect.width, rowHeight, true);
 
-    int textX = rect.x + kRowPadding;
+    int textX = rect.x + textPadding;
     if (rowIcon) {
       if (UiHighDpiProfile::enabled) {
         const auto bitmap = listIconFor(rowIcon(index), UiHighDpiProfile::controlIconSize);
@@ -290,20 +323,35 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
       }
     }
 
-    std::string value;
-    int valueWidth = 0;
-    if (rowValue) {
-      value = renderer.truncatedText(UI_10_FONT_ID, rowValue(index).c_str(), kMaxValueWidth);
-      valueWidth = value.empty() ? 0 : renderer.getTextWidth(UI_10_FONT_ID, value.c_str()) + kIconGap;
-    }
     const bool heading = rowHeading && rowHeading(index);
     const int titleFont = heading ? UI_12_FONT_ID : UI_10_FONT_ID;
     const auto titleStyle = heading ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-    const int textWidth = std::max(1, contentRight - kRowPadding - textX - valueWidth);
-    const std::string title = renderer.truncatedText(titleFont, rowTitle(index).c_str(), textWidth, titleStyle);
-    const int titleY = rowY + (rowSubtitle ? (UiHighDpiProfile::enabled ? 20 : 12)
-                                           : (rowHeight - renderer.getLineHeight(titleFont)) / 2);
-    renderer.drawText(titleFont, textX, titleY, title.c_str(), !selected, titleStyle);
+    const std::string label = rowTitle(index);
+    const int available = std::max(1, contentRight - textPadding - textX);
+    std::string value;
+    int valueWidth = 0;
+    if (rowValue) {
+      int valueLimit = kMaxValueWidth;
+      if (FREEINK_DEVICE_XUESU_300) {
+        const int labelWidth = renderer.getTextWidth(titleFont, label.c_str(), titleStyle);
+        valueLimit = std::max(1, std::max(available / 2, available - kIconGap - labelWidth));
+      }
+      value = renderer.truncatedText(UI_10_FONT_ID, rowValue(index).c_str(), valueLimit);
+      valueWidth = value.empty() ? 0 : renderer.getTextWidth(UI_10_FONT_ID, value.c_str()) + kIconGap;
+    }
+    const int textWidth = std::max(1, available - valueWidth);
+#if FREEINK_DEVICE_XUESU_300
+    if (!rowSubtitle) {
+      drawFittedLabel(renderer, Rect{textX, rowY, textWidth, rowHeight - 1}, titleFont, label.c_str(), !selected,
+                      titleStyle);
+    } else
+#endif
+    {
+      const std::string title = renderer.truncatedText(titleFont, label.c_str(), textWidth, titleStyle);
+      const int titleY = rowY + (rowSubtitle ? (UiHighDpiProfile::enabled ? 20 : 12)
+                                             : (rowHeight - renderer.getLineHeight(titleFont)) / 2);
+      renderer.drawText(titleFont, textX, titleY, title.c_str(), !selected, titleStyle);
+    }
 
     if (rowSubtitle) {
       const std::string subtitle = renderer.truncatedText(SMALL_FONT_ID, rowSubtitle(index).c_str(), textWidth);
@@ -312,7 +360,7 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
                         subtitle.c_str(), !selected);
     }
     if (!value.empty()) {
-      const int valueX = contentRight - kRowPadding - renderer.getTextWidth(UI_10_FONT_ID, value.c_str());
+      const int valueX = contentRight - textPadding - renderer.getTextWidth(UI_10_FONT_ID, value.c_str());
       const int valueY = rowY + (rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
       renderer.drawText(UI_10_FONT_ID, valueX, valueY, value.c_str(), !selected);
     }
@@ -353,10 +401,15 @@ void InxTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const int 
       }
     }
 
-    const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(index).c_str(),
-                                                     std::max(1, rect.x + rect.width - kRowPadding - textX));
+    const std::string label = buttonLabel(index);
+    const int textWidth = std::max(1, rect.x + rect.width - kRowPadding - textX);
+#if FREEINK_DEVICE_XUESU_300
+    drawFittedLabel(renderer, Rect{textX, rowY, textWidth, kRowHeight - 1}, UI_12_FONT_ID, label.c_str(), !selected);
+#else
+    const std::string fitted = renderer.truncatedText(UI_12_FONT_ID, label.c_str(), textWidth);
     const int textY = rowY + (kRowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
-    renderer.drawText(UI_12_FONT_ID, textX, textY, label.c_str(), !selected);
+    renderer.drawText(UI_12_FONT_ID, textX, textY, fitted.c_str(), !selected);
+#endif
     drawDottedSeparator(renderer, rect.x, rowY + kRowHeight - 1, rect.width);
   }
   drawSideScrollBar(renderer, rect, buttonCount, pageStart, pageItems);
@@ -394,9 +447,14 @@ void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
   const int panelY = layout.panel.y;
 
   renderer.fillRect(panelX, panelY, panelWidth, panelHeight, false);
+#if FREEINK_DEVICE_XUESU_300
+  drawFittedLabel(renderer, Rect{panelX + 12, panelY, panelWidth - 24, InxOptionGeometry::headerHeight}, UI_10_FONT_ID,
+                  title, true, EpdFontFamily::BOLD);
+#else
   const std::string shownTitle = renderer.truncatedText(UI_10_FONT_ID, title, panelWidth - 32, EpdFontFamily::BOLD);
   const int titleY = panelY + (InxOptionGeometry::headerHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
   renderer.drawText(UI_10_FONT_ID, panelX + 16, titleY, shownTitle.c_str(), true, EpdFontFamily::BOLD);
+#endif
   renderer.drawLine(panelX, panelY + InxOptionGeometry::headerHeight, panelX + panelWidth - 1,
                     panelY + InxOptionGeometry::headerHeight, true);
 
@@ -408,10 +466,16 @@ void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
       const Rect row = layout.optionRect(slot);
       renderer.fillRect(row.x, row.y, row.width, row.height, true);
     }
+    const auto style = isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+#if FREEINK_DEVICE_XUESU_300
+    const int textWidth = panelWidth - (optionCount > visibleRows ? 30 : 24);
+    drawFittedLabel(renderer, Rect{panelX + 12, rowY + 3, textWidth, InxOptionGeometry::rowHeight - 6}, UI_10_FONT_ID,
+                    options[optionIndex].c_str(), !isSelected, style);
+#else
     const std::string option = renderer.truncatedText(UI_10_FONT_ID, options[optionIndex].c_str(), panelWidth - 44);
     const int textY = rowY + (InxOptionGeometry::rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
-    renderer.drawText(UI_10_FONT_ID, panelX + 18, textY, option.c_str(), !isSelected,
-                      isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.drawText(UI_10_FONT_ID, panelX + 18, textY, option.c_str(), !isSelected, style);
+#endif
     if (slot + 1 < visibleRows)
       drawDottedSeparator(renderer, panelX + 2, rowY + InxOptionGeometry::rowHeight - 1, panelWidth - 4);
   }
@@ -457,6 +521,9 @@ void InxTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, cons
 
 void InxTheme::drawMainTabStatusBar(const GfxRenderer& renderer, const Rect rect) const {
   if (rect.width <= 0 || rect.height <= 0) return;
+#if FREEINK_DEVICE_XUESU_300
+  drawHeaderStatus(renderer, rect, nullptr, SETTINGS.clockShowInHeader != 0);
+#else
   if (SETTINGS.inxTabPosition == CrossPointSettings::INX_TAB_BOTTOM) {
     drawHeaderStatus(renderer, rect);
     return;
@@ -475,4 +542,5 @@ void InxTheme::drawMainTabStatusBar(const GfxRenderer& renderer, const Rect rect
   drawBatteryRight(renderer, Rect{right - metrics.batteryWidth, textY, metrics.batteryWidth, metrics.batteryHeight},
                    SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS,
                    numericFontId);
+#endif
 }

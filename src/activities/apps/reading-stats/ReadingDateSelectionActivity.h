@@ -15,6 +15,9 @@ class ReadingDateSelectionActivity final : public Activity {
   uint32_t getSelectedDayOrdinal() const;
   std::string getSelectedDateLabel() const;
   void finishWithDate();
+#if FREEINK_DEVICE_XUESU_300
+  void openSelectedField();
+#endif
 
  public:
   explicit ReadingDateSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

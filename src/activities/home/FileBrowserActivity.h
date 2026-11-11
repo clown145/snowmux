@@ -100,4 +100,9 @@ class FileBrowserActivity final : public UiListActivity {
   }
   bool mainTabBackReturnsToTabs() const override { return browserState == BrowserState::Browsing && basepath == "/"; }
   void selectMainTabContentEdge(MainTabContentEdge edge) override;
+#if FREEINK_DEVICE_XUESU_300
+  bool allowsXuesuQuickPanel() const override { return !editPopup.isActive() && usesMainTabBar(); }
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
 };

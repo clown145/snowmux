@@ -167,6 +167,7 @@ void StandbyActivity::switchFace(int8_t delta) {
   const uint8_t newIdx = availableFaceIndexFromRank(sw, sh, newRank);
   if (newIdx >= kFaceCount || newIdx == faceIndex_) return;
 
+  RenderLock lock(*this);
   if (currentFace_) currentFace_->onExit();
   currentFace_.reset();
   faceIndex_ = newIdx;
@@ -177,6 +178,7 @@ void StandbyActivity::switchFace(int8_t delta) {
     return;
   }
   currentFace_->onEnter();
+  LOG_DBG("STANDBY", "Selected face %u", static_cast<unsigned>(faceIndex_));
   requestUpdate();
 }
 
@@ -475,10 +477,19 @@ void StandbyActivity::loop() {
   const bool downPressed = mappedInput.wasReleased(MappedInputManager::Button::Down);
   if (upPressed || downPressed) {
     lastInputMs_ = millis();
+#if FREEINK_DEVICE_XUESU_300
+    mode_ = DisplayMode::Normal;
+    if (mappedInput.getHeldTime() < 650) {
+      switchFace(upPressed ? -1 : 1);
+      requestUpdate();
+      return;
+    }
+#endif
     if (mode_ == DisplayMode::Immersive) {
       mode_ = DisplayMode::Normal;
       requestUpdate();
     } else if (currentFace_) {
+      RenderLock lock(*this);
       if (upPressed) {
         currentFace_->onPagePrev();
       } else {
@@ -574,7 +585,9 @@ void StandbyActivity::render(RenderLock&&) {
     // image. Only fires in Immersive — Normal-mode navigation needs the
     // ~300-500ms FAST_REFRESH and can't afford the ~2s gray LUT. inverseMode_
     // short-circuits because invertScreen is BW-only and mixes poorly with gray.
-    if (currentFace_->wantsGrayscale() && !inverseMode_) applyGrayscalePass(faceViewport);
+    if (renderer.getGrayscaleLevels() >= 4 && currentFace_->wantsGrayscale() && !inverseMode_) {
+      applyGrayscalePass(faceViewport);
+    }
     return;
   }
 

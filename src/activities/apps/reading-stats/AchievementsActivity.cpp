@@ -90,18 +90,6 @@ void AchievementsActivity::rebuildVisibleIndexes() {
     }
   }
 
-  if (visibleIndexes.empty() && !achievements.empty()) {
-    selectedTab = showCompleted ? FilterTab::Pending : FilterTab::Completed;
-    const bool fallbackCompleted = selectedTab == FilterTab::Completed;
-    for (int i = 0; i < static_cast<int>(achievements.size()); ++i) {
-      if (achievements[i].state.unlocked == fallbackCompleted) {
-        // Store source indices for navigation, rather than copying achievement views.
-        // cppcheck-suppress useStlAlgorithm
-        visibleIndexes.push_back(i);
-      }
-    }
-  }
-
   if (selectedIndex >= static_cast<int>(visibleIndexes.size())) {
     selectedIndex = std::max(0, static_cast<int>(visibleIndexes.size()) - 1);
   }
@@ -145,6 +133,7 @@ void AchievementsActivity::loop() {
   int tab = -1;
   if (mappedInput.colTouch(tab, 0, pageWidth / 2, 2, tabTop, tabTop + metrics.tabBarHeight, pageWidth / 2) ==
       MappedInputManager::RowTouch::Tap) {
+    RenderLock lock(*this);
     selectedTab = tab == 0 ? FilterTab::Pending : FilterTab::Completed;
     selectedIndex = 0;
     rebuildVisibleIndexes();
@@ -181,6 +170,7 @@ void AchievementsActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    RenderLock lock(*this);
     selectedTab = (selectedTab == FilterTab::Pending) ? FilterTab::Completed : FilterTab::Pending;
     selectedIndex = 0;
     rebuildVisibleIndexes();
@@ -217,7 +207,8 @@ void AchievementsActivity::render(RenderLock&&) {
   const int sidePadding = metrics.contentSidePadding;
   const int rowWidth = pageWidth - sidePadding * 2;
 
-  HeaderDateUtils::drawHeaderWithDate(renderer, tr(STR_ACHIEVEMENTS));
+  HeaderDateUtils::drawHeaderWithDate(renderer, tr(STR_ACHIEVEMENTS),
+                                      FREEINK_DEVICE_XUESU_300 ? tr(STR_ACHIEVEMENTS_FILTER_HINT) : nullptr);
 
   int pendingCount = 0;
   int completedCount = 0;
@@ -268,15 +259,19 @@ void AchievementsActivity::render(RenderLock&&) {
 
       const std::string title = ACHIEVEMENTS.getTitle(entry.definition->id);
       const std::string description = ACHIEVEMENTS.getDescription(entry.definition->id);
-      const std::string progress = getProgressLabel(entry);
+      std::string progress = getProgressLabel(entry);
+      if (FREEINK_DEVICE_XUESU_300) {
+        progress = renderer.truncatedText(UI_10_FONT_ID, progress.c_str(), rowRect.width / 2);
+      }
       const int progressWidth = renderer.getTextWidth(UI_10_FONT_ID, progress.c_str(), EpdFontFamily::REGULAR);
       const int textX = iconX + ICON_BOX_SIZE + 12;
       const int textWidth = rowRect.width - (textX - rowRect.x) - progressWidth - 18;
 
       const std::string truncatedTitle =
           renderer.truncatedText(UI_10_FONT_ID, title.c_str(), textWidth, EpdFontFamily::BOLD);
-      const std::string truncatedDescription =
-          renderer.truncatedText(SMALL_FONT_ID, description.c_str(), textWidth, EpdFontFamily::REGULAR);
+      const std::string truncatedDescription = renderer.truncatedText(
+          SMALL_FONT_ID, description.c_str(),
+          FREEINK_DEVICE_XUESU_300 ? rowRect.x + rowRect.width - textX - 10 : textWidth, EpdFontFamily::REGULAR);
 
       const int titleTop = rowRect.y + 8;
       renderer.drawText(UI_10_FONT_ID, textX, titleTop, truncatedTitle.c_str(), foregroundBlack, EpdFontFamily::BOLD);
@@ -285,8 +280,9 @@ void AchievementsActivity::render(RenderLock&&) {
       const int descriptionTop = titleTop + renderer.getLineHeight(UI_10_FONT_ID);
       renderer.drawText(SMALL_FONT_ID, textX, descriptionTop, truncatedDescription.c_str(), foregroundBlack,
                         EpdFontFamily::REGULAR);
-      renderer.drawText(UI_10_FONT_ID, rowRect.x + rowRect.width - progressWidth - 10, rowRect.y + 18, progress.c_str(),
-                        foregroundBlack, EpdFontFamily::REGULAR);
+      renderer.drawText(UI_10_FONT_ID, rowRect.x + rowRect.width - progressWidth - 10,
+                        FREEINK_DEVICE_XUESU_300 ? titleTop : rowRect.y + 18, progress.c_str(), foregroundBlack,
+                        EpdFontFamily::REGULAR);
 
       currentY += ROW_STEP;
     }

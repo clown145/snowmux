@@ -49,12 +49,6 @@ bool isStrictUtf8(const uint8_t* data, const size_t length, const bool finalChun
 #ifdef ENABLE_CHINESE_VERSION
 #include "GbkToUnicodeTable.inc"
 
-uint16_t gbkToUnicode(const uint8_t lead, const uint8_t trail) {
-  if (!isGbkLead(lead) || !isGbkTrail(trail)) return 0;
-  const size_t trailIndex = trail < 0x7F ? trail - 0x40 : trail - 0x41;
-  return kGbkToUnicode[(static_cast<size_t>(lead) - 0x81) * 190 + trailIndex];
-}
-
 bool isStrictGbk(const uint8_t* data, const size_t length, const bool finalChunk, bool& hasCompleteCharacter) {
   size_t pos = 0;
   while (pos < length) {
@@ -64,7 +58,7 @@ bool isStrictGbk(const uint8_t* data, const size_t length, const bool finalChunk
     }
     if (!isGbkLead(data[pos])) return false;
     if (pos + 1 >= length) return !finalChunk;
-    if (gbkToUnicode(data[pos], data[pos + 1]) == 0) return false;
+    if (decodeGbkPair(data[pos], data[pos + 1]) == 0) return false;
     hasCompleteCharacter = true;
     pos += 2;
   }
@@ -95,6 +89,18 @@ size_t appendUtf8(const uint32_t codepoint, uint8_t* output) {
 #endif
 
 }  // namespace
+
+uint16_t decodeGbkPair(const uint8_t lead, const uint8_t trail) {
+#ifdef ENABLE_CHINESE_VERSION
+  if (!isGbkLead(lead) || !isGbkTrail(trail)) return 0;
+  const size_t trailIndex = trail < 0x7F ? trail - 0x40 : trail - 0x41;
+  return kGbkToUnicode[(static_cast<size_t>(lead) - 0x81) * 190 + trailIndex];
+#else
+  (void)lead;
+  (void)trail;
+  return 0;
+#endif
+}
 
 bool isSerializedValueValid(const uint8_t value) { return value <= static_cast<uint8_t>(Encoding::Gbk); }
 
@@ -150,7 +156,7 @@ TranscodeResult transcodeGbkInPlace(uint8_t* buffer, size_t rawLength, const siz
       continue;
     }
     if (pos + 1 < rawLength) {
-      const uint16_t mapped = gbkToUnicode(buffer[pos], buffer[pos + 1]);
+      const uint16_t mapped = decodeGbkPair(buffer[pos], buffer[pos + 1]);
       if (mapped != 0) {
         utf8Length += utf8EncodedLength(mapped);
         pos += 2;
@@ -178,7 +184,7 @@ TranscodeResult transcodeGbkInPlace(uint8_t* buffer, size_t rawLength, const siz
     uint32_t codepoint = '?';
     size_t consumed = 1;
     if (sourcePos + 1 < sourceLength) {
-      const uint16_t mapped = gbkToUnicode(buffer[sourcePos], buffer[sourcePos + 1]);
+      const uint16_t mapped = decodeGbkPair(buffer[sourcePos], buffer[sourcePos + 1]);
       if (mapped != 0) {
         codepoint = mapped;
         consumed = 2;

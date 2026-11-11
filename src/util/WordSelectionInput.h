@@ -20,20 +20,31 @@ class WordSelectionInput {
 
   static uint8_t buttonEdges(const MappedInputManager& input) {
     using B = MappedInputManager::Button;
-    return (input.wasPressed(B::ScreenLeft) ? INPUT_LEFT : 0) | (input.wasPressed(B::ScreenRight) ? INPUT_RIGHT : 0) |
-           (input.wasPressed(B::ScreenUp) ? INPUT_UP : 0) | (input.wasPressed(B::ScreenDown) ? INPUT_DOWN : 0) |
-           (input.wasReleased(B::Confirm) ? INPUT_CONFIRM : 0) | (input.wasReleased(B::Back) ? INPUT_BACK : 0) |
-           (input.wasPressed(B::NavPrevious) ? INPUT_PREVIOUS : 0) | (input.wasPressed(B::NavNext) ? INPUT_NEXT : 0);
+    uint8_t buttons = (input.wasReleased(B::Confirm) ? INPUT_CONFIRM : 0) |
+                      (input.wasReleased(B::Back) ? INPUT_BACK : 0) |
+                      (input.wasPressed(B::NavPrevious) ? INPUT_PREVIOUS : 0) |
+                      (input.wasPressed(B::NavNext) ? INPUT_NEXT : 0);
+#if !FREEINK_DEVICE_XUESU_300
+    buttons |= (input.wasPressed(B::ScreenLeft) ? INPUT_LEFT : 0) | (input.wasPressed(B::ScreenRight) ? INPUT_RIGHT : 0) |
+               (input.wasPressed(B::ScreenUp) ? INPUT_UP : 0) | (input.wasPressed(B::ScreenDown) ? INPUT_DOWN : 0);
+#endif
+    return buttons;
   }
 
   uint8_t pollButtons(const MappedInputManager& input, const uint32_t now) {
     uint8_t buttons = buttonEdges(input);
-    const uint8_t held = (input.isPressed(MappedInputManager::Button::ScreenLeft) ? INPUT_LEFT : 0) |
-                         (input.isPressed(MappedInputManager::Button::ScreenRight) ? INPUT_RIGHT : 0);
-    if (held != repeatingButton || (buttons & (INPUT_LEFT | INPUT_RIGHT))) {
+    using B = MappedInputManager::Button;
+#if FREEINK_DEVICE_XUESU_300
+    constexpr auto previous = INPUT_PREVIOUS, next = INPUT_NEXT;
+    const uint8_t held = (input.isPressed(B::NavPrevious) ? previous : 0) | (input.isPressed(B::NavNext) ? next : 0);
+#else
+    constexpr auto previous = INPUT_LEFT, next = INPUT_RIGHT;
+    const uint8_t held = (input.isPressed(B::ScreenLeft) ? previous : 0) | (input.isPressed(B::ScreenRight) ? next : 0);
+#endif
+    if (held != repeatingButton || (buttons & (previous | next))) {
       repeatingButton = held;
       lastRepeat = now;
-    } else if ((held == INPUT_LEFT || held == INPUT_RIGHT) && now - lastRepeat >= BUTTON_REPEAT_MS) {
+    } else if ((held == previous || held == next) && now - lastRepeat >= BUTTON_REPEAT_MS) {
       buttons |= held;
       lastRepeat = now;
     }

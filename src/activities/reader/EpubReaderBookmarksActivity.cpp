@@ -179,18 +179,40 @@ void EpubReaderBookmarksActivity::startRename() {
   });
 }
 
+#if FREEINK_DEVICE_XUESU_300
+const char* EpubReaderBookmarksActivity::xuesuQuickActionLabel() const {
+  return !confirmPopup.isActive() && nav.selected >= 0 && nav.selected < listCount()
+             ? tr(STR_XUESU_BOOKMARK_ACTIONS)
+             : nullptr;
+}
+#endif
+
 void EpubReaderBookmarksActivity::showBookmarkActions() {
   if (bookmarks.empty() || confirmPopup.isActive()) {
     return;
   }
-  const StrId options[] = {StrId::STR_OPEN, StrId::STR_RENAME, StrId::STR_DELETE};
-  confirmPopup.show(StrId::STR_BOOKMARKS, options, 3, 0, [this](const int idx) {
-    if (idx == 0) {
-      openSelectedBookmark();
-    } else if (idx == 1) {
-      startRename();
-    } else if (idx == 2) {
-      showDeleteConfirmation();
+  static constexpr StrId options[] = {StrId::STR_OPEN,
+#if !FREEINK_DEVICE_XUESU_300
+                                      StrId::STR_RENAME,
+#endif
+                                      StrId::STR_DELETE};
+  confirmPopup.show(StrId::STR_BOOKMARKS, options, static_cast<int>(std::size(options)), 0, [this](const int idx) {
+    if (idx < 0 || idx >= static_cast<int>(std::size(options))) return;
+    switch (options[idx]) {
+      case StrId::STR_OPEN:
+        openSelectedBookmark();
+        break;
+#if !FREEINK_DEVICE_XUESU_300
+      case StrId::STR_RENAME:
+        startRename();
+        break;
+#endif
+      case StrId::STR_DELETE:
+        showDeleteConfirmation();
+        break;
+      default:
+        // Other translation IDs are not bookmark actions.
+        break;
     }
   });
   requestUpdate();

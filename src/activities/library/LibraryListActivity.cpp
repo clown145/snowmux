@@ -258,6 +258,36 @@ void LibraryListActivity::onRowLongPress(const int index) {
 // Recent-shelf long-press menu (button hold and touch long-press). The first
 // rows may come from RecentBooksStore; the rest are index rows sorted by
 // modification time. Only store rows can be removed from recents.
+#if FREEINK_DEVICE_XUESU_300
+const char* LibraryListActivity::xuesuQuickActionLabel() const {
+  if (optionPopup.isActive() || degraded) return nullptr;
+  if (tabsFocused() || (listCount() > 0 && !groupsCollapsed)) return tr(STR_XUESU_LIBRARY_ACTIONS);
+  return nullptr;
+}
+
+void LibraryListActivity::runXuesuQuickAction() {
+  if (tabsFocused()) {
+    constexpr StrId options[] = {StrId::STR_XUESU_REVERSE_SORT, StrId::STR_LIBRARY_REBUILD};
+    optionPopup.show(StrId::STR_XUESU_LIBRARY_ACTIONS, options, std::size(options), 0, [this](int choice) {
+      if (choice == 0) toggleSortDirection();
+      else promptRebuildIndex();
+    });
+  } else if (isRecentSort(sortOrder)) {
+    showRecentBookOptions(selectedEntry());
+  } else {
+    const bool deleting = deleteEligible();
+    const StrId options[] = {deleting ? StrId::STR_DELETE : StrId::STR_XUESU_COLLAPSE_GROUPS,
+                             StrId::STR_LIBRARY_REBUILD};
+    optionPopup.show(StrId::STR_XUESU_LIBRARY_ACTIONS, options, std::size(options), 0, [this, deleting](int choice) {
+      if (choice == 1) promptRebuildIndex();
+      else if (deleting) promptDeleteBook(selectedEntry());
+      else collapseGroups(selectedEntry());
+    });
+  }
+  requestUpdate();
+}
+#endif
+
 void LibraryListActivity::showRecentBookOptions(const int entry) {
   if (entry < 0 || entry >= listCount()) return;
 
@@ -1044,6 +1074,9 @@ const char* LibraryListActivity::headerTitle() const {
 void LibraryListActivity::drawHoldHelp() const {
   if (mappedInput.hasTouch() || groupsCollapsed) return;
   const char* help = nullptr;
+#if FREEINK_DEVICE_XUESU_300
+  if (xuesuQuickActionLabel()) help = tr(STR_XUESU_LIBRARY_ACTIONS_HINT);
+#else
   if (tabsFocused() && !degraded)
     help = tr(STR_LIBRARY_HOLD_SORT);
   else if (!tabsFocused() && isRecentSort(sortOrder) && listCount() > 0)
@@ -1052,6 +1085,7 @@ void LibraryListActivity::drawHoldHelp() const {
     help = tr(STR_HOLD_OPEN_TO_DELETE);
   else if (!tabsFocused() && groupable())
     help = tr(STR_LIBRARY_HOLD_GROUPS);
+#endif
   if (!help) return;
 
   const auto& metrics = UITheme::getInstance().getMetrics();

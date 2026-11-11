@@ -355,6 +355,8 @@ print('PASS: production popup contacts/swipes and WiFi actions/footer geometry, 
 # Draw the real screen builder and shared legacy text renderer with recorded glyph bounds.
 ui=(ROOT/'src/components/UITheme.cpp').read_text()
 utf8=(ROOT/'lib/Utf8/Utf8.cpp').read_text()
+subpage=(ROOT/'src/components/SubpageLayout.h').read_text()
+subpage=subpage[subpage.index('namespace SubpageLayout {'):]
 text_methods='\n'.join(method(ui,'UITheme::'+name) for name in ('drawCenteredText','drawCenteredWrappedText'))
 code=r'''
 #include <FreeInkApp.h>
@@ -393,7 +395,11 @@ struct GfxRenderer {
  }
  struct ClipScope {ClipScope(const GfxRenderer&,int,int,int,int){}};
 };
-struct ThemeMetrics {int topPadding,headerHeight,tabBarHeight,verticalSpacing,contentSidePadding;};
+struct ThemeMetrics {
+ int topPadding,headerHeight,tabBarHeight,verticalSpacing,contentSidePadding;
+ int popupMarginX=16,popupFrameThickness=2,popupCornerRadius=6;
+};
+@SUBPAGE_LAYOUT@
 struct UITheme {
  enum class TextVerticalAlignment {TOP,CENTER,BOTTOM};
  ThemeMetrics metrics{10,84,40,16,20};
@@ -410,11 +416,13 @@ struct MappedInput {
  struct Labels {const char* btn1;const char* btn2;const char* btn3;const char* btn4;};
  Labels mapLabels(const char* a,const char* b,const char* c,const char* d)const{return {a,b,c,d};}
 };
-constexpr fui::ActionId ACTION_CANCEL=4,ACTION_RETURN=5,ACTION_SCAN=2,ACTION_ROW=1;
+constexpr fui::ActionId ACTION_CANCEL=4,ACTION_RETURN=5,ACTION_SCAN=2,ACTION_ROW=1,ACTION_PROMPT=3;
 enum class WifiSelectionState {SCANNING,AUTO_CONNECTING,CONNECTING,NETWORK_ERROR,CONNECTION_FAILED,SAVE_PROMPT,FORGET_PROMPT,NETWORK_LIST};
 constexpr int STR_CANCEL=0,STR_BACK=1,STR_SHOW_NETWORKS=2,STR_RETRY=3,STR_ERROR_GENERAL_FAILURE=4,
  STR_NO_NETWORKS=5,STR_CONNECTION_FAILED=6,STR_FINDING_SAVED_WIFI=7,STR_SCANNING=8,
- STR_CONNECTING_SAVED_WIFI=9,STR_CONNECTING=10,STR_TO_PREFIX=11;
+ STR_CONNECTING_SAVED_WIFI=9,STR_CONNECTING=10,STR_TO_PREFIX=11,STR_NETWORK_PREFIX=12,
+ STR_YES=13,STR_NO=14,STR_FORGET_NETWORK=15,STR_CONNECTED=16,STR_FORGET_AND_REMOVE=17,STR_SAVE_PASSWORD=18,
+ STR_WIFI_CREDENTIAL_WRITE_FAILED=19;
 bool chinese=false;
 const char* tr(int id) {
  switch(id) {
@@ -422,25 +430,37 @@ const char* tr(int id) {
  case STR_TO_PREFIX:return chinese?"至 ":"to ";case STR_FINDING_SAVED_WIFI:return "Finding saved WiFi";
  case STR_SCANNING:return "Scanning";case STR_CONNECTING_SAVED_WIFI:return chinese?"Connecting to a saved wireless network with a translated status message":"Connecting saved WiFi";
  case STR_CONNECTING:return "Connecting";default:return "Error";
+ case STR_NETWORK_PREFIX:return "Network: ";case STR_YES:return "Yes";case STR_NO:return "No";
+ case STR_FORGET_NETWORK:return "Forget this network";case STR_CONNECTED:return "Connected";
+ case STR_FORGET_AND_REMOVE:return "Remove the password saved for this wireless network?";
+ case STR_SAVE_PASSWORD:return "Would you like to save this password for future connections?";
+ case STR_WIFI_CREDENTIAL_WRITE_FAILED:return "Could not update the Wi-Fi record. Try again.";
  }
 }
 struct Target: fui::DrawTarget {
+ bool trackPrompt=false;fui::Rect panel{};
+ std::vector<fui::Rect> textRects;
  int16_t lineHeight(fui::FontId)const override{return 24;}
- fui::Size measureText(fui::FontId,const char*,fui::TextStyle)const override{return {24,24};}
- void fill(fui::Rect,fui::Paint,uint8_t,uint8_t)override{}
+ fui::Size measureText(fui::FontId,const char* text,fui::TextStyle)const override{
+  return {static_cast<int16_t>(trackPrompt ? std::strlen(text)*8 : 24),24};
+ }
+ void fill(fui::Rect rect,fui::Paint,uint8_t,uint8_t)override{if(trackPrompt&&panel.empty())panel=rect;}
  void stroke(fui::Rect,fui::Paint,uint8_t,uint8_t,uint8_t)override{}
  void line(fui::Point,fui::Point,uint8_t,fui::Paint)override{}
  void triangle(fui::Point,fui::Point,fui::Point,fui::Paint)override{}
  void bitmap(fui::Rect,fui::BitmapRef,fui::BitmapMode,fui::Paint,fui::Rotation)override{}
- void text(fui::Rect,const char*,fui::TextStyle)override{}
+ void text(fui::Rect rect,const char*,fui::TextStyle)override{if(trackPrompt)textRects.push_back(rect);}
 };
 struct WifiSelectionActivity {
  WifiSelectionState state=WifiSelectionState::CONNECTING;bool autoConnecting=false;
  GfxRenderer renderer;MappedInput mappedInput;std::string selectedSSID,connectionError;
  std::vector<int> networks;std::vector<fui::ListItem> networkRowItems;
  size_t selectedNetworkIndex=0;fui::ListNav listNav;
+ int forgetPromptSelection=0,savePromptSelection=0;
+ bool credentialWriteFailed=false;
+ static Rect networkContentBounds(const Rect&,const ThemeMetrics&,int);
  int subtitleHeight()const{return UITheme::getInstance().metrics.tabBarHeight;}
- void buildPromptDialog(UiScreen&){}
+ void buildPromptDialog(UiScreen&);
  void addTouchControls(UiScreen&,const char*,fui::ActionId);
  void buildListScreen(UiScreen&);
  void renderConnecting(const Rect*,const ThemeMetrics*)const;
@@ -501,6 +521,47 @@ int main() {
   ++scenes;
  }
  assert(scenes==576);
+ UiHighDpiProfile::enabled=false;
+ UITheme::getInstance().metrics={10,66,40,12,18};
+ {
+  WifiSelectionActivity a;
+  a.state=WifiSelectionState::AUTO_CONNECTING;a.autoConnecting=true;a.selectedSSID="Saved WiFi";
+  a.renderer.width=300;a.renderer.height=400;a.mappedInput.touch=false;chinese=true;
+  const auto& theme=UITheme::getInstance().getMetrics();
+  const Rect safe{0,0,300,400};
+  const int subtitleHeight=76;
+  const auto body=a.networkContentBounds(safe,theme,subtitleHeight);
+  assert(body.y==theme.topPadding+theme.headerHeight+subtitleHeight+theme.verticalSpacing);
+  a.renderConnecting(&body,&theme);
+  assert(a.renderer.draws.size()==3);
+  for (const auto& draw:a.renderer.draws) {
+   assert(draw.rect.y>=body.y && draw.rect.y+draw.rect.height<=body.y+body.height);
+  }
+ }
+ for (const auto size : {fui::Size{300,400},fui::Size{400,300},fui::Size{480,800}})
+ for (const auto state : {WifiSelectionState::SAVE_PROMPT,WifiSelectionState::FORGET_PROMPT})
+ for (const bool failed : {false,true}) {
+  WifiSelectionActivity a;a.state=state;a.selectedSSID="0123456789 0123456789 0123456789";
+  a.credentialWriteFailed=failed;
+  a.renderer.width=size.width;a.renderer.height=size.height;
+  fui::DeviceContext device;device.width=size.width;device.height=size.height;
+  device.safeArea={8,8,5,5};device.hasTouch=true;
+  fui::InteractionBuffer<24> hits;fui::InputSnapshot input;Target target;target.trackPrompt=true;
+  fui::Frame<24> frame(target,device,input,hits);
+  UiScreen screen(frame,fui::themeTokensForLineHeight(24));
+  a.buildListScreen(screen);
+  const auto body=screen.body();const auto p=target.panel;
+  assert(!p.empty() && p.x>=body.x && p.y>=body.y && p.right()<=body.right() && p.bottom()<=body.bottom());
+  assert(hits.count()==2 && !target.textRects.empty());
+  for(size_t i=0;i<hits.count();++i) {
+   const auto h=hits.data()[i];
+   assert(h.action==ACTION_PROMPT && h.value==static_cast<int16_t>(i));
+   assert(h.rect.x>=p.x && h.rect.y>=p.y && h.rect.right()<=p.right() && h.rect.bottom()<=p.bottom());
+  }
+  for (const auto r:target.textRects) {
+   assert(r.x>=p.x && r.y>=p.y && r.right()<=p.right() && r.bottom()<=p.bottom());
+  }
+ }
 }
 '''
 # Const renderer methods in production record draw calls through a mutable test seam.
@@ -512,7 +573,8 @@ code=code.replace('void drawButtonHints(GfxRenderer&', 'void drawButtonHints(con
 code=code.replace('@UTF8_HEADER@',str(ROOT/'lib/Utf8/Utf8.h'))
 code=code.replace('@UTF8_METHOD@',method(utf8,'utf8CodepointLen')+'\n'+method(utf8,'utf8SafeTruncateBuffer'))
 code=code.replace('@TEXT_METHODS@',text_methods)
-code=code.replace('@METHODS@','\n'.join(method(wifi,'WifiSelectionActivity::'+name) for name in ('addTouchControls','buildListScreen','renderConnecting')))
+code=code.replace('@SUBPAGE_LAYOUT@',subpage)
+code=code.replace('@METHODS@','\n'.join(method(wifi,'WifiSelectionActivity::'+name) for name in ('networkContentBounds','addTouchControls','buildListScreen','buildPromptDialog','renderConnecting')))
 with tempfile.TemporaryDirectory(prefix='wifi-status-') as directory:
     run(code,Path(directory),sdk=True)
-print('PASS: shared WiFi status/SSID centering, UTF-8 ellipsis and touch controls across 576 scenes')
+print('PASS: WiFi status/SSID centering across 576 scenes and save/forget dialog bounds on three screen sizes')

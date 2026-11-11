@@ -44,7 +44,11 @@ bool Activity::showMainTabContentSelection() const {
 bool Activity::mainTabsAtBottom() const { return SETTINGS.inxTabPosition == CrossPointSettings::INX_TAB_BOTTOM; }
 
 bool Activity::hasMainTabStatusBar() const {
+#if FREEINK_DEVICE_XUESU_300
+  return usesMainTabBar();
+#else
   return MainTabs::showsStatusBar(usesMainTabBar(), mappedInput.hasTouch(), mainTabsAtBottom());
+#endif
 }
 
 MainTabLayout Activity::mainTabLayout() const {
@@ -63,11 +67,16 @@ MainTabLayout Activity::mainTabLayout() const {
     safe.width = std::max(0, safeRight - safe.x);
     safe.height = std::max(0, safeBottom - safe.y);
   }
+#if FREEINK_DEVICE_XUESU_300
+  const int topTabHeight = 52;
+  const bool statusAboveTopTabs = true;
+#else
+  const int topTabHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight : metrics.headerHeight;
+  const bool statusAboveTopTabs = false;
+#endif
   MainTabLayout layout = MainTabs::layout(safe, metrics.topPadding,
-                                          tabsAtBottom                ? MainTabs::bottomBarHeight
-                                          : UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight
-                                                                      : metrics.headerHeight,
-                                          tabsAtBottom, showStatus ? BaseTheme::headerStatusHeight() : 0);
+                                         tabsAtBottom ? MainTabs::bottomBarHeight : topTabHeight, tabsAtBottom,
+                                         showStatus ? BaseTheme::headerStatusHeight() : 0, statusAboveTopTabs);
   // Status chrome shares subpage header coordinates; only content inherits the safe-area top.
   if (showStatus) layout.statusBar.y = metrics.topPadding;
   return layout;
@@ -84,6 +93,15 @@ void Activity::drawPageHeader(const Rect& rect, const char* title, const char* s
   if (usesMainTabBar()) {
     const MainTabLayout layout = mainTabLayout();
     GUI.drawMainTabBar(renderer, layout.tabBar, mainTab());
+#if FREEINK_DEVICE_XUESU_300
+    if (activityManager.getMainTabFocus() == MainTabFocus::Tabs) {
+      const auto& bar = layout.tabBar;
+      const auto bounds = MainTabs::tabBounds(MainTabs::indexOf(mainTab()), bar.width);
+      constexpr int inset = MainTabs::controlGap;
+      GUI.drawSelectionFrame(
+          renderer, Rect{bar.x + bounds.left, bar.y + inset, bounds.right - bounds.left, bar.height - 2 * inset}, 2);
+    }
+#endif
     if (layout.statusBar.height > 0) GUI.drawMainTabStatusBar(renderer, layout.statusBar);
   } else {
     GUI.drawHeader(renderer, rect, title, subtitle);

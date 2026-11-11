@@ -14,6 +14,7 @@ lists = (ROOT / "src/activities/UiListActivity.cpp").read_text()
 renderer = (ROOT / "lib/GfxRenderer/GfxRenderer.cpp").read_text()
 theme = (ROOT / "src/components/UITheme.cpp").read_text()
 tokens = (ROOT / "src/components/UIThemeTokens.h").read_text()
+reader_layout = (ROOT / "src/activities/reader/ReaderSubpageLayout.h").read_text().split("namespace ReaderSubpageLayout", 1)[1]
 
 
 def method(source, signature):
@@ -34,9 +35,14 @@ rows = "  fui::ListProps props;" + build.split("  fui::ListProps props;", 1)[1]
 rows = rows.split("\nconst char* TextSettingsActivity::confirmLabelText", 1)[0]
 build = build.split("\n  // rowItems_", 1)[0]
 sync = method(lists, "void UiListActivity::syncListViewport(").replace("UiListActivity::", "TextSettingsActivity::")
+sync_tabs = method(tabs, "void UiTabListActivity::syncTabListViewport(").replace(
+    "UiTabListActivity::", "TextSettingsActivity::"
+)
 tab_bar = "  const bool boldLabels = false;\n" + tabs.split("void UiTabListActivity::buildTabBar(UiScreen& screen, const bool boldLabels) {", 1)[1]
 chrome = activity.split("void TextSettingsActivity::drawChrome() {", 1)[1]
-chrome = chrome.split("\nvoid TextSettingsActivity::drawFooter()", 1)[0]
+chrome = chrome.split("\nvoid TextSettingsActivity::drawPreview(", 1)[0]
+side_preview = method(activity, "bool TextSettingsActivity::usesSidePreview() const")
+draw_preview = method(activity, "void TextSettingsActivity::drawPreview(")
 preview_caption = "void renderPreview(" + preview.split("void renderPreview(", 1)[1]
 preview_caption = preview_caption.split("\n  const int fontId =", 1)[0] + "\n}\n"
 preview_caption = preview_caption.replace(
@@ -59,6 +65,7 @@ harness = r"""
 #include <EpdFont.h>
 #include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_12_regular.h>
+#include <components/themes/inx/InxTheme.h>
 #include <components/themes/lyra/LyraTheme.h>
 #include <components/themes/roundedraff/RoundedRaffTheme.h>
 #include <algorithm>
@@ -81,6 +88,7 @@ struct GfxRenderer {
   int getScreenWidth() const;
   int getScreenHeight() const;
   Orientation getOrientation() const { return orientation; }
+  int getLineHeight(int) const { return ubuntu_12_regular.advanceY; }
   void getOrientedViewableTRBL(int*, int*, int*, int*) const;
   int getTextHeight(int) const { return ubuntu_10_regular.ascender; }
   void drawText(int, int x, int y, const char* text) const {
@@ -100,13 +108,16 @@ struct UITheme {
   ThemeMetrics metrics;
   static UITheme& getInstance() { static UITheme instance; return instance; }
   const ThemeMetrics& getMetrics() const { return metrics; }
-  bool hasMainTabs() const { return false; }
+  bool hasMainTabs() const { return currentType == CrossPointSettings::INX; }
   Rect getContentArea(const GfxRenderer&);
   Rect getScreenSafeArea(const GfxRenderer&, bool, bool);
   Rect getHeaderRect(const GfxRenderer&, bool, bool, bool upstreamStyle=false);
   void drawHeader(GfxRenderer& renderer, Rect rect, const char*) { renderer.header = rect; }
+  void drawHeaderWithStyle(GfxRenderer& renderer, Rect rect, const char*, const char*, bool, bool, bool) {
+    renderer.header = rect;
+  }
 };
-""" + theme_helpers + r"""
+""" + theme_helpers + "namespace ReaderSubpageLayout" + reader_layout + r"""
 #define GUI UITheme::getInstance()
 #define tr(id) id
 constexpr const char* STR_TEXT_SETTINGS = "Text Settings";
@@ -148,9 +159,7 @@ struct TextSettingsActivity : UiTabListActivity {
   fui::ListNav& activeNav() { return nav; }
   int listCount() const { return rowItems_.size(); }
   void syncListViewport(UiScreen&, fui::ListProps&, int);
-  void syncTabListViewport(UiScreen& screen, fui::ListProps& props) {
-    syncListViewport(screen, props, 1);
-  }
+  void syncTabListViewport(UiScreen& screen, fui::ListProps& props);
   void enterGeometry() {
     metrics_ =""" + enter + r"""
   }
@@ -158,8 +167,10 @@ struct TextSettingsActivity : UiTabListActivity {
   }
   void buildRows(UiScreen& screen) {""" + rows + r"""
   void drawChrome() {""" + chrome + r"""
+  bool usesSidePreview() const;
+  void drawPreview(const Rect&, const char*);
 };
-""" + sync + method(
+""" + sync + sync_tabs + side_preview + draw_preview + method(
     renderer, "int GfxRenderer::getScreenWidth() const"
 ) + method(
     renderer, "int GfxRenderer::getScreenHeight() const"
@@ -394,7 +405,83 @@ void checkSharedPartialRows() {
     }
   }
 }
+#if FREEINK_DEVICE_XUESU_300
+void checkXuesuInxRows(GfxRenderer::Orientation orientation) {
+  const auto& board = BoardConfig::XUESU_300;
+  BoardConfig::ACTIVE = board;
+  SETTINGS.uiTheme = CrossPointSettings::INX;
+  auto& ui = UITheme::getInstance();
+  ui.currentType = SETTINGS.uiTheme;
+  ui.metrics = InxMetrics::values;
+  ui.metrics.headerHeight += board.headerOffsetY;
+  ui.metrics.buttonHintsHeight = 0;
+
+  TextSettingsActivity activity;
+  activity.renderer.panelWidth = board.displayWidth;
+  activity.renderer.panelHeight = board.displayHeight;
+  activity.renderer.orientation = orientation;
+  activity.enterGeometry();
+  activity.rowItems_.assign(9, fui::ListItem{});
+  for (auto& row : activity.rowItems_) {
+    row.label = "Line spacing";
+    row.value = "100%";
+  }
+  activity.rowItems_[1].label = "A font family name that needs a second line";
+  activity.nav.reset(1);
+
+  Target target;
+  fui::DeviceContext device;
+  device.width = activity.renderer.getScreenWidth();
+  device.height = activity.renderer.getScreenHeight();
+  const bool landscape = orientation == GfxRenderer::LandscapeClockwise ||
+                         orientation == GfxRenderer::LandscapeCounterClockwise;
+  assert(device.width == (landscape ? 400 : 300) && device.height == (landscape ? 300 : 400));
+  fui::InputSnapshot input;
+  fui::InteractionBuffer<32> interactions;
+  fui::Frame<32> frame(target, device, input, interactions);
+  const auto theme = uiThemeTokens(target);
+  UiScreen screen(frame, theme);
+  activity.drawChrome();
+  activity.buildScreen(screen);
+  const auto list = screen.contentRect();
+  const auto preview = activity.renderer.preview;
+  if (landscape) {
+    assert(activity.renderer.header.height < ui.metrics.headerHeight);
+    assert(preview.x >= list.right() + 6);
+    assert(preview.y == list.y && preview.height == list.height);
+    assert(preview.x + preview.width == device.width);
+    assert(activity.renderer.captionText == STR_PREVIEW);
+  } else {
+    assert(preview.y + preview.height <= list.y);
+  }
+  target.textRects.clear();
+  activity.buildRows(screen);
+  assert(list.bottom() == device.height);
+  const int minimumRows = 4;
+  if (activity.nav.drawnRows < minimumRows)
+    fprintf(stderr, "List height %d, font line height %d, visible rows %d\n",
+            list.height, target.lineHeight(theme.bodyText.font), activity.nav.drawnRows);
+  assert(activity.nav.drawnRows >= minimumRows && activity.nav.drawnRows < activity.listCount());
+  assert(activity.nav.inputPageRows() == activity.nav.drawnRows);
+  for (const auto& rect : target.textRects) {
+    assert(rect.x >= list.x && rect.right() <= list.right());
+    assert(rect.y >= list.y && rect.bottom() <= list.bottom());
+  }
+  activity.nav.requestSelection(activity.listCount());  // Ring position of the last item.
+  UiScreen scrolled(frame, theme);
+  activity.buildScreen(scrolled);
+  activity.buildRows(scrolled);
+  assert(activity.nav.top > 0);
+  assert(activity.nav.top + activity.nav.drawnRows == activity.listCount());
+}
+#endif
+
 int main() {
+#if FREEINK_DEVICE_XUESU_300
+  for (auto orientation : {GfxRenderer::Portrait, GfxRenderer::LandscapeClockwise,
+                           GfxRenderer::LandscapeCounterClockwise})
+    checkXuesuInxRows(orientation);
+#else
   using Tab = TextSettingsActivity::Tab;
   for (const auto& profile : {BoardConfig::XTEINK_X3, BoardConfig::XTEINK_X3_UC8279,
                               BoardConfig::XTEINK_X4, BoardConfig::XTEINK_X4_CLASSIC})
@@ -412,6 +499,7 @@ int main() {
         for (Tab tab : {Tab::Family, Tab::Size, Tab::Layout, Tab::Style})
           checkLayout(profile, orientation, metrics, tab);
   checkSharedPartialRows();
+#endif
 }
 """
 with tempfile.TemporaryDirectory() as directory:
@@ -420,9 +508,8 @@ with tempfile.TemporaryDirectory() as directory:
     cpp.write_text(harness)
     bidi_object = Path(directory) / "minibidi.o"
     subprocess.run(["cc", "-c", str(ROOT / "lib/MiniBidi/minibidi.c"), "-o", str(bidi_object)], check=True)
-    subprocess.run([
-        "c++", "-std=c++20", "-DFREEINK_DEVICE_X3=1", "-DFREEINK_DEVICE_X4=1",
-        "-DFREEINK_CAP_TOUCH=1", "-I", str(ROOT / "src"),
+    arguments = [
+        "-I", str(ROOT / "src"), "-I", str(ROOT / "include"),
         "-I", str(ROOT / "freeink-sdk/libs/hardware/XteinkDetect/test/host/stubs"),
         "-I", str(ROOT / "freeink-sdk/libs/hardware/BoardConfig/include"), "-I",
         str(ROOT / "freeink-sdk/libs/ui/FreeInkUI/include"),
@@ -432,6 +519,11 @@ with tempfile.TemporaryDirectory() as directory:
         str(ROOT / "lib/EpdFont/EpdFont.cpp"), str(ROOT / "lib/Utf8/Utf8.cpp"),
         str(ROOT / "lib/MiniBidi/BidiUtils.cpp"), str(bidi_object),
         str(cpp), "-o", str(executable),
-    ], check=True)
-    subprocess.run([str(executable)], check=True)
+    ]
+    for defines in (
+        ["-DFREEINK_DEVICE_X3=1", "-DFREEINK_DEVICE_X4=1", "-DFREEINK_CAP_TOUCH=1"],
+        ["-DFREEINK_DEVICE_XUESU_300=1"],
+    ):
+        subprocess.run(["c++", "-std=c++20", *defines, *arguments], check=True)
+        subprocess.run([str(executable)], check=True)
 print("Text Settings layout regression checks passed")

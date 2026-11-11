@@ -38,6 +38,8 @@ enum class SettingAction {
   KeyboardLayouts,
   HomeButton,
   TapZones,
+  BatteryCalibration,
+  Sleep,
 };
 
 struct SettingInfo {
@@ -239,6 +241,8 @@ class SettingsActivity final : public UiTabListActivity {
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
   bool resourcesDirty = true;
+  bool waitForBackRelease = false;
+  bool waitForConfirmRelease = false;
 
   OptionPopup optionPopup;
 

@@ -10,6 +10,7 @@
 #include <string>
 
 #include "MappedInputManager.h"
+#include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
@@ -21,6 +22,7 @@ namespace {
 
 constexpr int MIN_YEAR = 2024;
 constexpr int MAX_YEAR = 2099;
+constexpr StrId FIELD_NAMES[] = {StrId::STR_YEAR, StrId::STR_MONTH, StrId::STR_DAY, StrId::STR_HOUR, StrId::STR_MINUTE};
 
 unsigned wrapValue(const unsigned value, const int delta, const unsigned minValue, const unsigned maxValue) {
   const int range = static_cast<int>(maxValue - minValue + 1);
@@ -84,21 +86,46 @@ void DateTimeSettingsActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+#if FREEINK_DEVICE_XUESU_300
+    if (selectedEditField == EDIT_FIELD_COUNT) confirmManualEdit();
+    else openSelectedField();
+#else
     confirmManualEdit();
+#endif
     return;
   }
 
   buttonNavigator.onRelease({MappedInputManager::Button::Down}, [this] {
-    selectedEditField = ButtonNavigator::nextIndex(selectedEditField, EDIT_FIELD_COUNT);
+    selectedEditField = ButtonNavigator::nextIndex(selectedEditField, EDIT_FIELD_COUNT + FREEINK_DEVICE_XUESU_300);
     requestUpdate();
   });
   buttonNavigator.onRelease({MappedInputManager::Button::Up}, [this] {
-    selectedEditField = ButtonNavigator::previousIndex(selectedEditField, EDIT_FIELD_COUNT);
+    selectedEditField = ButtonNavigator::previousIndex(selectedEditField, EDIT_FIELD_COUNT + FREEINK_DEVICE_XUESU_300);
     requestUpdate();
   });
+#if !FREEINK_DEVICE_XUESU_300
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { adjustEditField(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { adjustEditField(1); });
+#endif
 }
+
+#if FREEINK_DEVICE_XUESU_300
+void DateTimeSettingsActivity::openSelectedField() {
+  const int values[] = {year, static_cast<int>(month), static_cast<int>(day), static_cast<int>(hour),
+                        static_cast<int>(minute)};
+  const int minimums[] = {MIN_YEAR, 1, 1, 0, 0};
+  const int maximums[] = {MAX_YEAR, 12, static_cast<int>(TimeUtils::getDaysInMonth(year, month)), 23, 59};
+  const int current = values[selectedEditField];
+  startActivityForResultWith<IntervalSelectionActivity>(
+      [this, current](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          if (const auto* value = std::get_if<IntervalResult>(&result.data)) adjustEditField(value->value - current);
+        }
+      },
+      "DateTimeValue", FIELD_NAMES[selectedEditField], current, minimums[selectedEditField], maximums[selectedEditField],
+      1, 1);
+}
+#endif
 
 void DateTimeSettingsActivity::adjustEditField(const int delta) {
   const auto field = static_cast<EditField>(selectedEditField);
@@ -217,11 +244,10 @@ void DateTimeSettingsActivity::render(RenderLock&&) {
     renderUi();
   } else {
     GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, EDIT_FIELD_COUNT, selectedEditField,
+        renderer, Rect{0, contentTop, pageWidth, contentHeight}, EDIT_FIELD_COUNT + FREEINK_DEVICE_XUESU_300,
+        selectedEditField,
         [](int index) {
-          static constexpr StrId NAMES[] = {StrId::STR_YEAR, StrId::STR_MONTH, StrId::STR_DAY, StrId::STR_HOUR,
-                                            StrId::STR_MINUTE};
-          return std::string(I18N.get(NAMES[index]));
+          return std::string(I18N.get(index == EDIT_FIELD_COUNT ? StrId::STR_SAVE : FIELD_NAMES[index]));
         },
         nullptr, nullptr,
         [this](int index) {

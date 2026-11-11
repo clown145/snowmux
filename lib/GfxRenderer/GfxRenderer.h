@@ -52,6 +52,12 @@ class GfxRenderer {
     return {pixel.write, pixel.black};
   }
 
+  static constexpr bool ditherTwoBitPixel(const uint8_t value, const int x, const int y) {
+    constexpr uint8_t bayer[4] = {0, 2, 3, 1};
+    const uint8_t threshold = bayer[((y & 1) << 1) | (x & 1)];
+    return value == 0 || (value == 1 && threshold < 3) || (value == 2 && threshold < 1);
+  }
+
   static constexpr TwoBitPixel mapTwoBitGlyphCoverage(const RenderMode mode, const uint8_t coverage,
                                                       const bool absolute = false) {
     return mapTwoBitPixel(mode, 3 - coverage, absolute);

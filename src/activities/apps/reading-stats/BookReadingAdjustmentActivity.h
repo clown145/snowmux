@@ -4,6 +4,7 @@
 #include <string>
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
 
 class BookReadingAdjustmentActivity final : public Activity {
@@ -27,6 +28,10 @@ class BookReadingAdjustmentActivity final : public Activity {
   std::string getDateLabel() const;
   const char* getDurationLabel() const;
   bool applyAdjustment();
+#if FREEINK_DEVICE_XUESU_300
+  OptionPopup adjustmentPicker;
+  void openSelectedField();
+#endif
 
  public:
   explicit BookReadingAdjustmentActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,

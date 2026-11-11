@@ -58,9 +58,10 @@ void SettingsListActivity::rebuildRows() {
 
 void SettingsListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Content below the GUI.drawHeader band, above the button hints.
-  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  const Rect content = pageContentRect();
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(content.y), static_cast<int16_t>(renderer.getScreenWidth() - content.x - content.width),
+      static_cast<int16_t>(renderer.getScreenHeight() - content.y - content.height), static_cast<int16_t>(content.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   fui::ListProps props;
@@ -68,14 +69,22 @@ void SettingsListActivity::buildScreen(UiScreen& screen) {
   props.count = static_cast<uint16_t>(rowItems_.size());
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
-  // Rows are as tall as a label plus a small second line, giving the icons air.
   const auto& theme = screen.theme();
-  const int16_t textHeight = static_cast<int16_t>(screen.target().lineHeight(theme.bodyText.font) +
-                                                  screen.target().lineHeight(theme.smallText.font));
+  int16_t textHeight = screen.target().lineHeight(theme.bodyText.font);
+  if (!FREEINK_DEVICE_XUESU_300) textHeight += screen.target().lineHeight(theme.smallText.font);
   const int16_t paddingY = mappedInput.hasTouch() ? theme.listTouchRowPaddingY : theme.listRowPaddingY;
   props.rowHeight = static_cast<int16_t>(std::max<int16_t>(textHeight, ICON_SIZE) + 2 * paddingY);
+#if FREEINK_DEVICE_XUESU_300
+  props.rowGap = 0;
+  props.rowHeight = std::max<int16_t>(props.rowHeight, screen.contentRect().height / listCount());
+#endif
   syncListViewport(screen, props);
+  if (!showMainTabContentSelection()) props.selectedIndex = -1;
   screen.list(props);
+}
+
+void SettingsListActivity::selectMainTabContentEdge(const MainTabContentEdge edge) {
+  moveSelectionTo(MainTabs::contentEdgeIndex(edge, listCount()));
 }
 
 void SettingsListActivity::activateIndex(const int index) {
@@ -92,6 +101,7 @@ void SettingsListActivity::openSection(const SettingsSection section) {
     LOG_ERR("SETTINGS", "OOM: SettingsActivity");
     return;
   }
+  if (usesMainTabBar()) activityManager.focusMainTabContent();
   startActivityForResult(std::move(activity), [this](const ActivityResult&) {
     rebuildRows();
     // A theme change inside the section must restyle this screen too.
@@ -106,6 +116,6 @@ void SettingsListActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Version rides in the header's trailing label slot: the footer position
   // conflicts with button hints on non-touch devices.
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                 tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION);
+  drawPageHeader(Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
+                 CROSSPOINT_VERSION);
 }

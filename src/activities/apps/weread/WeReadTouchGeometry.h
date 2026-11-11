@@ -4,6 +4,48 @@
 
 #include "components/themes/BaseTheme.h"
 
+struct WeReadDetailLayout {
+  Rect cover;
+  Rect metadata;
+  Rect introduction;
+  Rect actions;
+  int actionStep;
+  int actionGap;
+};
+
+inline WeReadDetailLayout weReadDetailLayout(const Rect& content, const ThemeMetrics& metrics,
+                                             const int preferredActionStep, const int actionCount,
+                                             const int lineHeight) {
+  constexpr int coverWidth = 96;
+  constexpr int coverHeight = 140;
+  constexpr int metadataGap = 16;
+  const int gap = metrics.verticalSpacing;
+  const int introPreviewHeight = 2 * lineHeight + 4;
+  const int fullHeight = coverHeight + 2 * gap + introPreviewHeight + actionCount * preferredActionStep;
+  const bool compact = content.height < fullHeight;
+  const int actionGap = compact ? 6 : 0;
+  const int minimumActionStep = lineHeight + actionGap + 6;
+  const int compactStep = std::max(minimumActionStep, content.height / (actionCount * 2));
+  const int actionStep =
+      std::min({preferredActionStep, compact ? compactStep : preferredActionStep, content.height / actionCount});
+  const int actionsHeight = actionCount * actionStep;
+  const int actionsY = content.y + content.height - actionsHeight;
+  const int headerBudget = std::max(0, actionsY - content.y - 2 * gap);
+  const int introReserve = std::min(introPreviewHeight, headerBudget / 2);
+  const int innerWidth = std::max(0, content.width - 2 * metrics.contentSidePadding);
+  const int left = content.x + metrics.contentSidePadding;
+  const int heroHeight = std::min(coverHeight, headerBudget - introReserve);
+  const int scaledWidth = std::min(innerWidth / 2, (heroHeight * coverWidth + coverHeight / 2) / coverHeight);
+  const int metaX = left + (scaledWidth > 4 ? scaledWidth + metadataGap : 0);
+  const int introY = std::min(actionsY, content.y + heroHeight + gap);
+  return {Rect{left, content.y, scaledWidth, heroHeight},
+          Rect{metaX, content.y, std::max(0, left + innerWidth - metaX), heroHeight},
+          Rect{left, introY, innerWidth, std::max(0, actionsY - gap - introY)},
+          Rect{content.x, actionsY, content.width, actionsHeight},
+          actionStep,
+          actionGap};
+}
+
 struct WeReadShelfGridLayout {
   int columns = 1;
   int rows = 1;

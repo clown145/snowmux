@@ -226,7 +226,19 @@ void KeyboardEntryActivity::moveSelectionCol(const int delta) {
   if (selRow < 0 || selRow >= layout.rowCount) return;
   const int cols = layout.rows[selRow].count;
   if (cols <= 0) return;
+#if FREEINK_DEVICE_XUESU_300
+  // Both directions traverse the whole keyboard on the three-key board.
+  selCol += delta;
+  if (selCol < 0) {
+    selRow = (selRow + layout.rowCount - 1) % layout.rowCount;
+    selCol = layout.rows[selRow].count - 1;
+  } else if (selCol >= cols) {
+    selRow = (selRow + 1) % layout.rowCount;
+    selCol = 0;
+  }
+#else
   selCol = (selCol + delta + cols) % cols;
+#endif
 }
 
 bool KeyboardEntryActivity::syncSelectionToValue(const int16_t value) {
@@ -679,6 +691,62 @@ void KeyboardEntryActivity::loop() {
     }
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  using Button = MappedInputManager::Button;
+  if (cursorMode) {
+    if (upLongHandled) {
+      upLongHandled = mappedInput.isPressed(Button::Up);
+      return;
+    }
+    const bool back = mappedInput.wasReleased(Button::Back);
+    if (back || mappedInput.wasReleased(Button::Confirm)) {
+      if (back) cursorPos = savedCursorPos;
+      cursorMode = false;
+      requestUpdate();
+      return;
+    }
+    buttonNavigator.onPrevious([this] {
+      cursorPos = utf8Prev(text, cursorPos);
+      requestUpdate();
+    });
+    buttonNavigator.onNext([this] {
+      cursorPos = utf8Next(text, cursorPos);
+      requestUpdate();
+    });
+    return;
+  }
+
+  if (mappedInput.wasReleased(Button::Back)) {
+    onCancel();
+    return;
+  }
+  if (!text.empty() && mappedInput.wasLongPressed(Button::Up, LONG_PRESS_MS)) {
+    savedCursorPos = cursorPos;
+    cursorMode = true;
+    upLongHandled = true;
+    requestUpdate();
+    return;
+  }
+  const auto* key = selectedKey();
+  if (key && key->value == fui::QWERTY_KEY_BACKSPACE &&
+      mappedInput.wasLongPressed(Button::Down, DEL_LONG_PRESS_MS)) {
+    activateValue(key->value, true);
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.wasReleased(Button::Confirm)) {
+    if (key && activateValue(key->value, false)) requestUpdate();
+    return;
+  }
+  buttonNavigator.onPreviousRelease([this] {
+    moveSelectionCol(-1);
+    requestUpdate();
+  });
+  buttonNavigator.onNextRelease([this] {
+    moveSelectionCol(1);
+    requestUpdate();
+  });
+#else
   if (!cursorMode && mappedInput.wasPressed(MappedInputManager::Button::Up)) {
     upHeld = true;
     upLongHandled = false;
@@ -781,7 +849,6 @@ void KeyboardEntryActivity::loop() {
     rightHeld = false;
     rightLongHandled = false;
   }
-
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     confirmHeld = true;
     confirmLongHandled = false;
@@ -826,6 +893,7 @@ void KeyboardEntryActivity::loop() {
     hintVisible = false;
     requestUpdate();
   }
+#endif
 }
 
 void KeyboardEntryActivity::render(RenderLock&&) {
@@ -987,6 +1055,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     }
   }
 
+#if !FREEINK_DEVICE_XUESU_300
   if ((!UITheme::getInstance().hasMainTabs() || !mappedInput.hasTouch()) && hintVisible && cursorMode &&
       !text.empty()) {
     const int hintLh = renderer.getLineHeight(SMALL_FONT_ID);
@@ -1008,6 +1077,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
       }
     }
   }
+#endif
 
   const fui::Rect kbRect = keyboardRect();
   const fui::Rect keysRect = keyboardKeysRect();
@@ -1016,6 +1086,14 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   const int underlineBottom = inputY + inputHeight + lineHeight + metrics.verticalSpacing + 4;
   auto drawTip = [&](const char* tip, int y) { renderer.drawCenteredText(SMALL_FONT_ID, y, tip, true); };
 
+#if FREEINK_DEVICE_XUESU_300
+  const int available = kbRect.y - underlineBottom;
+  if (available >= tipsLh) {
+    drawTip(cursorMode ? tr(STR_XUESU_CURSOR_ACTIVE) : tr(STR_XUESU_CURSOR_ENTRY), underlineBottom);
+    if (!cursorMode && !text.empty() && available >= 2 * tipsLh)
+      drawTip(tr(STR_XUESU_KB_CLEAR), underlineBottom + tipsLh);
+  }
+#else
   // Reserve the Clear Text row even when the entry is empty.
   const int tipCount = cursorMode ? 1 : urlPanel ? 3 : symbols ? 2 : 3 + (inputType == InputType::Url ? 1 : 0);
   const int tipsHeight = (tipCount + 1) * tipsLh;
@@ -1062,6 +1140,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
       }
     }
   }
+#endif
 
   // The FreeInkUI keyboard draws the keys and registers their hit rects into
   // `interactions`; loop() (the main task) routes touch snapshots against
@@ -1116,7 +1195,9 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+#if !FREEINK_DEVICE_XUESU_300
   GUI.drawSideButtonHints(renderer, ">", "<");
+#endif
 
   renderer.displayBuffer();
 }

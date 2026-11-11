@@ -26,6 +26,7 @@ constexpr int SUMMARY_CARD_GAP = 8;
 constexpr int HEATMAP_GRID_GAP = 6;
 constexpr int LEGEND_HEIGHT = 30;
 constexpr int LEGEND_SWATCH_SIZE = 16;
+constexpr bool COMPACT_HEATMAP = FREEINK_DEVICE_XUESU_300;
 
 struct HeatmapCell {
   uint32_t dayOrdinal = 0;
@@ -51,11 +52,44 @@ struct HeatmapLayout {
   int legendTop;
   int cellWidth;
   int cellHeight;
+  int cellGap;
+  int monthHeaderHeight;
+  int summaryCardHeight;
+  int legendHeight;
 };
+
+HeatmapLayout compactHeatmapLayout(const int width, const int height, const int contentTop, const int smallLineHeight,
+                                   const int monthLineHeight) {
+  constexpr int side = 8;
+  constexpr int cellGap = 3;
+  const int monthHeight = monthLineHeight + 4;
+  const int cardHeight = smallLineHeight + 6;
+  const int summaryTop = contentTop + monthHeight + 4;
+  const int gridTop = summaryTop + cardHeight * 2 + SUMMARY_CARD_GAP + 4;
+  const int legendHeight = smallLineHeight + 12;
+  const int legendTop = height - legendHeight - 4;
+  const int gridHeight = legendTop - gridTop - 4;
+  return {side,
+          contentTop,
+          summaryTop,
+          gridTop,
+          legendTop,
+          (width - side * 2 - cellGap * 6) / 7,
+          std::max(0, (gridHeight - cellGap * 5) / 6),
+          cellGap,
+          monthHeight,
+          cardHeight,
+          legendHeight};
+}
 
 HeatmapLayout heatmapLayout(const GfxRenderer& renderer) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  if (COMPACT_HEATMAP) {
+    return compactHeatmapLayout(renderer.getScreenWidth(), renderer.getScreenHeight() - metrics.buttonHintsHeight,
+                                contentTop, renderer.getLineHeight(SMALL_FONT_ID),
+                                renderer.getLineHeight(UI_10_FONT_ID));
+  }
   const int summaryTop = contentTop + MONTH_HEADER_HEIGHT + 4;
   const int gridTop = summaryTop + (SUMMARY_CARD_HEIGHT + SUMMARY_CARD_GAP) * 2 + SECTION_GAP;
   const int legendTop = renderer.getScreenHeight() - metrics.buttonHintsHeight - LEGEND_HEIGHT - 4;
@@ -66,17 +100,21 @@ HeatmapLayout heatmapLayout(const GfxRenderer& renderer) {
           gridTop,
           legendTop,
           (renderer.getScreenWidth() - metrics.contentSidePadding * 2 - HEATMAP_GRID_GAP * 6) / 7,
-          (gridHeight - HEATMAP_GRID_GAP * 5) / 6};
+          (gridHeight - HEATMAP_GRID_GAP * 5) / 6,
+          HEATMAP_GRID_GAP,
+          MONTH_HEADER_HEIGHT,
+          SUMMARY_CARD_HEIGHT,
+          LEGEND_HEIGHT};
 }
 
 int heatmapCellAt(const HeatmapLayout& layout, const int x, const int y) {
   const int relativeX = x - layout.sidePadding;
   const int relativeY = y - layout.gridTop;
   if (relativeX < 0 || relativeY < 0) return -1;
-  const int column = relativeX / (layout.cellWidth + HEATMAP_GRID_GAP);
-  const int row = relativeY / (layout.cellHeight + HEATMAP_GRID_GAP);
-  if (column >= 7 || row >= 6 || relativeX % (layout.cellWidth + HEATMAP_GRID_GAP) >= layout.cellWidth ||
-      relativeY % (layout.cellHeight + HEATMAP_GRID_GAP) >= layout.cellHeight) {
+  const int column = relativeX / (layout.cellWidth + layout.cellGap);
+  const int row = relativeY / (layout.cellHeight + layout.cellGap);
+  if (column >= 7 || row >= 6 || relativeX % (layout.cellWidth + layout.cellGap) >= layout.cellWidth ||
+      relativeY % (layout.cellHeight + layout.cellGap) >= layout.cellHeight) {
     return -1;
   }
   return row * 7 + column;
@@ -163,6 +201,20 @@ int getHeatLevel(const uint64_t readingMs) {
 }
 
 void drawMetricCard(const GfxRenderer& renderer, const Rect& rect, const char* label, const std::string& value) {
+  if (COMPACT_HEATMAP) {
+    AppMetricCard::drawSelectablePanel(renderer, rect, false);
+    constexpr int padding = 3;
+    const int font = SMALL_FONT_ID;
+    const int maxValueWidth = std::max(1, rect.width * 3 / 5);
+    const auto fittedValue = renderer.truncatedText(font, value.c_str(), maxValueWidth, EpdFontFamily::BOLD);
+    const int valueWidth = renderer.getTextWidth(font, fittedValue.c_str(), EpdFontFamily::BOLD);
+    const auto fittedLabel = renderer.truncatedText(font, label, rect.width - 3 * padding - valueWidth);
+    const int y = rect.y + (rect.height - renderer.getLineHeight(font)) / 2;
+    renderer.drawText(font, rect.x + padding, y, fittedLabel.c_str());
+    renderer.drawText(font, rect.x + rect.width - padding - valueWidth, y, fittedValue.c_str(), true,
+                      EpdFontFamily::BOLD);
+    return;
+  }
   AppMetricCard::Options options;
   options.paddingX = 10;
   options.contentInset = 20;
@@ -184,6 +236,7 @@ void drawGoalCheckBadge(const GfxRenderer& renderer, const Rect& rect, const boo
 }
 
 void drawHeatCell(const GfxRenderer& renderer, const Rect& rect, const HeatmapCell& cell) {
+  if (rect.width <= 0 || rect.height <= 0) return;
   const int level = cell.inViewedMonth ? getHeatLevel(cell.readingMs) : 0;
   const Rect fillRect{rect.x + 1, rect.y + 1, std::max(0, rect.width - 2), std::max(0, rect.height - 2)};
   bool textBlack = true;
@@ -214,12 +267,23 @@ void drawHeatCell(const GfxRenderer& renderer, const Rect& rect, const HeatmapCe
 
   const std::string dayText = cell.day == 0 ? "" : std::to_string(cell.day);
   if (!dayText.empty()) {
-    renderer.drawText(SMALL_FONT_ID, rect.x + 6, rect.y + 5, dayText.c_str(), textBlack,
-                      cell.inViewedMonth ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    const auto style = cell.inViewedMonth ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    if (COMPACT_HEATMAP) {
+      const GfxRenderer::ClipScope clip(renderer, rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+      UITheme::drawCenteredText(renderer, rect, SMALL_FONT_ID,
+                                rect.y + (rect.height - renderer.getTextHeight(SMALL_FONT_ID)) / 2, dayText.c_str(),
+                                textBlack, style);
+    } else {
+      renderer.drawText(SMALL_FONT_ID, rect.x + 6, rect.y + 5, dayText.c_str(), textBlack, style);
+    }
   }
 
   if (cell.inViewedMonth && cell.readingMs >= getDailyReadingGoalMs()) {
-    drawGoalCheckBadge(renderer, rect, level >= 4);
+    if (COMPACT_HEATMAP) {
+      renderer.fillRect(rect.x + rect.width - 7, rect.y + rect.height - 7, 3, 3, textBlack);
+    } else {
+      drawGoalCheckBadge(renderer, rect, level >= 4);
+    }
   }
 
   if (cell.isReferenceDay) {
@@ -322,13 +386,21 @@ void drawLegend(const GfxRenderer& renderer, const Rect& rect) {
     const char* label;
   };
   static constexpr LegendLevel LEVELS[] = {{1, "15m+"}, {2, "30m+"}, {3, "60m+"}, {4, "120m+"}, {5, "240m+"}};
+  static constexpr const char* COMPACT_LABELS[] = {"15m", "30m", "60m", "120m", "240m"};
   constexpr int LEVEL_COUNT = sizeof(LEVELS) / sizeof(LEVELS[0]);
 
   const int itemWidth = rect.width / LEVEL_COUNT;
   for (int index = 0; index < LEVEL_COUNT; ++index) {
     const int itemX = rect.x + index * itemWidth;
-    const Rect swatch{itemX + 6, rect.y + 3, LEGEND_SWATCH_SIZE, LEGEND_SWATCH_SIZE};
+    const Rect swatch = COMPACT_HEATMAP ? Rect{itemX + (itemWidth - 8) / 2, rect.y, 8, 8}
+                                        : Rect{itemX + 6, rect.y + 3, LEGEND_SWATCH_SIZE, LEGEND_SWATCH_SIZE};
     drawLegendSwatch(renderer, swatch, LEVELS[index].level);
+    if (COMPACT_HEATMAP) {
+      const auto label = renderer.truncatedText(SMALL_FONT_ID, COMPACT_LABELS[index], itemWidth - 2);
+      UITheme::drawCenteredText(renderer, Rect{itemX, rect.y, itemWidth, rect.height}, SMALL_FONT_ID, rect.y + 10,
+                                label.c_str());
+      continue;
+    }
     // Vertically center the label glyph against the swatch so text and box sit level.
     const int labelY = swatch.y + (LEGEND_SWATCH_SIZE - renderer.getTextHeight(SMALL_FONT_ID)) / 2;
     renderer.drawText(SMALL_FONT_ID, itemX + 28, labelY, LEVELS[index].label);
@@ -502,10 +574,22 @@ void ReadingHeatmapActivity::loop() {
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  const bool previous = mappedInput.wasReleased(MappedInputManager::Button::NavPrevious);
+  if (previous || mappedInput.wasReleased(MappedInputManager::Button::NavNext)) {
+    const int delta = previous ? -1 : 1;
+    if (mappedInput.getHeldTime() >= 650) {
+      goToAdjacentMonth(delta);
+    } else {
+      moveSelection(delta);
+    }
+  }
+#else
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { moveSelection(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { moveSelection(1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { goToAdjacentMonth(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { goToAdjacentMonth(1); });
+#endif
 }
 
 void ReadingHeatmapActivity::render(RenderLock&&) {
@@ -526,40 +610,43 @@ void ReadingHeatmapActivity::render(RenderLock&&) {
   const std::string monthLabel = formatMonthLabel(viewedYear, viewedMonth);
   const std::string selectedDateLabel = ReadingStatsAnalytics::formatDayOrdinalLabel(selectedDayOrdinal);
 
-  GUI.drawSubHeader(renderer, Rect{0, layout.contentTop, pageWidth, MONTH_HEADER_HEIGHT}, monthLabel.c_str(),
+  GUI.drawSubHeader(renderer, Rect{0, layout.contentTop, pageWidth, layout.monthHeaderHeight}, monthLabel.c_str(),
                     selectedDateLabel.empty() ? nullptr : selectedDateLabel.c_str());
 
   const int cardWidth = (pageWidth - layout.sidePadding * 2 - SUMMARY_CARD_GAP) / 2;
   const std::string bestDayValue = monthSummary.bestDayOfMonth > 0
-                                       ? ReadingStatsAnalytics::formatDurationHm(monthSummary.bestDayReadingMs) + " (" +
+                                       ? ReadingStatsAnalytics::formatDurationHm(monthSummary.bestDayReadingMs) +
+                                             (COMPACT_HEATMAP ? "(" : " (") +
                                              std::to_string(monthSummary.bestDayOfMonth) + ")"
                                        : ReadingStatsAnalytics::formatDurationHm(monthSummary.bestDayReadingMs);
-  drawMetricCard(renderer, Rect{layout.sidePadding, layout.summaryTop, cardWidth, SUMMARY_CARD_HEIGHT},
+  drawMetricCard(renderer, Rect{layout.sidePadding, layout.summaryTop, cardWidth, layout.summaryCardHeight},
                  tr(STR_MONTH_TOTAL), ReadingStatsAnalytics::formatDurationHm(monthSummary.totalReadingMs));
   drawMetricCard(
       renderer,
-      Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP, layout.summaryTop, cardWidth, SUMMARY_CARD_HEIGHT},
+      Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP, layout.summaryTop, cardWidth, layout.summaryCardHeight},
       tr(STR_DAYS_READ), std::to_string(monthSummary.daysRead));
   drawMetricCard(renderer,
-                 Rect{layout.sidePadding, layout.summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_CARD_GAP, cardWidth,
-                      SUMMARY_CARD_HEIGHT},
+                 Rect{layout.sidePadding, layout.summaryTop + layout.summaryCardHeight + SUMMARY_CARD_GAP, cardWidth,
+                      layout.summaryCardHeight},
                  tr(STR_BEST_DAY), bestDayValue);
-  drawMetricCard(renderer,
-                 Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP,
-                      layout.summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_CARD_GAP, cardWidth, SUMMARY_CARD_HEIGHT},
-                 tr(STR_STREAK), std::to_string(READING_STATS.getCurrentStreakDays()));
+  drawMetricCard(
+      renderer,
+      Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP,
+           layout.summaryTop + layout.summaryCardHeight + SUMMARY_CARD_GAP, cardWidth, layout.summaryCardHeight},
+      tr(STR_STREAK), std::to_string(READING_STATS.getCurrentStreakDays()));
 
   for (int index = 0; index < 42; ++index) {
     const int row = index / 7;
     const int col = index % 7;
-    const int x = layout.sidePadding + col * (layout.cellWidth + HEATMAP_GRID_GAP);
-    const int y = layout.gridTop + row * (layout.cellHeight + HEATMAP_GRID_GAP);
+    const int x = layout.sidePadding + col * (layout.cellWidth + layout.cellGap);
+    const int y = layout.gridTop + row * (layout.cellHeight + layout.cellGap);
     drawHeatCell(renderer, Rect{x, y, layout.cellWidth, layout.cellHeight}, cells[static_cast<size_t>(index)]);
   }
 
-  drawLegend(renderer, Rect{layout.sidePadding, layout.legendTop, pageWidth - layout.sidePadding * 2, LEGEND_HEIGHT});
+  drawLegend(renderer,
+             Rect{layout.sidePadding, layout.legendTop, pageWidth - layout.sidePadding * 2, layout.legendHeight});
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(COMPACT_HEATMAP ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
 }

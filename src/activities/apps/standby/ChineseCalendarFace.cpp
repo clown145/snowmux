@@ -140,23 +140,24 @@ int verticalCenterY(const GfxRenderer& renderer, int fontId, int bandY, int heig
 // 宜 / 忌 card: black header strip with white label + 2×2 grid of body items.
 void drawYiJiBox(const GfxRenderer& renderer, int x, int y, int w, int h, const char* headerLabel,
                  const char* const items[4]) {
-  constexpr int kHeaderH = 36;
   constexpr int kBorderW = 1;
-  constexpr int kLabelFont = NOTOSANS_12_FONT_ID;
-  constexpr int kItemFont = NOTOSANS_12_FONT_ID;
+  constexpr int kLabelFont = FREEINK_DEVICE_XUESU_300 ? SMALL_FONT_ID : NOTOSANS_12_FONT_ID;
+  constexpr int kItemFont = kLabelFont;
   constexpr int kBodyRows = 2;
   constexpr int kBodyCols = 2;
+  const int headerHeight = FREEINK_DEVICE_XUESU_300 ? renderer.getLineHeight(kLabelFont) + 2 : 36;
+  if (w <= 0 || h <= headerHeight) return;
 
   renderer.drawRect(x, y, w, h, kBorderW, true);
-  renderer.fillRect(x, y, w, kHeaderH, /*state=*/true);
-  renderer.drawLine(x, y + kHeaderH, x + w - 1, y + kHeaderH, true);
+  renderer.fillRect(x, y, w, headerHeight, /*state=*/true);
+  renderer.drawLine(x, y + headerHeight, x + w - 1, y + headerHeight, true);
 
   const int labelW = renderer.getTextWidth(kLabelFont, headerLabel);
-  const int labelY = verticalCenterY(renderer, kLabelFont, y, kHeaderH);
+  const int labelY = verticalCenterY(renderer, kLabelFont, y, headerHeight);
   renderer.drawText(kLabelFont, x + (w - labelW) / 2, labelY, headerLabel, /*black=*/false);
 
-  const int bodyTop = y + kHeaderH;
-  const int rowH = (h - kHeaderH) / kBodyRows;
+  const int bodyTop = y + headerHeight;
+  const int rowH = (h - headerHeight) / kBodyRows;
   const int colW = w / kBodyCols;
   for (int row = 0; row < kBodyRows; ++row) {
     for (int col = 0; col < kBodyCols; ++col) {
@@ -165,6 +166,7 @@ void drawYiJiBox(const GfxRenderer& renderer, int x, int y, int w, int h, const 
       const int cellY = bodyTop + row * rowH;
       const int cx = x + col * colW + (colW - textW) / 2;
       const int cy = verticalCenterY(renderer, kItemFont, cellY, rowH);
+      const GfxRenderer::ClipScope clip(renderer, x + col * colW + 1, cellY, colW - 2, rowH);
       renderer.drawText(kItemFont, cx, cy, item, /*black=*/true);
     }
   }
@@ -178,6 +180,8 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
   const int vw = viewport.width;
   const int vh = viewport.height;
   if (vw <= 0 || vh <= 0) return;
+  constexpr bool compact = FREEINK_DEVICE_XUESU_300;
+  const int footerLineY = viewport.y + vh - (compact ? 58 : kFooterHairlineFromBottom);
 
   // Year row:  二〇二六 · 丙午年
   {
@@ -186,7 +190,8 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     formatYearCjk(day.gregYear, yearCjk, sizeof(yearCjk));
     formatGanzhiYearLabel(day, ganzhiBuf, sizeof(ganzhiBuf));
     const char* row[] = {yearCjk, kDot, ganzhiBuf};
-    drawCenteredRow(renderer, NOTOSANS_14_FONT_ID, viewport, viewport.y + 32, row, 3, /*gap=*/8);
+    drawCenteredRow(renderer, compact ? UI_10_FONT_ID : NOTOSANS_14_FONT_ID, viewport, viewport.y + (compact ? 26 : 32),
+                    row, 3, /*gap=*/8);
   }
 
   // Month + weekday:  5月    星期一
@@ -195,22 +200,23 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     std::snprintf(monthBuf, sizeof(monthBuf), "%u%s", static_cast<unsigned>(day.gregMonth), tr(STR_CAL_MONTH_SUFFIX));
     const uint8_t wi = (day.weekdayIdx < 7) ? day.weekdayIdx : 0;
     const char* row[] = {monthBuf, I18n::getInstance().get(kWeekdayStrIds[wi])};
-    drawCenteredRow(renderer, NOTOSANS_14_FONT_ID, viewport, viewport.y + 80, row, 2, /*gap=*/40);
+    drawCenteredRow(renderer, compact ? UI_10_FONT_ID : NOTOSANS_14_FONT_ID, viewport, viewport.y + (compact ? 52 : 80),
+                    row, 2, /*gap=*/compact ? 18 : 40);
   }
 
   // Hero day digit — SloppyDigits fits to the bounding rect; width-bound.
   {
     const int heroW = static_cast<int>(vw * kHeroWidthRatio);
-    const int heroH = static_cast<int>(vh * kHeroHeightRatio);
+    const int heroH = static_cast<int>(vh * (compact ? 0.22f : kHeroHeightRatio));
     const int heroX = viewport.x + (vw - heroW) / 2;
-    const int heroY = viewport.y + static_cast<int>(vh * kHeroTopRatio);
+    const int heroY = viewport.y + static_cast<int>(vh * (compact ? 0.20f : kHeroTopRatio));
     char buf[4];
     std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(day.gregDay));
     sloppy::draw(renderer, heroStyle, heroSeeds, buf, sloppy::Bounds{heroX, heroY, heroW, heroH});
   }
 
   // Bold divider — sits on the screen's vertical midline.
-  const int dividerY = viewport.y + static_cast<int>(vh * kDividerYRatio);
+  const int dividerY = viewport.y + static_cast<int>(vh * (compact ? 0.45f : kDividerYRatio));
   const int dividerInset = vw / kDividerInsetRatio;
   renderer.drawLine(viewport.x + dividerInset, dividerY, viewport.x + vw - dividerInset, dividerY, kDividerStrokeWidth,
                     /*state=*/true);
@@ -221,14 +227,15 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     formatLunarFull(day, lunar, sizeof(lunar));
     char buf[40];
     std::snprintf(buf, sizeof(buf), "%s   %s", tr(STR_CAL_LUNAR_PREFIX), lunar);
-    renderer.drawCenteredText(NOTOSANS_18_FONT_ID, dividerY + kLunarOffsetBelowDivider, buf);
+    renderer.drawCenteredText(compact ? UI_12_FONT_ID : NOTOSANS_18_FONT_ID,
+                              dividerY + (compact ? 6 : kLunarOffsetBelowDivider), buf);
   }
 
   // Zodiac:  生肖 · 马
   {
     const char* zodiac = chinese_almanac::kZodiacNames[day.yearBranchIdx];
     const char* row[] = {tr(STR_CAL_ZODIAC_LABEL), kDot, zodiac};
-    drawCenteredRow(renderer, SMALL_FONT_ID, viewport, dividerY + kZodiacOffsetBelowDivider, row, 3,
+    drawCenteredRow(renderer, SMALL_FONT_ID, viewport, dividerY + (compact ? 33 : kZodiacOffsetBelowDivider), row, 3,
                     /*gap=*/6);
   }
 
@@ -240,23 +247,25 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     std::snprintf(distanceBuf, sizeof(distanceBuf), tr(STR_CAL_DAYS_TO_NEXT_FMT), termNext,
                   static_cast<int>(day.daysToNextTerm));
     const char* row[] = {tr(STR_CAL_TERM_LABEL), kDot, termCur, kDot, distanceBuf};
-    drawCenteredRow(renderer, NOTOSANS_12_FONT_ID, viewport, viewport.y + static_cast<int>(vh * kTermRowYRatio), row, 5,
-                    /*gap=*/8);
+    drawCenteredRow(renderer, compact ? SMALL_FONT_ID : NOTOSANS_12_FONT_ID, viewport,
+                    viewport.y + static_cast<int>(vh * (compact ? 0.60f : kTermRowYRatio)), row, 5,
+                    /*gap=*/compact ? 4 : 8);
   }
 
   // 宜 / 忌 cards.
   {
-    const int boxW = (vw - kBoxSidePad * 2 - kBoxGap) / 2;
-    const int boxY = viewport.y + static_cast<int>(vh * kBoxTopYRatio);
-    drawYiJiBox(renderer, viewport.x + kBoxSidePad, boxY, boxW, kBoxHeight, tr(STR_CAL_YI),
+    const int sidePad = compact ? 10 : kBoxSidePad;
+    const int boxW = (vw - sidePad * 2 - kBoxGap) / 2;
+    const int boxY = viewport.y + static_cast<int>(vh * (compact ? 0.66f : kBoxTopYRatio));
+    const int boxHeight = compact ? footerLineY - boxY - 5 : kBoxHeight;
+    drawYiJiBox(renderer, viewport.x + sidePad, boxY, boxW, boxHeight, tr(STR_CAL_YI),
                 chinese_almanac::kYiPool[day.yiIdx % 12]);
-    drawYiJiBox(renderer, viewport.x + kBoxSidePad + boxW + kBoxGap, boxY, boxW, kBoxHeight, tr(STR_CAL_JI),
+    drawYiJiBox(renderer, viewport.x + sidePad + boxW + kBoxGap, boxY, boxW, boxHeight, tr(STR_CAL_JI),
                 chinese_almanac::kJiPool[day.jiIdx % 12]);
   }
 
   // Footer:  hairline + "日柱 辛卯 · 冲未羊"
   {
-    const int footerLineY = viewport.y + vh - kFooterHairlineFromBottom;
     renderer.drawLine(viewport.x + 24, footerLineY, viewport.x + vw - 24, footerLineY, true);
 
     char dayPillar[16];
@@ -267,7 +276,8 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     char leftBuf[64];
     std::snprintf(leftBuf, sizeof(leftBuf), "%s %s %s %s%s", tr(STR_CAL_DAY_PILLAR_LABEL), dayPillar, kDot,
                   tr(STR_CAL_CLASH_LABEL), clashBuf);
-    renderer.drawText(SMALL_FONT_ID, viewport.x + 24, viewport.y + vh - kFooterTextFromBottom, leftBuf, /*black=*/true);
+    renderer.drawText(SMALL_FONT_ID, viewport.x + 24,
+                      compact ? footerLineY + 5 : viewport.y + vh - kFooterTextFromBottom, leftBuf, /*black=*/true);
   }
 }
 

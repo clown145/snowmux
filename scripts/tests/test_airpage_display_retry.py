@@ -8,6 +8,26 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class AirPageDisplayRetryTest(unittest.TestCase):
+    def test_monochrome_image_dither_preserves_both_midtones(self):
+        source = (ROOT / 'lib/GfxRenderer/GfxRenderer.h').read_text()
+        run_cpp(r'''
+#include <cassert>
+#include <cstdint>
+struct GfxRenderer {
+''' + method(source, 'static constexpr bool ditherTwoBitPixel(') + r'''
+};
+int main() {
+ const int expected[] = {4, 3, 1, 0};
+ for (uint8_t value = 0; value < 4; ++value) {
+  int black = 0;
+  for (int y = 0; y < 2; ++y)
+   for (int x = 0; x < 2; ++x)
+    black += GfxRenderer::ditherTwoBitPixel(value, x, y);
+  assert(black == expected[value]);
+ }
+}
+''')
+
     def test_display_failure_keeps_store_and_stops_rendering(self):
         source = (ROOT / 'src/activities/apps/airpage/AirPageActivity.cpp').read_text()
         header = (ROOT / 'src/activities/apps/airpage/AirPageActivity.h').read_text()

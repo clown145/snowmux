@@ -42,6 +42,9 @@ class DateTimeSettingsActivity final : public Activity, private UiAppHost {
   bool applyManualTime();
   void cancelManualEdit();
   void confirmManualEdit();
+#if FREEINK_DEVICE_XUESU_300
+  void openSelectedField();
+#endif
 
   static constexpr freeink::ui::ActionId ACTION_STEP = 1;
   static constexpr freeink::ui::ActionId ACTION_CANCEL = 2;

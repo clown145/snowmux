@@ -8,7 +8,8 @@
 #include "Logging.h"
 #include "Memory.h"
 
-void QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const std::string& textPayload) {
+void QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const std::string& textPayload,
+                         const int quietZoneModules) {
   // Dynamically calculate the QR code version based on text length
   // Version 4 holds ~114 bytes, Version 10 ~395, Version 20 ~1066, up to 40
   // qrcode.h max version is 40.
@@ -47,13 +48,18 @@ void QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const 
     // Determine the optimal pixel size.
     const int maxDim = std::min(bounds.width, bounds.height);
 
-    int px = maxDim / qrcode.size;
-    if (px < 1) px = 1;
+    const int quiet = std::max(0, quietZoneModules);
+    const int totalModules = qrcode.size + 2 * quiet;
+    const int px = quiet > 0 ? maxDim / totalModules : std::max(1, maxDim / totalModules);
+    if (px < 1) return;
 
     // Calculate centering X and Y
     const int qrDisplaySize = qrcode.size * px;
     const int xOff = bounds.x + (bounds.width - qrDisplaySize) / 2;
     const int yOff = bounds.y + (bounds.height - qrDisplaySize) / 2;
+    if (quiet > 0) {
+      renderer.fillRect(xOff - quiet * px, yOff - quiet * px, totalModules * px, totalModules * px, false);
+    }
 
     // Draw the QR Code
     for (uint8_t cy = 0; cy < qrcode.size; cy++) {

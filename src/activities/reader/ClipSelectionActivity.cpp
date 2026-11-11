@@ -621,10 +621,17 @@ bool ClipSelectionActivity::handleButtons(const uint8_t buttons) {
   }
 
   if (buttons & Input::INPUT_CONFIRM) {
+#if FREEINK_DEVICE_XUESU_300
+    if (isLookup()) rangeStart = selected;
+#endif
     confirmSelection(isLookup() ? ClippingResult::Action::Lookup : ClippingResult::Action::Clip);
     return true;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  const int delta = static_cast<bool>(buttons & Input::INPUT_NEXT) - static_cast<bool>(buttons & Input::INPUT_PREVIOUS);
+  selectIndex(selected + delta);
+#else
   const int next =
       selectionGeometry::horizontalIndex(selected, static_cast<int>(wordCount), buttons & Input::INPUT_LEFT,
                                          buttons & Input::INPUT_RIGHT, words[selected].isRtl);
@@ -635,6 +642,7 @@ bool ClipSelectionActivity::handleButtons(const uint8_t buttons) {
   } else if (buttons & Input::INPUT_DOWN) {
     moveVertical(1);
   }
+#endif
   return false;
 }
 

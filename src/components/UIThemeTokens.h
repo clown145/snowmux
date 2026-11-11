@@ -10,6 +10,9 @@ inline const ThemeMetrics& uiThemeMetrics(bool upstreamStyle = false) {
     static constexpr ThemeMetrics lyra = [] {
       auto metrics = LyraMetrics::values;
       UiHighDpiProfile::apply(metrics);
+#if FREEINK_DEVICE_XUESU_300
+      metrics.buttonHintsHeight = 0;
+#endif
       return metrics;
     }();
     return lyra;

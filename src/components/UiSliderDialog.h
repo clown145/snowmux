@@ -64,7 +64,10 @@ inline void buildSliderDialogScreen(UiAppHost::UiScreen& screen, freeink::ui::Gf
   const int16_t bandHeight = touch ? 56 : 24;
   const int16_t capLh = screen.target().lineHeight(theme.smallText.font);
   const int16_t sliderH = static_cast<int16_t>(capLh + theme.spaceMd + bandHeight);
-  const int16_t hintsH = touch ? 0 : static_cast<int16_t>(capLh * 2 + theme.spaceSm + theme.spaceMd);
+  const int16_t hintsH =
+      touch || !spec.hintLine1
+          ? 0
+          : static_cast<int16_t>(capLh + theme.spaceMd + (spec.hintLine2 ? capLh + theme.spaceSm : 0));
 
   // Dialog chrome and slots, styled exactly like OptionPopup: bordered popup
   // panel per theme frame metrics, body-font caption, [-] [+] [Confirm] as

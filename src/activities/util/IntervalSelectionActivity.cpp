@@ -131,6 +131,10 @@ void IntervalSelectionActivity::loop() {
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { adjustValue(-smallStep); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { adjustValue(smallStep); });
+#else
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { adjustValue(-smallStep); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { adjustValue(smallStep); });
 
@@ -142,6 +146,7 @@ void IntervalSelectionActivity::loop() {
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this, upDelta] { adjustValue(upDelta); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down},
                                        [this, downDelta] { adjustValue(downDelta); });
+#endif
 }
 
 void IntervalSelectionActivity::formatValue(char* buffer, const size_t size, const int forValue) const {
@@ -162,6 +167,16 @@ void IntervalSelectionActivity::buildIntervalScreen(UiScreen& screen) {
   char readout[64];
   formatValue(readout, sizeof(readout), value);
 
+#if FREEINK_DEVICE_XUESU_300
+  char stepText[24];
+  if (valueFormatId != StrId::STR_NONE_OPT) {
+    snprintf(stepText, sizeof(stepText), I18N.get(valueFormatId), static_cast<unsigned int>(smallStep));
+  } else {
+    snprintf(stepText, sizeof(stepText), "%d", smallStep);
+  }
+  char hint[64];
+  snprintf(hint, sizeof(hint), "%s %s", tr(STR_STEP_HINT_UP_DOWN), stepText);
+#else
   // Step hints: front buttons do the small step, side buttons the large step. Built from
   // separate label + value strings (rather than splitting one localized sentence) so the layout
   // doesn't depend on translators preserving a hidden separator.
@@ -178,6 +193,7 @@ void IntervalSelectionActivity::buildIntervalScreen(UiScreen& screen) {
     snprintf(hints[hintIndex], sizeof(hints[hintIndex]), "%s %s", I18N.get(labelId), stepText);
     hintIndex++;
   }
+#endif
 
   char minText[32];
   formatValue(minText, sizeof(minText), minValue);
@@ -195,8 +211,12 @@ void IntervalSelectionActivity::buildIntervalScreen(UiScreen& screen) {
   spec.stepAction = ACTION_STEP;
   spec.okAction = ACTION_OK;
   spec.chromeAction = ACTION_CHROME;
+#if FREEINK_DEVICE_XUESU_300
+  spec.hintLine1 = hint;
+#else
   spec.hintLine1 = hints[0];
   spec.hintLine2 = hints[1];
+#endif
   buildSliderDialogScreen(screen, uiTarget, mappedInput, spec);
 }
 

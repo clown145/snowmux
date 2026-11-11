@@ -10,6 +10,7 @@
 #include "CrossPointSettings.h"
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -333,6 +334,24 @@ void BleSettingsActivity::keepLearned(const bool hold) {
 void BleSettingsActivity::onRowLongPress(const int index) {
   if (view == View::Mapping) clearMapping(index);
 }
+
+#if FREEINK_DEVICE_XUESU_300
+const char* BleSettingsActivity::xuesuQuickActionLabel() const {
+  return view == View::Mapping && learnAction == bleturner::Action::None && nav.selected >= 0 &&
+                 nav.selected < static_cast<int>(std::size(MAP_ACTIONS))
+             ? tr(STR_XUESU_CLEAR_MAPPING)
+             : nullptr;
+}
+
+void BleSettingsActivity::runXuesuQuickAction() {
+  const int index = nav.selected;
+  startActivityForResultWith<ConfirmationActivity>(
+      [this, index](const ActivityResult& result) {
+        if (!result.isCancelled) clearMapping(index);
+      },
+      tr(STR_XUESU_CLEAR_MAPPING), I18N.get(MAP_LABELS[index]), tr(STR_CANCEL), tr(STR_CLEAR_BUTTON));
+}
+#endif
 
 void BleSettingsActivity::clearMapping(const int index) {
   if (index < 0 || index >= static_cast<int>(std::size(MAP_ACTIONS)) || learnAction != bleturner::Action::None) return;

@@ -18,6 +18,10 @@ namespace fui = freeink::ui;
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
   remoteInput.reset();
   gpio.update();
+#if FREEINK_DEVICE_XUESU_300
+  xuesuConfirmFiltered = false;
+  xuesuConfirmSingle = false;
+#endif
 #if FREEINK_CAP_BLE_HID_HOST
   // Only legacy key capture drains the SDK directly. Normal events belong to BlePageTurner.
   pollBle();
@@ -495,10 +499,30 @@ bool MappedInputManager::injectRemoteClick(const RemoteButton button) {
   return remoteInput.click(button);
 }
 
+#if FREEINK_DEVICE_XUESU_300
+bool MappedInputManager::resolveXuesuConfirmShortcut(const bool enabled, const uint32_t screenVisit) const {
+  if (!enabled || xuesuConfirmVisit != screenVisit) xuesuConfirmInput.reset();
+  xuesuConfirmVisit = screenVisit;
+  xuesuConfirmFiltered = enabled;
+  if (!enabled) return false;
+
+  const bool interrupted = gpio.isPressed(HalGPIO::BTN_BACK) || gpio.wasReleased(HalGPIO::BTN_BACK) ||
+                           gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_DOWN) || hasRemoteClick();
+  using Action = XuesuConfirmInput::Action;
+  const auto action = xuesuConfirmInput.update(millis(), mapButton(Button::Confirm, &HalGPIO::wasReleased),
+                                                gpio.isXuesuConfirmHeld(), interrupted);
+  xuesuConfirmSingle = action == Action::Single;
+  return action == Action::Double;
+}
+#endif
+
 bool MappedInputManager::wasPressed(const Button button) const {
   if (remoteEdge(button)) return true;
   if (button == Button::Confirm && homeAction == HomeButtonAction::Confirm) return true;
   if (button == Button::Back && wasBackGesture()) return true;
+#if FREEINK_DEVICE_XUESU_300
+  if (button == Button::Confirm && xuesuConfirmFiltered) return xuesuConfirmSingle;
+#endif
 #if FREEINK_CAP_TOUCH
   if (button == Button::Confirm && wasPowerConfirmClick()) return true;
 #endif
@@ -509,6 +533,9 @@ bool MappedInputManager::wasReleased(const Button button) const {
   if (remoteEdge(button)) return true;
   if (button == Button::Confirm && homeAction == HomeButtonAction::Confirm) return true;
   if (button == Button::Back && wasBackGesture()) return true;
+#if FREEINK_DEVICE_XUESU_300
+  if (button == Button::Confirm && xuesuConfirmFiltered) return xuesuConfirmSingle;
+#endif
 #if FREEINK_CAP_TOUCH
   if (button == Button::Confirm && wasPowerConfirmClick()) return true;
 #endif

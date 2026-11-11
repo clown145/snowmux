@@ -102,6 +102,9 @@ class ReaderActivity : public Activity {
   void render(RenderLock&& lock) override;
 
   bool isReaderActivity() const final { return true; }
+#if FREEINK_DEVICE_XUESU_300
+  bool allowsXuesuQuickPanel() const final { return !inputOverPage(); }
+#endif
   bool acceptsRemoteInput() const final { return pageRendered.load(std::memory_order_acquire); }
   bool handleForcedRefresh() final;
 };

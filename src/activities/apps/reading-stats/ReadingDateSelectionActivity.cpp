@@ -10,6 +10,7 @@
 
 #include "ReadingStatsStore.h"
 #include "activities/apps/GameUi.h"
+#include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/HeaderDateUtils.h"
@@ -22,6 +23,7 @@ constexpr int MIN_MONTH = 1;
 constexpr int MAX_MONTH = 12;
 constexpr int MIN_YEAR = 2024;
 constexpr int MAX_YEAR = 2099;
+constexpr StrId FIELD_NAMES[] = {StrId::STR_DAY, StrId::STR_MONTH, StrId::STR_YEAR};
 
 bool isLeapYear(const int year) { return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0); }
 
@@ -105,6 +107,22 @@ void ReadingDateSelectionActivity::finishWithDate() {
   finish();
 }
 
+#if FREEINK_DEVICE_XUESU_300
+void ReadingDateSelectionActivity::openSelectedField() {
+  const int values[] = {static_cast<int>(day), static_cast<int>(month), year};
+  const int minimums[] = {MIN_DAY, MIN_MONTH, MIN_YEAR};
+  const int maximums[] = {static_cast<int>(getDaysInMonth(year, month)), MAX_MONTH, MAX_YEAR};
+  const int current = values[selectedField];
+  startActivityForResultWith<IntervalSelectionActivity>(
+      [this, current](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          if (const auto* value = std::get_if<IntervalResult>(&result.data)) adjustSelectedField(value->value - current);
+        }
+      },
+      "ReadingDateValue", FIELD_NAMES[selectedField], current, minimums[selectedField], maximums[selectedField], 1, 1);
+}
+#endif
+
 void ReadingDateSelectionActivity::loop() {
   // Exit on the Back release edge (consistent with the menu and sibling screens) so the same
   // Back actuation can't pop here and then leak its release to the parent's Back handler.
@@ -116,6 +134,21 @@ void ReadingDateSelectionActivity::loop() {
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (selectedField == FIELD_COUNT) finishWithDate();
+    else openSelectedField();
+    return;
+  }
+  buttonNavigator.onNextRelease([this] {
+    selectedField = ButtonNavigator::nextIndex(selectedField, FIELD_COUNT + 1);
+    requestUpdate();
+  });
+  buttonNavigator.onPreviousRelease([this] {
+    selectedField = ButtonNavigator::previousIndex(selectedField, FIELD_COUNT + 1);
+    requestUpdate();
+  });
+#else
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     finishWithDate();
     return;
@@ -160,6 +193,7 @@ void ReadingDateSelectionActivity::loop() {
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { adjustSelectedField(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { adjustSelectedField(1); });
+#endif
 }
 
 void ReadingDateSelectionActivity::render(RenderLock&&) {
@@ -167,26 +201,33 @@ void ReadingDateSelectionActivity::render(RenderLock&&) {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
-  const int sidePadding = metrics.contentSidePadding;
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+#if FREEINK_DEVICE_XUESU_300
+  const int listHeight = renderer.getScreenHeight() - contentTop - metrics.verticalSpacing;
+#else
+  const int sidePadding = metrics.contentSidePadding;
   const int listHeight = metrics.listWithSubtitleRowHeight * FIELD_COUNT;
+#endif
 
   HeaderDateUtils::drawHeaderWithDate(renderer, tr(STR_SET_DATE), getSelectedDateLabel().c_str());
 
-  GUI.drawList(
-      renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField,
-      [](int index) {
-        if (index == 0) return std::string(tr(STR_DAY));
-        if (index == 1) return std::string(tr(STR_MONTH));
-        return std::string(tr(STR_YEAR));
-      },
-      [this](int index) {
-        if (index == 0) return formatTwoDigits(day);
-        if (index == 1) return formatTwoDigits(month);
-        return std::to_string(year);
-      },
-      [](int) { return UIIcon::Recent; }, nullptr, false);
+  const auto rowTitle = [](int index) {
+    return std::string(I18N.get(index == FIELD_COUNT ? StrId::STR_SAVE : FIELD_NAMES[index]));
+  };
+  const auto rowValue = [this](int index) {
+    if (index == 0) return formatTwoDigits(day);
+    if (index == 1) return formatTwoDigits(month);
+    return index == 2 ? std::to_string(year) : std::string();
+  };
+#if FREEINK_DEVICE_XUESU_300
+  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT + 1, selectedField, rowTitle, nullptr,
+               nullptr, rowValue, true);
+#else
+  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField, rowTitle, rowValue,
+               [](int) { return UIIcon::Recent; }, nullptr, false);
+#endif
 
+#if !FREEINK_DEVICE_XUESU_300
   const int hintTop = contentTop + listHeight + metrics.verticalSpacing;
   const int hintWidth = pageWidth - sidePadding * 2;
   const std::string hint = renderer.truncatedText(
@@ -212,5 +253,6 @@ void ReadingDateSelectionActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONFIRM), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+#endif
   renderer.displayBuffer();
 }

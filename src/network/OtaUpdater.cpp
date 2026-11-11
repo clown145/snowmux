@@ -61,7 +61,7 @@ static_assert(releaseUrlCapacity < 256);
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
-#if FREEINK_DEVICE_PICCO
+#if FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300
   return UNSUPPORTED_CHANNEL;
 #endif
   channel = requestedChannel;
@@ -180,7 +180,7 @@ bool OtaUpdater::isUpdateNewer() const {
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
-#if FREEINK_DEVICE_PICCO
+#if FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300
   return UNSUPPORTED_CHANNEL;
 #endif
   if (!isUpdateNewer()) {

@@ -29,4 +29,6 @@ class SettingsListActivity final : public UiListActivity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  MainTab mainTab() const override { return FREEINK_DEVICE_XUESU_300 ? MainTab::Settings : MainTab::None; }
+  void selectMainTabContentEdge(MainTabContentEdge edge) override;
 };

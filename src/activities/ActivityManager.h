@@ -81,6 +81,7 @@ class ActivityManager {
   // Cross-task render request flag. requestUpdate() may set it from any task;
   // loop() consumes and clears it with exchange(false).
   std::atomic<bool> requestedUpdate{false};
+  std::atomic<bool> sleepRequested{false};
   std::atomic<uint32_t> idleRenderGeneration{0};
 
   // Counts screen changes, so the Bluetooth page turner can tell one visit of a book from the next.
@@ -134,6 +135,8 @@ class ActivityManager {
   void goToPlugins(bool showOpds);
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
+  void requestSleep() { sleepRequested.store(true, std::memory_order_relaxed); }
+  bool takeSleepRequest() { return sleepRequested.exchange(false, std::memory_order_relaxed); }
   void goToBoot();
   bool goToPostOtaBoot(bool allowAutoPreload);
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
@@ -179,6 +182,9 @@ class ActivityManager {
   bool remoteClick(RemoteButton button);
   // Home is in front and has painted a frame of its own (not one left from the screen before).
   bool isForegroundHomeShown() const;
+#if FREEINK_DEVICE_XUESU_300
+  bool showsMainTabStatusBar() const;
+#endif
   uint32_t visit() const { return screenVisit; }
   bool remoteTurn(bool forward, bool chapter);
   // A remote button mapped to the reader menu (true) or to a new clipping (false).

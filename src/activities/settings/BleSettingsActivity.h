@@ -19,6 +19,11 @@ class BleSettingsActivity final : public UiListActivity {
 
   void onEnter() override;
   void loop() override;
+#if FREEINK_DEVICE_XUESU_300
+  bool keepsBluetoothAlive() const override { return true; }
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
 
  private:
   int listCount() const override { return static_cast<int>(rows.size()); }

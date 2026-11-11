@@ -412,6 +412,12 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::loop() {
+  // Xuesu has one pair of direction keys. They must reach both books and tabs.
+#if FREEINK_DEVICE_XUESU_300
+  constexpr bool flatKeyNavigation = true;
+#else
+  constexpr bool flatKeyNavigation = false;
+#endif
   const int menuCount = getMenuItemCount();
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int bookCount = static_cast<int>(recentBooks.size());
@@ -452,7 +458,7 @@ void HomeActivity::loop() {
     }
   };
 
-  if (isCarousel) {
+  if (isCarousel && !flatKeyNavigation) {
     const bool coversFocused = selectorIndex < bookCount;
     const int rowIndex = coversFocused ? selectorIndex : selectorIndex - bookCount;
 
@@ -489,7 +495,7 @@ void HomeActivity::loop() {
       }
       return;
     }
-  } else if (!coverGridUi) {
+  } else if (!coverGridUi || flatKeyNavigation) {
     buttonNavigator.onNext([this, menuCount] {
       selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
       requestUpdate();
@@ -502,7 +508,8 @@ void HomeActivity::loop() {
   }
 
   // The standby shortcut keeps ownership of Back when enabled.
-  if (!SETTINGS.standbyShortcutEnabled && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+  if (!flatKeyNavigation && !SETTINGS.standbyShortcutEnabled &&
+      mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       hasContinueReading && !recentBooks.empty()) {
     onRecentBookSelected(recentBooks[0].path);
     return;
@@ -519,6 +526,7 @@ void HomeActivity::loop() {
       activateSelection();
       return;
     }
+    if (flatKeyNavigation) return;
     // Side page buttons walk the covers, front Left/Right walk the tabs
     // (selectorIndex is flat: books first, then the tab items). A press while
     // selection sits in the other band jumps into this band first.

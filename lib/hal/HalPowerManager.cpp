@@ -11,10 +11,17 @@
 #include <PowerManager.h>
 #include <WiFi.h>
 #include <driver/gpio.h>
+#if FREEINK_DEVICE_XUESU_300
+#include <driver/rtc_io.h>
+#endif
 #include <esp_sleep.h>
 #include <soc/soc_caps.h>
 
 #include <cassert>
+#if FREEINK_DEVICE_XUESU_300
+#include <algorithm>
+#include <array>
+#endif
 
 #if CONFIG_IDF_TARGET_ESP32C3 && FREEINK_CAP_BLE_HID_HOST
 #include <BleKeyboardHost.h>
@@ -37,6 +44,25 @@ HalPowerManager powerManager;  // Singleton instance
 static constexpr gpio_num_t XTEINK_C3_GPIO13 = GPIO_NUM_13;
 
 namespace {
+#if FREEINK_DEVICE_XUESU_300
+bool validFullBatteryReference(uint16_t millivolts) { return millivolts >= 4100 && millivolts <= 4300; }
+
+uint16_t sampleXuesuBatteryMillivolts(const BatteryMonitor& battery) {
+  std::array<uint16_t, 16> samples;
+  for (auto& sample : samples) {
+    sample = battery.readMillivolts();
+    // ADC2 can time out while shared with Wi-Fi.
+    if (sample < 2500 || sample > 4500) return 0;
+    delayMicroseconds(200);
+  }
+  std::sort(samples.begin(), samples.end());
+  constexpr size_t discard = 2;
+  constexpr size_t count = samples.size() - 2 * discard;
+  uint32_t sum = 0;
+  for (size_t i = discard; i < discard + count; ++i) sum += samples[i];
+  return (sum + count / 2) / count;
+}
+#endif
 #if !FREEINK_DEVICE_READPICO
 struct StandbyRetention {
   int8_t pin;
@@ -173,6 +199,12 @@ void HalPowerManager::begin() {
   if (BoardConfig::ACTIVE.batteryAdc >= 0) {
     pinMode(BoardConfig::ACTIVE.batteryAdc, INPUT);
   }
+#if FREEINK_DEVICE_XUESU_300
+  // The divider is the only ADC input on this board. Set the Arduino default
+  // before the first read so channel setup and its calibration use the same gain.
+  analogSetAttenuation(ADC_2_5db);
+  pollBattery();
+#endif
   // Board charger setup (Picco SGM41562: stock charge voltage and limits); a
   // no-op on boards without a configurable charger.
   if (BatteryMonitor::configureCharger()) LOG_INF("PWR", "Charger configured");
@@ -220,6 +252,23 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   xSemaphoreGive(modeMutex);
 #endif
 }
+
+#if FREEINK_DEVICE_XUESU_300
+bool HalPowerManager::armXuesuDeepSleep() const {
+  constexpr auto confirm = static_cast<gpio_num_t>(xuesu300::confirmKeyPin);
+  constexpr uint64_t wakeMask = 1ULL << confirm;
+  if (digitalRead(confirm) == LOW) return false;
+
+  esp_err_t err = rtc_gpio_pulldown_dis(confirm);
+  if (err == ESP_OK) err = rtc_gpio_pullup_en(confirm);
+  if (err == ESP_OK) err = esp_sleep_enable_ext1_wakeup_io(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
+  if (err == ESP_OK) return true;
+
+  esp_sleep_disable_ext1_wakeup_io(wakeMask);
+  LOG_ERR("PWR", "Failed to arm Xuesu wake GPIO: %s", esp_err_to_name(err));
+  return false;
+}
+#endif
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio, const bool wakeOnHeldButton) const {
   // Frontlight and touch may share I2C; turn the light off before releasing it.
@@ -322,7 +371,12 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio, const bool wakeOnHeldButton)
   }
 #endif
 
-#if !FREEINK_DEVICE_WAVESHARE_EPAPER_397
+#if FREEINK_DEVICE_XUESU_300
+  // The confirm key is wired to an RTC pin and was armed before the SD card
+  // and display were stopped. Wait for any new press during teardown to end.
+  while (digitalRead(xuesu300::confirmKeyPin) == LOW) delay(10);
+  freeink::PowerManager::deepSleep();
+#elif !FREEINK_DEVICE_WAVESHARE_EPAPER_397
   if (wakeOnHeldButton) {
     freeink::PowerManager::armPowerButtonWakeup();
     freeink::PowerManager::deepSleep();
@@ -468,16 +522,65 @@ bool HalPowerManager::holdWhileUsbPowered(HalGPIO& gpio, void (*onStatus)(bool c
 }
 #endif
 
+#if FREEINK_DEVICE_XUESU_300
+HalPowerManager::BatteryCalibrationResult HalPowerManager::sampleFullBatteryReference(uint16_t& fullMv) const {
+  static const BatteryMonitor battery;
+  fullMv = 0;
+  constexpr unsigned sampleCount = 10;
+  uint32_t sum = 0;
+  for (unsigned i = 0; i < sampleCount; ++i) {
+    if (i != 0) delay(50);
+    if (battery.isCharging()) return BatteryCalibrationResult::Charging;
+    const uint16_t millivolts = sampleXuesuBatteryMillivolts(battery);
+    if (millivolts == 0) return BatteryCalibrationResult::ReadFailed;
+    if (!validFullBatteryReference(millivolts)) return BatteryCalibrationResult::OutOfRange;
+    sum += millivolts;
+  }
+  if (battery.isCharging()) return BatteryCalibrationResult::Charging;
+  fullMv = (sum + sampleCount / 2) / sampleCount;
+  return BatteryCalibrationResult::Ready;
+}
+
+void HalPowerManager::setFullBatteryReference(uint16_t fullMv) {
+  if (!validFullBatteryReference(fullMv)) fullMv = 0;
+  if (fullMv == _batteryFullReferenceMv) return;
+  _batteryFullReferenceMv = fullMv;
+  LOG_INF("PWR", "Xuesu full battery reference: %u mV", fullMv);
+  _batteryLastPollMs = 0;
+  pollBattery();
+}
+
+bool HalPowerManager::pollBattery() {
+  constexpr unsigned long pollIntervalMs = 15000;
+  const unsigned long now = millis();
+  if (_batteryLastPollMs != 0 && now - _batteryLastPollMs < pollIntervalMs) return false;
+  _batteryLastPollMs = now;
+
+  static const BatteryMonitor battery;
+  const uint16_t rawMv = sampleXuesuBatteryMillivolts(battery);
+  if (rawMv == 0) return false;
+  const uint16_t reference = _batteryFullReferenceMv;
+  const uint16_t correctedMv =
+      reference ? (uint32_t{rawMv} * xuesu300::batteryFullMillivolts + reference / 2) / reference : rawMv;
+  const uint16_t percent = xuesu300::batteryPercentFromMillivolts(correctedMv);
+  const uint16_t previous = _batteryCachedPercent.exchange(percent, std::memory_order_relaxed);
+  LOG_DBG("PWR", "Xuesu battery %u mV, %u%%, charging=%d (corrected %u mV)", rawMv, percent, battery.isCharging(),
+          correctedMv);
+  return previous != percent;
+}
+#endif
+
 uint16_t HalPowerManager::getBatteryPercentage() const {
-#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+#if FREEINK_DEVICE_XUESU_300
+  return _batteryCachedPercent.load(std::memory_order_relaxed);
+#elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
   const unsigned long now = millis();
   if (_batteryLastPollMs != 0 && (now - _batteryLastPollMs) < BATTERY_POLL_MS) return _batteryCachedPercent;
   _batteryLastPollMs = now;
   uint16_t percent = 0;
   if (Waveshare397Power::readBatteryPercentage(percent)) _batteryCachedPercent = percent;
   return _batteryCachedPercent;
-#endif
-
+#else
   static const BatteryMonitor battery;
   if (BoardConfig::ACTIVE.batteryGauge.gaugeAddr != 0) {
     const unsigned long now = millis();
@@ -501,6 +604,7 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     _batteryCachedPercent = (_batteryCachedPercent * 9 + battery.readPercentage() * 10) / 10;
   }
   return _batteryCachedPercent / 10;
+#endif
 }
 
 HalPowerManager::Lock::Lock() {

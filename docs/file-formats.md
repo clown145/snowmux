@@ -103,6 +103,10 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Versions 90 / 91
+
+Rebuild pagination to turn image-only EPUB note references into inline numbered links. These markers do not count toward source text offsets. The extracted image namespace changes to `img3_` because note icons no longer consume an image index.
+
 ### Versions 88 / 89
 
 Invalidate completed and partial section caches for font-size-based line spacing,

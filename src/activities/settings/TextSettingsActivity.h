@@ -13,11 +13,10 @@
 #include "components/OptionPopup.h"
 #include "components/themes/BaseTheme.h"
 
-// Reader text settings with a shared live preview pane: tab bar
-// (Font | Size | Layout | Style) is position 0 of the Up/Down nav ring, same
-// idiom as SettingsActivity. Family/Size rows apply on Confirm; Layout/Style
-// rows toggle or open an OptionPopup picker. (Tab::Family/Style are the enum
-// names for the Font/Style tabs.)
+// Reader text settings with a shared live preview pane. Ring position 0 is
+// the tab bar, followed by the list rows. Snow uses Up/Down to switch tabs
+// when the bar has focus and Confirm to enter the list. Family/Size rows
+// apply on Confirm; Layout/Style rows toggle or open a picker.
 class TextSettingsActivity final : public UiTabListActivity {
  public:
   enum class Tab : uint8_t { Family, Size, Layout, Style, Count };
@@ -79,6 +78,9 @@ class TextSettingsActivity final : public UiTabListActivity {
   void drawFooter() override;
   bool handleButtons() override;
   bool handleCustomInput() override;
+#if FREEINK_DEVICE_XUESU_300
+  void navigateButtons() override;
+#endif
 
   void applyFamily(int listIndex);
   void applySize(int listIndex);
@@ -105,6 +107,8 @@ class TextSettingsActivity final : public UiTabListActivity {
   int styleRowCount() const;
   // Button-hint label for Confirm at the current ring position.
   const char* confirmLabelText() const;
+  bool usesSidePreview() const;
+  void drawPreview(const Rect& bounds, const char* caption);
   void switchTab(int direction = 1);
 
   // Row storage for the active tab: rowItems_ (label/actionValue) is

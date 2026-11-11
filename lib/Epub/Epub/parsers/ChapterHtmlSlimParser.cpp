@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <iterator>
 #include <new>
 
@@ -1676,6 +1677,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   if (matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS))) {
+    // A note icon is an inline reference, even when book images are hidden.
+    // Keep it in the text flow so the footnote belongs to the marker's page.
+    if (self->insideFootnoteLink && self->semanticNoteRef && self->currentFootnote.href[0]) {
+      if (!self->currentFootnoteLinkTextLen) {
+        char marker[16];
+        const int length = std::snprintf(marker, sizeof(marker), "[%u]", ++self->imageNoteNumber);
+        self->syntheticCharacterData = true;
+        self->characterData(userData, marker, length);
+        self->syntheticCharacterData = false;
+        if (self->hasFailed()) return;
+      }
+      self->skipUntilDepth = self->depth;
+      ++self->depth;
+      return;
+    }
     std::string src;
     std::string alt;
     if (atts != nullptr) {
@@ -2073,6 +2089,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         self->nextWordContinues = true;
       }
       self->insideFootnoteLink = true;
+      const char* epubType = getAttribute(atts, "epub:type");
+      const char* role = getAttribute(atts, "role");
+      const char* linkClass = getAttribute(atts, "class");
+      self->semanticNoteRef = (epubType && strcmp(epubType, "noteref") == 0) ||
+                              (role && strcmp(role, "doc-noteref") == 0) ||
+                              (linkClass && strcmp(linkClass, "duokan-footnote") == 0);
       self->footnoteLinkDepth = self->depth;
       self->currentFootnoteLinkId = self->currentTextBlock ? self->currentTextBlock->addLinkTarget(href) : 0;
       self->currentFootnote.href[0] = '\0';
@@ -2788,6 +2810,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->pendingFootnotes.push_back({wordIndex, entry});
     }
     self->insideFootnoteLink = false;
+    self->semanticNoteRef = false;
     self->currentFootnoteLinkId = 0;
   }
 

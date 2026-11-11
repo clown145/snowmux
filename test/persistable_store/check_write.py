@@ -16,6 +16,7 @@ if __name__ == "__main__":
     analytics = (ROOT / "src/JsonSettingsIO.cpp").read_text()
     functions = "\n".join([
         method(store, "bool PersistableStoreBase::recoverTempFile("),
+        method(store, "bool PersistableStoreBase::replaceStagedFile("),
         method(store, "bool PersistableStoreBase::writeDocToFile("),
         method(store, "bool PersistableStoreBase::readDocFromFile("),
         method(analytics, "bool saveJsonDocumentToFile("),
@@ -36,6 +37,7 @@ if __name__ == "__main__":
 #include <fstream>
 #include <string>
 #define LOG_ERR(...) ((void)0)
+constexpr char ROLLBACK_SUFFIX[] = ".rollback";
 struct HalStorage {
   inline static int lockDepth = 0;
   struct StorageLock {
@@ -84,14 +86,14 @@ struct StorageProbe {
   bool rename(const char* a, const char* b) {
     ++calls;
     return !failRename && !std::filesystem::exists(resolve(b)) &&
-           std::rename(resolve(a).c_str(), resolve(b).c_str()) == 0;
+           std::rename(resolve(a).string().c_str(), resolve(b).string().c_str()) == 0;
   }
   bool openFileForWrite(const char*, const char* p, HalFile& out) {
     assert(HalStorage::lockDepth > 0);
     ++calls;
     if (failOpenWrite) return false;
     out.remaining = writeLimit;
-    out.file = std::fopen(resolve(p).c_str(), "wb");
+    out.file = std::fopen(resolve(p).string().c_str(), "wb");
     return out.file;
   }
   String readFile(const char* path) {
@@ -102,7 +104,8 @@ struct StorageProbe {
   }
 } Storage;
 struct PersistableStoreBase {
-  static bool writeDocToFile(const char*, const JsonDocument&);
+  static bool writeDocToFile(const char*, const JsonDocument&, bool = false);
+  static bool replaceStagedFile(const char*, const char*);
   static bool recoverTempFile(const char*);
   static bool readDocFromFile(const char*, JsonDocument&);
 };
@@ -201,7 +204,10 @@ int main(int argc, char** argv) {
     assert(read(target) == "{}");
     std::printf("%s: 10 persistence cases passed with ArduinoJson %s\n", name, ARDUINOJSON_VERSION);
   };
-  runCases("stores/bookmarks", PersistableStoreBase::writeDocToFile);
+  const auto saveStore = [](const char* path, const JsonDocument& doc) {
+    return PersistableStoreBase::writeDocToFile(path, doc);
+  };
+  runCases("stores/bookmarks", saveStore);
   runCases("analytics",
            [](const char* path, const JsonDocument& doc) { return saveJsonDocumentToFile("TEST", path, doc); });
   const auto loadStore = [](const char* path, int& value) {
@@ -226,7 +232,7 @@ int main(int argc, char** argv) {
   using Load = bool (*)(const char*, int&);
   struct Mode { const char* name; Save save; Load load; };
   for (const Mode mode : {
-           Mode{"stores", PersistableStoreBase::writeDocToFile, loadStore},
+           Mode{"stores", saveStore, loadStore},
            Mode{"statistics", [](const char* p, const JsonDocument& d) {
                   return saveJsonDocumentToFile("TEST", p, d); }, loadStats},
            Mode{"achievements", [](const char* p, const JsonDocument& d) {

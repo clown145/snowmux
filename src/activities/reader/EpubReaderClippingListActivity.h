@@ -19,6 +19,10 @@ class EpubReaderClippingListActivity final : public UiListActivity {
   void openSelected();
   void readSelected();
   void showDeleteConfirmation();
+#if FREEINK_DEVICE_XUESU_300
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override { showDeleteConfirmation(); }
+#endif
   void deleteSelected();
 
   int listCount() const override;

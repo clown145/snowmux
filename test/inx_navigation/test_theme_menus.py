@@ -852,6 +852,7 @@ struct InxRecentActivity : UiListActivity {
  std::atomic<int> visibleStart{0},visibleCount{0};
  InxRecentLayout layout()const{return chosen;}
  Rect contentRect()const{return content;}
+ Rect flowCarouselRect(const Rect& rect)const{return InxRecentGeometry::flowCarouselRect(rect);}
  bool handleListSwipe(MappedInputManager::SwipeDir,int,int);
  bool hasContentSelection()const;
  int initialConfirmIndex()const;
@@ -1127,8 +1128,9 @@ struct ReadingStatsActivity {
  int touchTargetCount=0;
  bool renderedCoverMissing=false,contentSelectionVisibleForFrame=false;
  GfxRenderer renderer;
+ Rect content{0,90,480,670};
  bool usesMainTabBar()const{return true;}
- Rect pageContentRect()const{return Rect{0,90,480,670};}
+ Rect pageContentRect()const{return content;}
  void drawPageHeader(Rect,const char*){}
  struct Labels {const char *btn1="",*btn2="",*btn3="",*btn4="";};
  Labels mainTabButtonLabels(const char*,const char*,bool){return {};}
@@ -1148,6 +1150,19 @@ int main(){
   assert(theme.selections.size()==1 && same(theme.selections.front(),view?cover:grid));
   for(int i=0;i<page.touchTargetCount;++i)assert(page.touchTargets[i].entry==(view?view:(i?0:1)));
   theme.selections.clear();
+ }
+ for(Rect content:{Rect{0,72,300,288},Rect{0,72,400,188}}){
+  for(int view:{0,1}){
+   ReadingStatsActivity page;page.content=content;page.renderInx(view);
+   assert(page.renderer.covers.empty());
+   for(const auto& grid:page.renderer.grids){
+    assert(grid.height>0 && grid.y>=content.y && grid.y+grid.height<=content.y+content.height);
+   }
+   for(int i=0;i<page.touchTargetCount;++i){
+    const auto bounds=page.touchTargets[i].bounds;
+    assert(bounds.height>0 && bounds.y>=content.y && bounds.y+bounds.height<=content.y+content.height);
+   }
+  }
  }
  READING_STATS.books.clear();ReadingStatsActivity empty;empty.renderInx(0);
  assert(empty.renderer.covers.empty() && empty.touchTargetCount==3 && theme.selections.empty());

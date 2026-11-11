@@ -58,7 +58,9 @@ void BaseTheme::drawSplash(const GfxRenderer& renderer, const char* status, cons
     if (version) {
       const int versionY =
           safe.y + safe.height - UiHighDpiProfile::contentPadding - renderer.getLineHeight(SMALL_FONT_ID);
-      UITheme::drawCenteredText(renderer, safe, SMALL_FONT_ID, versionY, version);
+      const auto fitted =
+          renderer.truncatedText(SMALL_FONT_ID, version, safe.width - UiHighDpiProfile::contentPadding * 2);
+      UITheme::drawCenteredText(renderer, safe, SMALL_FONT_ID, versionY, fitted.c_str());
     }
     return;
   }
@@ -66,7 +68,11 @@ void BaseTheme::drawSplash(const GfxRenderer& renderer, const char* status, cons
   renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
   renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, status);
-  if (version) renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, version);
+  if (version) {
+    const int padding = UITheme::getInstance().getMetrics().contentSidePadding;
+    const auto fitted = renderer.truncatedText(SMALL_FONT_ID, version, pageWidth - padding * 2);
+    renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, fitted.c_str());
+  }
 }
 
 void BaseTheme::setCheckboxRow(freeink::ui::ListItem& item, const bool checked) {
@@ -381,7 +387,13 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
 
 // Retain the established theme component interface.
 // cppcheck-suppress functionStatic
-bool BaseTheme::buttonHintsVisible() const { return !gpio.hasTouch() && SETTINGS.showButtonHints; }
+bool BaseTheme::buttonHintsVisible() const {
+#if FREEINK_DEVICE_XUESU_300
+  return false;
+#else
+  return !gpio.hasTouch() && SETTINGS.showButtonHints;
+#endif
+}
 
 void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
   if (gpio.hasTouch()) {
@@ -563,13 +575,19 @@ int BaseTheme::headerStatusInset(bool upstreamStyle) { return uiThemeMetrics(ups
 
 int BaseTheme::headerStatusHeight() { return HeaderStatusMetrics::stripHeight + BoardConfig::ACTIVE.headerOffsetY; }
 
-void BaseTheme::drawHeaderStatus(const GfxRenderer& renderer, const Rect rect, const char* date) {
+void BaseTheme::drawHeaderStatus(const GfxRenderer& renderer, const Rect rect, const char* date, const bool forceClock) {
   if (rect.width <= 0 || rect.height <= 0) return;
   namespace fui = freeink::ui;
   fui::GfxRendererFrame<1> ui(renderer, SMALL_FONT_ID, SMALL_FONT_ID, SMALL_FONT_ID);
   applyUiTextAlignment(ui.target, true);
   fui::HeaderProps props;
   applyHeaderStatus(renderer, props, true);
+  char clockText[10];
+  if (forceClock && !props.status.clockText) {
+    props.status.clockText = TimeUtils::formatCurrentTime(clockText, sizeof(clockText), SETTINGS.clockFormat == 1)
+                                 ? clockText
+                                 : "--:--";
+  }
   props.styles.explicitlySet = true;  // Transparent overlay; keep INX's existing fill and separator.
   // headerBand owns board insets. Start at full width, then intersect the caller's safe area.
   fui::Rect band =
@@ -689,7 +707,7 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
 }
 
 void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
-                                    const bool backButton, const bool upstreamStyle) {
+                                    const bool backButton, const bool upstreamStyle, const bool compact) {
   // Every activity header renders through the FreeInkUI header + battery
   // indicator components, styled by the active theme's tokens (padding,
   // centering, underline). Non-interactive frame: no hit rects registered.
@@ -720,10 +738,14 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
                                     fui::Rect{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y),
                                               static_cast<int16_t>(rect.width), static_cast<int16_t>(rect.height)},
                                     props);
-  if (rect.height < uiThemeMetrics(upstreamStyle).headerHeight) {
+  if (compact || rect.height < uiThemeMetrics(upstreamStyle).headerHeight) {
     // Short bands (home) are not split into strip + content row: the title
     // centers on the band, clear of the band's bottom edge.
     props.titleOffsetY = 0;
+  }
+  if (compact) {
+    props.status.stripHeight = band.height;
+    props.status.clockText = nullptr;
   }
   // Tappable back button leading the band on touch boards, so every pushed
   // screen offers a visible way out beside the edge-swipe gesture. This frame

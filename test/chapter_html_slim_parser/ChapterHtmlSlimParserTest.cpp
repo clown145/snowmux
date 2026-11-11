@@ -121,6 +121,21 @@ TEST_F(ChapterHtmlSlimParserTest, NoTouchKeepsFootnotesWithoutLinkStorage) {
   EXPECT_EQ(lines, 1U);
 }
 
+TEST_F(ChapterHtmlSlimParserTest, ImageNoteReferenceIsKeptWhenImagesAreHidden) {
+  parser.collectTouchLinks = false;
+  parser.imageRendering = 2;
+  parser.currentTextBlock = std::make_unique<ParsedText>(false, false, false, false, BlockStyle{}, false);
+  const XML_Char* image[] = {"src", "note.png", nullptr};
+  const XML_Char* attributes[] = {"href", "#note-target", "epub:type", "noteref", nullptr};
+  ChapterHtmlSlimParser::startElement(&parser, "a", attributes);
+  ChapterHtmlSlimParser::startElement(&parser, "img", image);
+  ChapterHtmlSlimParser::endElement(&parser, "img");
+  ChapterHtmlSlimParser::endElement(&parser, "a");
+  ASSERT_EQ(parser.pendingFootnotes.size(), 1U);
+  EXPECT_STREQ(parser.pendingFootnotes[0].second.number, "1");
+  EXPECT_STREQ(parser.pendingFootnotes[0].second.href, "#note-target");
+}
+
 TEST_F(ChapterHtmlSlimParserTest, StyledHeadroomFailureStopsCallbacksAndFinish) {
   writeHtml("<html><body><p>first</p><p>second</p></body></html>");
   size_t pages = 0;
@@ -462,7 +477,7 @@ TEST_F(SectionMemoryTest, ImageCacheNamespaceIsVersionedSoPreUpgradeFilesAreNotR
   Section section(epub, 0, renderer);
   ASSERT_TRUE(section.startBuild(spec));
   ASSERT_TRUE(section.build_ != nullptr);
-  EXPECT_NE(section.build_->imageBasePath.find("/img2_"), std::string::npos)
+  EXPECT_NE(section.build_->imageBasePath.find("/img3_"), std::string::npos)
       << "image cache base path was " << section.build_->imageBasePath;
 }
 

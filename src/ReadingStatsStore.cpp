@@ -940,29 +940,43 @@ bool ReadingStatsStore::adjustBookReadingTime(const std::string& path, const uin
   }
 
   auto& book = books[index];
-  if (deltaMs > 0) {
-    const uint64_t addedMs = static_cast<uint64_t>(deltaMs);
-    addReadingToDays(book.readingDays, dayOrdinal, addedMs);
-    book.totalReadingMs += addedMs;
+  auto& days = book.readingDays;
+  const auto it = std::lower_bound(days.begin(), days.end(), dayOrdinal, [](const ReadingDayStats& day, uint32_t ordinal) {
+    return day.dayOrdinal < ordinal;
+  });
+  const auto offset = it - days.begin();
+  const bool hadDay = it != days.end() && it->dayOrdinal == dayOrdinal;
+  const uint64_t previousMs = hadDay ? it->readingMs : 0;
+  const uint64_t previousTotal = book.totalReadingMs;
+  const uint64_t amount = deltaMs < 0 ? static_cast<uint64_t>(-static_cast<int64_t>(deltaMs))
+                                      : static_cast<uint64_t>(deltaMs);
+  if (deltaMs < 0 && (previousMs < amount || previousTotal < amount)) return false;
+  const uint64_t nextMs = deltaMs > 0 ? previousMs + amount : previousMs - amount;
+  if (!hadDay) {
+    days.insert(it, {dayOrdinal, nextMs});
+  } else if (!nextMs) {
+    days.erase(it);
   } else {
-    const uint64_t requestedRemoveMs = static_cast<uint64_t>(-deltaMs);
-    auto it =
-        std::lower_bound(book.readingDays.begin(), book.readingDays.end(), dayOrdinal,
-                         [](const ReadingDayStats& day, const uint32_t ordinal) { return day.dayOrdinal < ordinal; });
-    if (it == book.readingDays.end() || it->dayOrdinal != dayOrdinal || it->readingMs < requestedRemoveMs ||
-        book.totalReadingMs < requestedRemoveMs) {
-      return false;
-    }
-    it->readingMs -= requestedRemoveMs;
-    if (it->readingMs == 0) {
-      book.readingDays.erase(it);
-    }
-    book.totalReadingMs -= requestedRemoveMs;
+    it->readingMs = nextMs;
   }
+  book.totalReadingMs = deltaMs > 0 ? previousTotal + amount : previousTotal - amount;
 
+  const bool wasDirty = dirty;
+  const auto previousDirtySince = dirtySinceMs;
   rebuildAggregatedReadingDays();
   markDirty();
-  return saveToFile();
+  if (saveToFile()) return true;
+
+  // Only one day changed. Undo it without copying the book or its history.
+  const auto changed = days.begin() + offset;
+  if (!hadDay) days.erase(changed);
+  else if (!nextMs) days.insert(changed, {dayOrdinal, previousMs});
+  else changed->readingMs = previousMs;
+  book.totalReadingMs = previousTotal;
+  rebuildAggregatedReadingDays();
+  dirty = wasDirty;
+  dirtySinceMs = previousDirtySince;
+  return false;
 }
 
 uint32_t ReadingStatsStore::getBooksFinishedCount() const {

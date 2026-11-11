@@ -36,6 +36,11 @@ extern "C" bool verifyRollbackLater() { return true; }
 #endif
 
 HalOtaSlot HalOtaSlot::inactive() {
+#if FREEINK_DEVICE_XUESU_300
+  // OTA0 contains the original reader. CrossMux normally uses the inactive app
+  // slot as scratch for its SD font cache.
+  return {};
+#endif
   const esp_partition_t* partition = esp_ota_get_next_update_partition(nullptr);
   const esp_partition_t* running = esp_ota_get_running_partition();
   if (!partition || partition == running || partition->type != ESP_PARTITION_TYPE_APP ||

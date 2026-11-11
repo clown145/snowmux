@@ -1972,7 +1972,12 @@ bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
         continue;
       }
       auto pixel = mapTwoBitPixel(renderMode, val, absoluteGrayPlanes);
-      if (renderMode == BW && useTransparency && val >= 3) pixel = {true, false};
+      if (renderMode == BW && ditherImagesInBw) {
+        const bool black = ditherTwoBitPixel(val, screenX, screenY);
+        pixel = {useTransparency || black, black};
+      } else if (renderMode == BW && useTransparency && val >= 3) {
+        pixel = {true, false};
+      }
       if (pixel.draw) drawPixel(screenX, screenY, pixel.state);
     }
   }

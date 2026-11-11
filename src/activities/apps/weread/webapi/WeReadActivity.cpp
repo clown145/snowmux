@@ -9,6 +9,7 @@
 #include <Memory.h>
 #include <Utf8.h>
 #include <WiFi.h>
+#include <components/lists/list.h>
 #include <esp_wifi.h>
 
 #include <algorithm>
@@ -89,8 +90,6 @@ constexpr int kDisclaimerParagraphCount =
 constexpr int kMinimumDisclaimerActionGap = 4;
 constexpr int kManageEntryCount = static_cast<int>(sizeof(kManageEntries) / sizeof(kManageEntries[0]));
 constexpr size_t kMainTabCount = 2;
-constexpr int kDetailCoverWidth = 96;
-constexpr int kDetailCoverHeight = 140;
 constexpr int kPortraitShelfColumns = 3;
 constexpr int kPortraitShelfRows = 3;
 constexpr int kLandscapeShelfColumns = 5;
@@ -591,17 +590,9 @@ Rect WeReadActivity::mainContentBounds() const {
   return SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics, true);
 }
 
-Rect WeReadActivity::detailActionsBounds(const Rect& content) const {
-  const int height = kDetailListActionCount * GUI.getListRowStep(false);
-  return Rect{content.x, content.y + content.height - height, content.width, height};
-}
-
-Rect WeReadActivity::detailIntroductionBounds(const Rect& content) const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect actions = detailActionsBounds(content);
-  const int y = content.y + kDetailCoverHeight + metrics.verticalSpacing;
-  return Rect{content.x + metrics.contentSidePadding, y, content.width - metrics.contentSidePadding * 2,
-              std::max(1, actions.y - metrics.verticalSpacing - y)};
+WeReadDetailLayout WeReadActivity::detailLayout(const Rect& content) const {
+  return weReadDetailLayout(content, UITheme::getInstance().getMetrics(), GUI.getListRowStep(false),
+                            kDetailListActionCount, renderer.getLineHeight(UI_10_FONT_ID));
 }
 
 Rect WeReadActivity::disclaimerSafeBounds() const {
@@ -1267,11 +1258,12 @@ void WeReadActivity::handleDetailInput() {
     return;
   }
 
-  const Rect content = contentBounds();
-  const Rect actions = detailActionsBounds(content);
+  const auto layout = detailLayout(contentBounds());
+  const Rect actions = layout.actions;
   int touchedAction = -1;
-  const auto actionTouch = mappedInput.rowTouch(touchedAction, actions.y, GUI.getListRowStep(false),
-                                                kDetailListActionCount, actions.x, actions.x + actions.width);
+  const auto actionTouch =
+      mappedInput.rowTouch(touchedAction, actions.y, layout.actionStep, kDetailListActionCount, actions.x,
+                           actions.x + actions.width, layout.actionStep - layout.actionGap);
   if (actionTouch != MappedInputManager::RowTouch::None) {
     const auto action = static_cast<DetailAction>(touchedAction + 1);
     if (detailActionEnabled(action)) {
@@ -1286,7 +1278,7 @@ void WeReadActivity::handleDetailInput() {
   }
 
   if (detailIntroTruncated_) {
-    const Rect introduction = detailIntroductionBounds(content);
+    const Rect introduction = layout.introduction;
     int x = 0;
     int y = 0;
     if (mappedInput.wasScreenTouchDown(x, y) && x >= introduction.x && x < introduction.x + introduction.width &&
@@ -1587,17 +1579,25 @@ void WeReadActivity::selectMainTab(const MainTab tab) {
 }
 
 void WeReadActivity::handleMainTabInput() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+  using Button = MappedInputManager::Button;
+  bool enterContent = mappedInput.wasReleased(Button::Confirm);
+#if !FREEINK_DEVICE_XUESU_300
+  enterContent = enterContent || mappedInput.wasReleased(Button::Down);
+#endif
+  if (enterContent) {
     mainFocus_.store(MainFocus::Content);
     requestUpdate();
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  constexpr auto previousButton = Button::NavPrevious;
+  constexpr auto nextButton = Button::NavNext;
+#else
   const bool swapFrontDirections = mappedInput.isNavDirectionSwapped();
-  const auto previousButton =
-      swapFrontDirections ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFrontDirections ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+  const auto previousButton = swapFrontDirections ? Button::Right : Button::Left;
+  const auto nextButton = swapFrontDirections ? Button::Left : Button::Right;
+#endif
   if (!mappedInput.wasReleased(previousButton) && !mappedInput.wasReleased(nextButton)) return;
 
   selectMainTab(mainTab_.load() == MainTab::Shelf ? MainTab::Manage : MainTab::Shelf);
@@ -2047,6 +2047,8 @@ const char* WeReadActivity::errorMessage() const {
 
 bool WeReadActivity::drawDetailIntroduction(const Rect& bounds, const bool selected) {
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  if (bounds.width <= 0 || bounds.height < lineHeight) return false;
+  const GfxRenderer::ClipScope clip(renderer, bounds.x, bounds.y, bounds.width, bounds.height);
   const int textX = bounds.x;
   const int textWidth = std::max(1, bounds.width);
   const int titleY = bounds.y;
@@ -2129,20 +2131,30 @@ bool WeReadActivity::drawDetailIntroduction(const Rect& bounds, const bool selec
 void WeReadActivity::drawDisclaimer(const Rect& content) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   Rect actions = disclaimerActionsBounds();
-  const int paragraphSpacing = metrics.verticalSpacing;
+  int paragraphSpacing = metrics.verticalSpacing;
   const int textWidth = std::max(0, content.width - metrics.contentSidePadding * 2);
   freeink::ui::GfxRendererTarget target(renderer);
   applyUiTextAlignment(target);
-  target.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, UI_10_FONT_ID);
   freeink::ui::TextStyle textStyle;
   textStyle.font = freeink::ui::GfxRendererTarget::FONT_BODY;
   textStyle.maxLines = 16;
   int paragraphHeights[kDisclaimerParagraphCount] = {};
-  int textHeight = paragraphSpacing * (kDisclaimerParagraphCount - 1);
-  for (int i = 0; i < kDisclaimerParagraphCount; ++i) {
-    paragraphHeights[i] =
-        freeink::ui::measureWrappedText(target, I18N.get(kDisclaimerParagraphs[i]), textStyle, textWidth).height;
-    textHeight += paragraphHeights[i];
+  int textFont = UI_10_FONT_ID;
+  const auto measureText = [&] {
+    target.setFont(textStyle.font, textFont);
+    int height = paragraphSpacing * (kDisclaimerParagraphCount - 1);
+    for (int i = 0; i < kDisclaimerParagraphCount; ++i) {
+      paragraphHeights[i] =
+          freeink::ui::measureWrappedText(target, I18N.get(kDisclaimerParagraphs[i]), textStyle, textWidth).height;
+      height += paragraphHeights[i];
+    }
+    return height;
+  };
+  int textHeight = measureText();
+  if (textHeight + actions.height + metrics.verticalSpacing > content.height) {
+    textFont = SMALL_FONT_ID;
+    paragraphSpacing = std::min(paragraphSpacing, 6);
+    textHeight = measureText();
   }
   const int freeHeight = std::max(0, content.height - textHeight - actions.height);
   const int actionGap = std::min(freeHeight, std::max(metrics.verticalSpacing, freeHeight / 3));
@@ -2167,7 +2179,7 @@ void WeReadActivity::drawDisclaimer(const Rect& content) {
       };
       freeink::ui::layoutText(target, paragraphBounds, paragraph, textStyle,
                               [&](const char* line, const freeink::ui::Rect lineBounds) {
-                                renderer.drawText(UI_10_FONT_ID, lineBounds.x, lineBounds.y, line);
+                                renderer.drawText(textFont, lineBounds.x, lineBounds.y, line);
                               });
       y += paragraphHeights[i];
       if (i + 1 < kDisclaimerParagraphCount) y += paragraphSpacing;
@@ -2184,10 +2196,10 @@ void WeReadActivity::drawDisclaimer(const Rect& content) {
     renderer.fillRoundedRect(buttonX, actions.y, buttonWidth, actions.height, buttonRadius,
                              selected ? Color::Black : Color::White);
     renderer.drawRoundedRect(buttonX, actions.y, buttonWidth, actions.height, 1, buttonRadius, true);
-    const char* label = I18N.get(kDisclaimerActions[i]);
-    const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
+    const auto label = renderer.truncatedText(UI_10_FONT_ID, I18N.get(kDisclaimerActions[i]), buttonWidth - 8);
+    const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
     renderer.drawText(UI_10_FONT_ID, buttonX + (buttonWidth - labelWidth) / 2,
-                      actions.y + (actions.height - buttonLineHeight) / 2, label, !selected);
+                      actions.y + (actions.height - buttonLineHeight) / 2, label.c_str(), !selected);
   }
 
   if (disclaimerSaveFailed_) {
@@ -2244,113 +2256,141 @@ void WeReadActivity::drawShelfGrid(const Rect& content, const int selectedIndex,
 }
 
 void WeReadActivity::drawBookDetail(const Rect& content, const bool coverLoading) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int side = metrics.contentSidePadding;
-  const Rect cover{content.x + side, content.y, kDetailCoverWidth, kDetailCoverHeight};
-  renderer.drawRect(cover.x, cover.y, cover.width, cover.height);
-  const bool coverDrawn = drawCachedCover(renderer, WeReadStore::bookDirectory(pendingBook_.bookId),
-                                          Rect{cover.x + 2, cover.y + 2, cover.width - 4, cover.height - 4});
-  if (!coverDrawn) {
-    UITheme::drawCenteredWrappedText(
-        renderer, cover, UI_10_FONT_ID,
-        I18N.get(coverLoading ? StrId::STR_WEREAD_COVER_LOADING : StrId::STR_WEREAD_NO_COVER), 2);
-  }
-
-  const int metaX = cover.x + cover.width + 16;
-  const int metaWidth = std::max(1, content.x + content.width - metaX - side);
-  const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int detailLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  const int smallLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int cacheY = cover.y + cover.height - smallLineHeight;
-  const int requiredDetailHeight =
-      (detail_.author[0] ? detailLineHeight : 0) + (detail_.newRating > 0 ? detailLineHeight : 0);
-  const int maxTitleLines = std::clamp((cacheY - cover.y - requiredDetailHeight) / titleLineHeight, 1, 2);
-  int metaY = cover.y;
-  const auto titleLines =
-      renderer.wrappedText(UI_12_FONT_ID, detail_.title, metaWidth, maxTitleLines, EpdFontFamily::BOLD);
-  for (const auto& line : titleLines) {
-    renderer.drawText(UI_12_FONT_ID, metaX, metaY, line.c_str(), true, EpdFontFamily::BOLD);
-    metaY += titleLineHeight;
-  }
-  if (detail_.author[0]) {
-    const auto author = renderer.truncatedText(UI_10_FONT_ID, detail_.author, metaWidth);
-    renderer.drawText(UI_10_FONT_ID, metaX, metaY, author.c_str());
-    metaY += detailLineHeight;
-  }
-  if (detail_.newRating > 0) {
-    char rating[48];
-    snprintf(rating, sizeof(rating), tr(STR_WEREAD_RATING_FMT), detail_.newRating / 100.0);
-    renderer.drawText(UI_10_FONT_ID, metaX, metaY, rating);
-    metaY += detailLineHeight;
+  const auto layout = detailLayout(content);
+  const Rect cover = layout.cover;
+  if (cover.width > 4 && cover.height > 4) {
+    renderer.drawRect(cover.x, cover.y, cover.width, cover.height);
+    if (!drawCachedCover(renderer, WeReadStore::bookDirectory(pendingBook_.bookId),
+                         Rect{cover.x + 2, cover.y + 2, cover.width - 4, cover.height - 4})) {
+      UITheme::drawCenteredWrappedText(
+          renderer, cover, UI_10_FONT_ID,
+          I18N.get(coverLoading ? StrId::STR_WEREAD_COVER_LOADING : StrId::STR_WEREAD_NO_COVER), 2);
+    }
   }
 
   const bool cached = Storage.exists(WeReadStore::finalBookPath(pendingBook_).c_str());
   const bool policyChanged = cached && detailOptionsKnown_ && detailImagePolicy_ != detailSavedImagePolicy_;
-  const char* cacheState = !cached ? tr(STR_WEREAD_NOT_CACHED)
+  const Rect meta = layout.metadata;
+  const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int detailLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const int smallLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  if (meta.width > 0 && meta.height >= titleLineHeight) {
+    const GfxRenderer::ClipScope clip(renderer, meta.x, meta.y, meta.width, meta.height);
+    const bool showCache = meta.height >= titleLineHeight + smallLineHeight;
+    const int cacheY = meta.y + meta.height - (showCache ? smallLineHeight : 0);
+    const int requiredDetailHeight =
+        (detail_.author[0] ? detailLineHeight : 0) + (detail_.newRating > 0 ? detailLineHeight : 0);
+    const int maxTitleLines = std::clamp((cacheY - meta.y - requiredDetailHeight) / titleLineHeight, 1, 2);
+    int y = meta.y;
+    const auto titleLines =
+        renderer.wrappedText(UI_12_FONT_ID, detail_.title, meta.width, maxTitleLines, EpdFontFamily::BOLD);
+    for (const auto& line : titleLines) {
+      renderer.drawText(UI_12_FONT_ID, meta.x, y, line.c_str(), true, EpdFontFamily::BOLD);
+      y += titleLineHeight;
+    }
+    const auto drawLine = [&](const int font, const int top, const char* text,
+                              const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+      const auto label = renderer.truncatedText(font, text, meta.width, style);
+      renderer.drawText(font, meta.x, top, label.c_str(), true, style);
+    };
+    if (detail_.author[0] && y + detailLineHeight <= cacheY) {
+      drawLine(UI_10_FONT_ID, y, detail_.author);
+      y += detailLineHeight;
+    }
+    if (detail_.newRating > 0 && y + detailLineHeight <= cacheY) {
+      char rating[48];
+      snprintf(rating, sizeof(rating), tr(STR_WEREAD_RATING_FMT), detail_.newRating / 100.0);
+      drawLine(UI_10_FONT_ID, y, rating);
+      y += detailLineHeight;
+    }
+    if (showCache) {
+      const char* cacheState = !cached
+                                   ? tr(STR_WEREAD_NOT_CACHED)
                                    : (policyChanged ? tr(STR_WEREAD_CACHE_NEEDS_UPDATE) : tr(STR_WEREAD_CACHE_BADGE));
-  renderer.drawText(SMALL_FONT_ID, metaX, cacheY, cacheState, true, EpdFontFamily::BOLD);
-
-  char minor[192] = {};
-  if (detail_.category[0] && detail_.totalWords > 0) {
-    char words[48];
-    snprintf(words, sizeof(words), tr(STR_WEREAD_WORDS_FMT), static_cast<unsigned>(detail_.totalWords));
-    snprintf(minor, sizeof(minor), "%s · %s", detail_.category, words);
-  } else if (detail_.category[0]) {
-    snprintf(minor, sizeof(minor), "%s", detail_.category);
-  } else if (detail_.totalWords > 0) {
-    snprintf(minor, sizeof(minor), tr(STR_WEREAD_WORDS_FMT), static_cast<unsigned>(detail_.totalWords));
-  } else if (detail_.publisher[0]) {
-    snprintf(minor, sizeof(minor), "%s", detail_.publisher);
-  }
-  const int minorY = cacheY - smallLineHeight;
-  if (minor[0] && metaY <= minorY) {
-    const auto text = renderer.truncatedText(SMALL_FONT_ID, minor, metaWidth);
-    renderer.drawText(SMALL_FONT_ID, metaX, minorY, text.c_str());
+      drawLine(SMALL_FONT_ID, cacheY, cacheState, EpdFontFamily::BOLD);
+    }
+    if (y + smallLineHeight <= cacheY) {
+      char minor[192] = {};
+      if (detail_.totalWords > 0) {
+        char words[48];
+        snprintf(words, sizeof(words), tr(STR_WEREAD_WORDS_FMT), static_cast<unsigned>(detail_.totalWords));
+        snprintf(minor, sizeof(minor), "%s%s%s", detail_.category, detail_.category[0] ? " · " : "", words);
+      } else {
+        snprintf(minor, sizeof(minor), "%s", detail_.category[0] ? detail_.category : detail_.publisher);
+      }
+      if (minor[0]) drawLine(SMALL_FONT_ID, cacheY - smallLineHeight, minor);
+    }
   }
 
-  const Rect actions = detailActionsBounds(content);
-  const Rect introduction = detailIntroductionBounds(content);
   detailIntroTruncated_ =
-      drawDetailIntroduction(introduction, detailSelected_ == static_cast<int>(DetailAction::Introduction));
+      drawDetailIntroduction(layout.introduction, detailSelected_ == static_cast<int>(DetailAction::Introduction));
 
-  GUI.drawList(
-      renderer, actions, kDetailListActionCount,
-      detailSelected_ == static_cast<int>(DetailAction::Introduction) ? -1 : detailSelected_ - 1,
-      [cached, policyChanged](const int index) {
-        switch (static_cast<DetailAction>(index + 1)) {
-          case DetailAction::Introduction:
-            return std::string();
-          case DetailAction::Read:
-            return std::string(I18N.get(cached ? StrId::STR_CONTINUE_READING : StrId::STR_WEREAD_ONLINE_READING));
-          case DetailAction::Cache:
-            if (!cached) return std::string(tr(STR_WEREAD_CACHE_BOOK));
-            return std::string(
-                I18N.get(policyChanged ? StrId::STR_WEREAD_UPDATE_CACHE : StrId::STR_WEREAD_RECACHE_BOOK));
-          case DetailAction::Browse:
-            return std::string(tr(STR_WEREAD_BROWSE_ENTRY));
-          case DetailAction::Images:
-            return std::string(tr(STR_WEREAD_CACHE_IMAGES));
-        }
-        return std::string();
-      },
-      nullptr, nullptr,
-      [this, cached](const int index) {
-        switch (static_cast<DetailAction>(index + 1)) {
-          case DetailAction::Introduction:
-          case DetailAction::Browse:
-          case DetailAction::Cache:
-            return std::string();
-          case DetailAction::Read:
-            return cached ? std::string() : std::string(tr(STR_WEREAD_FUTURE_SUPPORT));
-          case DetailAction::Images:
-            return std::string(I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed
-                                            ? StrId::STR_WEREAD_OPTION_ON
-                                            : StrId::STR_WEREAD_OPTION_OFF));
-        }
-        return std::string();
-      },
-      false,
-      [cached](const int index) { return static_cast<DetailAction>(index + 1) == DetailAction::Read && !cached; });
+  const auto title = [cached, policyChanged](const int index) -> const char* {
+    switch (static_cast<DetailAction>(index + 1)) {
+      case DetailAction::Introduction:
+        return "";
+      case DetailAction::Read:
+        return I18N.get(cached ? StrId::STR_CONTINUE_READING : StrId::STR_WEREAD_ONLINE_READING);
+      case DetailAction::Cache:
+        if (!cached) return tr(STR_WEREAD_CACHE_BOOK);
+        return I18N.get(policyChanged ? StrId::STR_WEREAD_UPDATE_CACHE : StrId::STR_WEREAD_RECACHE_BOOK);
+      case DetailAction::Browse:
+        return tr(STR_WEREAD_BROWSE_ENTRY);
+      case DetailAction::Images:
+        return tr(STR_WEREAD_CACHE_IMAGES);
+    }
+    return "";
+  };
+  const auto value = [this, cached](const int index) -> const char* {
+    switch (static_cast<DetailAction>(index + 1)) {
+      case DetailAction::Introduction:
+      case DetailAction::Browse:
+      case DetailAction::Cache:
+        return "";
+      case DetailAction::Read:
+        return cached ? "" : tr(STR_WEREAD_FUTURE_SUPPORT);
+      case DetailAction::Images:
+        return I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed ? StrId::STR_WEREAD_OPTION_ON
+                                                                              : StrId::STR_WEREAD_OPTION_OFF);
+    }
+    return "";
+  };
+  const auto dimmed = [cached](const int index) {
+    return static_cast<DetailAction>(index + 1) == DetailAction::Read && !cached;
+  };
+  const Rect actions = layout.actions;
+  if (layout.actionGap == 0) {
+    GUI.drawList(renderer, actions, kDetailListActionCount, detailSelected_ - 1, title, nullptr, nullptr, value, false,
+                 dimmed);
+    return;
+  }
+
+  namespace fui = freeink::ui;
+  fui::GfxRendererFrame<1> ui(renderer, SMALL_FONT_ID, UI_10_FONT_ID, UI_12_FONT_ID);
+  applyUiTextAlignment(ui.target);
+  fui::ListItem rows[kDetailListActionCount];
+  for (int index = 0; index < kDetailListActionCount; ++index) {
+    rows[index].label = title(index);
+    const char* trailing = value(index);
+    rows[index].value = *trailing ? trailing : nullptr;
+    rows[index].enabled = !dimmed(index);
+  }
+  // ListProps holds theme styles. Keep the render-only scratch off the C3 task stack.
+  static fui::ListProps props;
+  props = {};
+  props.items = rows;
+  props.count = kDetailListActionCount;
+  props.selectedIndex = static_cast<int16_t>(detailSelected_ - 1);
+  props.labelText.font = fui::GfxRendererTarget::FONT_BODY;
+  props.valueText.font = fui::GfxRendererTarget::FONT_BODY;
+  props.rowHeight = fui::clampI16(layout.actionStep - layout.actionGap);
+  props.rowGap = fui::clampI16(layout.actionGap);
+  props.sidePadding = fui::clampI16(UITheme::getInstance().getMetrics().contentSidePadding);
+  props.valueMaxWidth = fui::clampI16(actions.width / 3);
+  fui::list(ui.frame,
+            fui::Rect{fui::clampI16(actions.x), fui::clampI16(actions.y), fui::clampI16(actions.width),
+                      fui::clampI16(actions.height)},
+            props);
 }
 
 void WeReadActivity::drawIntroduction(const Rect& content) {

@@ -137,7 +137,12 @@ void drawClippedText(const GfxRenderer& renderer, const int fontId, const Rect r
                      const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
   if (!text || rect.width <= 0 || rect.height <= 0) return;
   GfxRenderer::ClipScope clip(renderer, rect.x, rect.y, rect.width, rect.height);
-  renderer.drawText(fontId, rect.x, rect.y, text, true, style);
+  if (renderer.getTextWidth(fontId, text, style) > rect.width) {
+    const auto shortened = renderer.truncatedText(fontId, text, rect.width, style);
+    renderer.drawText(fontId, rect.x, rect.y, shortened.c_str(), true, style);
+  } else {
+    renderer.drawText(fontId, rect.x, rect.y, text, true, style);
+  }
 }
 
 void drawCenteredClippedText(const GfxRenderer& renderer, const int fontId, const Rect rect, const char* text,
@@ -178,6 +183,18 @@ void drawStatsGrid(const GfxRenderer& renderer, const Rect rect, const int rows,
     const int column = index % 2;
     const int row = index / 2;
     const int cellTop = rect.y + row * cellHeight;
+    if (cellHeight < textHeight) {
+      const int y = cellTop + std::max(0, (cellHeight - labelHeight) / 2);
+      const int height = std::min(labelHeight, cellHeight);
+      const int x = rect.x + column * cellWidth + 6;
+      const int width = std::max(0, cellWidth - 12);
+      const int valueWidth =
+          std::min(width / 2, renderer.getTextWidth(SMALL_FONT_ID, values[index], EpdFontFamily::BOLD));
+      drawClippedText(renderer, SMALL_FONT_ID, Rect{x, y, width - valueWidth - 6, height}, labels[index]);
+      drawClippedText(renderer, SMALL_FONT_ID, Rect{x + width - valueWidth, y, valueWidth, height}, values[index],
+                      EpdFontFamily::BOLD);
+      continue;
+    }
     const int textY = cellTop + std::max(0, (cellHeight - textHeight) / 2);
     const Rect valueRect{rect.x + column * cellWidth + 10, textY, cellWidth - 20, valueHeight};
     drawClippedText(renderer, UI_12_FONT_ID, valueRect, values[index], EpdFontFamily::BOLD);
@@ -510,6 +527,19 @@ void ReadingStatsActivity::openSelectedEntry() {
       books[bookIndex].path);
 }
 
+#if FREEINK_DEVICE_XUESU_300
+const char* ReadingStatsActivity::xuesuQuickActionLabel() const {
+  return showMainTabContentSelection() && selectedIndex > 0 &&
+                 selectedIndex <= static_cast<int>(READING_STATS.getBooks().size())
+             ? tr(STR_DELETE_STATS_ENTRY)
+             : nullptr;
+}
+
+void ReadingStatsActivity::runXuesuQuickAction() {
+  if (xuesuQuickActionLabel()) confirmRemoveSelectedBook();
+}
+#endif
+
 void ReadingStatsActivity::confirmRemoveSelectedBook() {
   const auto& books = READING_STATS.getBooks();
   const int bookIndex = selectedIndex - 1;
@@ -684,6 +714,7 @@ void ReadingStatsActivity::renderInx(const int view) {
   const int bookTitleHeight = renderer.getLineHeight(NOTOSERIF_12_FONT_ID);
   const int bodyHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int cellHeight = statsCellHeight(renderer);
+  constexpr int minimumGraphicHeight = 64;
 
   if (view == 0 || books.empty()) {
     int top = content.y;
@@ -692,20 +723,23 @@ void ReadingStatsActivity::renderInx(const int view) {
                               tr(STR_READING_STATS), EpdFontFamily::BOLD);
       top += pageTitleHeight + 8;
     }
-    const int availableHeight = std::max(1, content.y + content.height - top);
-    const int gridHeight = cellHeight * 2;
-    const int footerHeight = cellHeight;
-    const int flexibleHeight = std::max(2, availableHeight - gridHeight - footerHeight);
+    const int availableHeight = std::max(0, content.y + content.height - top);
+    const int flexibleHeight = availableHeight - cellHeight * 3;
     const int recentMinimumHeight = books.empty() ? bodyHeight + 16 : bookTitleHeight + bodyHeight * 2 + 32;
-    const int recentHeight = std::min(flexibleHeight - 1, std::max(flexibleHeight * 43 / 100, recentMinimumHeight));
-    const int donutHeight = flexibleHeight - recentHeight;
+    const bool compact = flexibleHeight < recentMinimumHeight + minimumGraphicHeight;
+    const int recentHeight = compact ? std::min(availableHeight / 3, bodyHeight * 2 + 8)
+                                     : std::min(flexibleHeight - minimumGraphicHeight,
+                                                std::max(flexibleHeight * 43 / 100, recentMinimumHeight));
+    const int footerHeight = compact ? (availableHeight - recentHeight) / 3 : cellHeight;
+    const int gridHeight = compact ? availableHeight - recentHeight - footerHeight : cellHeight * 2;
+    const int donutHeight = compact ? 0 : flexibleHeight - recentHeight;
     const Rect recent{content.x, top, content.width, recentHeight};
     const Rect grid{content.x, recent.y + recent.height, content.width, gridHeight};
     const Rect donut{content.x, grid.y + grid.height, content.width, donutHeight};
     const Rect footer{content.x, donut.y + donut.height, content.width, footerHeight};
     if (!books.empty()) touchTargets[touchTargetCount++] = {recent, 1};
     touchTargets[touchTargetCount++] = {grid, 0};
-    touchTargets[touchTargetCount++] = {donut, 0};
+    if (donut.height > 0) touchTargets[touchTargetCount++] = {donut, 0};
     touchTargets[touchTargetCount++] = {footer, 0};
 
     if (books.empty()) {
@@ -714,6 +748,16 @@ void ReadingStatsActivity::renderInx(const int view) {
           renderer, UI_12_FONT_ID,
           Rect{recent.x, recent.y + std::max(0, (recent.height - emptyHeight) / 2), recent.width, emptyHeight},
           tr(STR_NO_READING_STATS));
+    } else if (compact) {
+      const auto& book = books.front();
+      const int titleHeight = std::min(bodyHeight, recent.height);
+      drawClippedText(renderer, UI_10_FONT_ID, Rect{recent.x, recent.y, recent.width, titleHeight}, titleOf(book),
+                      EpdFontFamily::BOLD);
+      char progress[8];
+      snprintf(progress, sizeof(progress), "%u%%", static_cast<unsigned>(book.lastProgressPercent));
+      drawClippedText(renderer, SMALL_FONT_ID,
+                      Rect{recent.x, recent.y + titleHeight + 4, recent.width, recent.height - titleHeight - 4},
+                      progress);
     } else {
       const ReadingBookStats& recentBook = books.front();
       const auto coverSize = InxCoverGeometry::fit(recent.width * 28 / 100, recent.height - 12);
@@ -765,10 +809,12 @@ void ReadingStatsActivity::renderInx(const int view) {
     const int started = static_cast<int>(READING_STATS.getBooksStartedCount());
     const int finished = static_cast<int>(READING_STATS.getBooksFinishedCount());
     const int completedPercent = started == 0 ? 0 : std::min(100, finished * 100 / started);
-    const int donutRadius = std::min(std::max(18, std::min(donut.width, donut.height) * 34 / 100),
-                                     std::max(18, std::min(donut.width, donut.height) / 2 - 4));
-    drawDonut(renderer, donut.x + donut.width / 2, donut.y + donut.height / 2, donutRadius,
-              static_cast<uint8_t>(completedPercent));
+    if (donut.height > 0) {
+      const int donutRadius = std::min(std::max(18, std::min(donut.width, donut.height) * 34 / 100),
+                                       std::max(18, std::min(donut.width, donut.height) / 2 - 4));
+      drawDonut(renderer, donut.x + donut.width / 2, donut.y + donut.height / 2, donutRadius,
+                static_cast<uint8_t>(completedPercent));
+    }
 
     char finishedText[16];
     char startedText[16];
@@ -779,17 +825,21 @@ void ReadingStatsActivity::renderInx(const int view) {
     drawStatsGrid(renderer, footer, 1, footerValues, footerLabels);
   } else {
     const ReadingBookStats& book = books[view - 1];
-    const int footerHeight = bodyHeight + 8;
-    const int screenTitleHeight = usesMainTabBar() ? pageTitleHeight + 8 : 0;
-    const int metadataHeight = bookTitleHeight + (book.author.empty() ? 0 : bodyHeight + INX_TEXT_GAP) + 8;
-    const int gridHeight = cellHeight * 3;
-    const int heroHeight = std::max(1, content.height - screenTitleHeight - metadataHeight - gridHeight - footerHeight);
+    const int screenTitleHeight = usesMainTabBar() ? std::min(content.height, pageTitleHeight + 8) : 0;
+    const int availableHeight = content.height - screenTitleHeight;
+    const int footerHeight = std::min(bodyHeight + 8, availableHeight / 4);
+    const int metadataHeight =
+        std::min(bookTitleHeight + (book.author.empty() ? 0 : bodyHeight + INX_TEXT_GAP) + 8, availableHeight / 3);
+    const int remainingHeight = availableHeight - metadataHeight - footerHeight;
+    const bool compact = remainingHeight < cellHeight * 3 + minimumGraphicHeight;
+    const int gridHeight = compact ? remainingHeight : cellHeight * 3;
+    const int heroHeight = remainingHeight - gridHeight;
     const Rect screenTitle{content.x, content.y, content.width, screenTitleHeight};
     const Rect hero{content.x, screenTitle.y + screenTitle.height, content.width, heroHeight};
     const Rect metadata{content.x, hero.y + hero.height, content.width, metadataHeight};
     const Rect grid{content.x, metadata.y + metadata.height, content.width, gridHeight};
     const Rect footer{content.x, grid.y + grid.height, content.width, footerHeight};
-    touchTargets[touchTargetCount++] = {hero, view};
+    if (hero.height > 0) touchTargets[touchTargetCount++] = {hero, view};
     touchTargets[touchTargetCount++] = {metadata, view};
     touchTargets[touchTargetCount++] = {grid, view};
     touchTargets[touchTargetCount++] = {footer, view};
@@ -800,20 +850,26 @@ void ReadingStatsActivity::renderInx(const int view) {
                       EpdFontFamily::BOLD);
     }
 
-    const auto coverSize = InxCoverGeometry::fit(hero.width * 34 / 100, hero.height - 20);
-    const Rect cover{hero.x + hero.width / 4 - coverSize.width / 2, hero.y + (hero.height - coverSize.height) / 2,
-                     coverSize.width, coverSize.height};
-    renderedCoverMissing = !drawCover(renderer, book, cover);
-    if (contentSelectionVisibleForFrame) GUI.drawSelectionFrame(renderer, cover);
-    const int donutBounds = std::min(hero.width / 2, hero.height);
-    const int donutRadius = std::min(std::max(18, donutBounds * 31 / 100), std::max(18, donutBounds / 2 - 4));
-    drawDonut(renderer, hero.x + hero.width * 3 / 4, hero.y + hero.height / 2, donutRadius, book.lastProgressPercent);
+    if (hero.height > 0) {
+      const auto coverSize = InxCoverGeometry::fit(hero.width * 34 / 100, hero.height - 20);
+      const Rect cover{hero.x + hero.width / 4 - coverSize.width / 2, hero.y + (hero.height - coverSize.height) / 2,
+                       coverSize.width, coverSize.height};
+      renderedCoverMissing = !drawCover(renderer, book, cover);
+      if (contentSelectionVisibleForFrame) GUI.drawSelectionFrame(renderer, cover);
+      const int donutBounds = std::min(hero.width / 2, hero.height);
+      const int donutRadius = std::min(std::max(18, donutBounds * 31 / 100), std::max(18, donutBounds / 2 - 4));
+      drawDonut(renderer, hero.x + hero.width * 3 / 4, hero.y + hero.height / 2, donutRadius, book.lastProgressPercent);
+    } else if (contentSelectionVisibleForFrame) {
+      GUI.drawSelectionFrame(renderer, grid);
+    }
 
-    drawClippedText(renderer, NOTOSERIF_12_FONT_ID, Rect{metadata.x, metadata.y + 4, metadata.width, bookTitleHeight},
+    const int titleHeight = std::min(bookTitleHeight, metadata.height - 4);
+    drawClippedText(renderer, NOTOSERIF_12_FONT_ID, Rect{metadata.x, metadata.y + 4, metadata.width, titleHeight},
                     titleOf(book), EpdFontFamily::ITALIC);
     if (!book.author.empty()) {
       drawClippedText(renderer, UI_10_FONT_ID,
-                      Rect{metadata.x, metadata.y + 4 + bookTitleHeight + INX_TEXT_GAP, metadata.width, bodyHeight},
+                      Rect{metadata.x, metadata.y + 4 + titleHeight + INX_TEXT_GAP, metadata.width,
+                           std::min(bodyHeight, metadata.height - 4 - titleHeight - INX_TEXT_GAP)},
                       book.author.c_str());
     }
 
@@ -836,9 +892,15 @@ void ReadingStatsActivity::renderInx(const int view) {
     drawStatsGrid(renderer, grid, 3, values, labels);
 
     char position[24];
-    snprintf(position, sizeof(position), "%d/%u", view, static_cast<unsigned>(books.size()));
-    drawCenteredClippedText(renderer, UI_10_FONT_ID, Rect{footer.x, footer.y + 4, footer.width, bodyHeight}, position,
-                            EpdFontFamily::BOLD);
+    if (compact) {
+      snprintf(position, sizeof(position), "%d/%u  ·  %u%%", view, static_cast<unsigned>(books.size()),
+               static_cast<unsigned>(book.lastProgressPercent));
+    } else {
+      snprintf(position, sizeof(position), "%d/%u", view, static_cast<unsigned>(books.size()));
+    }
+    drawCenteredClippedText(renderer, UI_10_FONT_ID,
+                            Rect{footer.x, footer.y + 4, footer.width, std::min(bodyHeight, footer.height - 4)},
+                            position, EpdFontFamily::BOLD);
   }
 
   const auto labels = mainTabButtonLabels(tr(STR_BACK), tr(STR_SELECT), !books.empty());

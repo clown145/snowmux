@@ -119,6 +119,17 @@ bool RecentBooksActivity::handleButtons() {
   return false;
 }
 
+#if FREEINK_DEVICE_XUESU_300
+const char* RecentBooksActivity::xuesuQuickActionLabel() const {
+  return showMainTabContentSelection() && nav.selected >= 0 && nav.selected < listCount() ? tr(STR_REMOVE_FROM_RECENTS)
+                                                                                          : nullptr;
+}
+
+void RecentBooksActivity::runXuesuQuickAction() {
+  if (xuesuQuickActionLabel()) onRowLongPress(nav.selected);
+}
+#endif
+
 void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::string& title) {
   auto handler = [this, path](const ActivityResult& res) {
     if (res.isCancelled) {

@@ -1,0 +1,233 @@
+diff --git a/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp b/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp
+index 0003b7b..b18375c 100644
+--- a/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp
++++ b/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp
+@@ -46,6 +46,11 @@
+ #if FREEINK_DRIVER_UC8279_X4
+ #include "driver/Uc8279X4Driver.h"
+ #endif
++#if FREEINK_DEVICE_XUESU_300
++namespace freeink {
++PanelDriver& xuesu300PanelDriver();
++}
++#endif
+ #if FREEINK_DRIVER_UC8279C_A4
+ #include "driver/Uc8279cA4Driver.h"
+ #endif
+@@ -211,6 +216,12 @@ void FreeInkDisplay::selectDriver() {
+ #endif
+   case PanelSel::X4:
+   default:
++#if FREEINK_DEVICE_XUESU_300
++    if (BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8276C) {
++      _driver = &xuesu300PanelDriver();
++      break;
++    }
++#endif
+ #if FREEINK_DRIVER_UC8179
+     // Newer X4 / X4 Pro batches swap the SSD1677 for an UltraChip part.
+     // Which silicon a unit carries is decided before begin() by the boot-time
+diff --git a/libs/hardware/BoardConfig/include/BoardConfig.h b/libs/hardware/BoardConfig/include/BoardConfig.h
+index 31adca2..2c3e238 100644
+--- a/libs/hardware/BoardConfig/include/BoardConfig.h
++++ b/libs/hardware/BoardConfig/include/BoardConfig.h
+@@ -95,6 +95,13 @@
+ #ifndef FREEINK_DEVICE_PICCO
+ #define FREEINK_DEVICE_PICCO 0
+ #endif
++#ifndef FREEINK_DEVICE_XUESU_300
++#define FREEINK_DEVICE_XUESU_300 0
++#endif
++
++#if FREEINK_DEVICE_XUESU_300
++#include <boards/Xuesu300Board.h>
++#endif
+ #if FREEINK_DEVICE_METALIO_EINK4
+ #include "MetalioEInk4Board.h"
+ #endif
+@@ -104,7 +111,7 @@
+       FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||          \
+       FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || \
+       FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 ||             \
+-      FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO)
++      FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300)
+ #error \
+     "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, WAVESHARE_EPAPER_397, METALIO_EINK4, ONEPAGE, READPICO, WS397, PICCO) in your build env — see platformio.sample.ini."
+ #endif
+@@ -118,7 +125,7 @@
+   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||          \
+    FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
+    FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 ||                          \
+-   FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO)
++   FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300)
+ #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
+ #if (FREEINK_MCU_C3 + FREEINK_MCU_C61 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
+ #error \
+@@ -459,7 +466,7 @@
+ #define FREEINK_SD_SDMMC                                                                                       \
+   (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO ||     \
+    FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_METALIO_EINK4 ||          \
+-   FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO)
++   FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300)
+ #endif
+ 
+ // Serial log transport hint for consumer firmware. Boards can share the same MCU
+@@ -523,6 +530,7 @@ enum class Board : uint8_t {
+   WsEpaper397,  // SDK-managed Waveshare power and ordinary buttons.
+   MetalioEInk4,  // Upstream identity; legacy spelling retained for caller compatibility.
+   Picco,  // Onyx Picco / BOOX Tiles; SSD1677/SSD2677 auto-detection.
++  Xuesu300,
+ };
+ 
+ // How the board reports button presses.
+@@ -564,6 +572,7 @@ enum class DisplayController : uint8_t {
+   UC8279 = 6,
+   UC8179 = 7,
+   UC8279C = 8,
++  UC8276C = 9,
+ };
+ 
+ // Optional capacitive touch controller.
+@@ -683,6 +692,8 @@ struct InputPins {
+   // Two-position slide switch, read with INPUT_PULLUP; "on" = the pin reads LOW.
+   // Reported as a level (InputManager::isToggleSwitchOn), not as a button press.
+   int8_t toggleSwitch = PIN_UNASSIGNED;
++  // The up/down inputs are externally biased and assert high on Xuesu.
++  bool pageKeysActiveHigh = false;
+ };
+ 
+ // Capacitive touch panel description (TouchController::None disables it).
+@@ -2361,18 +2372,56 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES_COMPILED_IN = cmax(cmax(cmax(cmax(FREEI
+                              FREEINK_DEVICE_METALIO_EINK4 ? panelBytes(METALIO_EINK4) : 0u))))),
+       FREEINK_DEVICE_WS397 ? panelBytes(WS_EPAPER_397) : 0u);
+ 
++#if FREEINK_DEVICE_XUESU_300
++constexpr BoardProfile XUESU_300 = {
++    .board = Board::Xuesu300,
++    .name = "xuesu-300-std",
++    .inputStyle = InputStyle::DigitalConfirmBackHold,
++    .displayController = DisplayController::UC8276C,
++    .displayWidth = xuesu300::panelWidth,
++    .displayHeight = xuesu300::panelHeight,
++    .display = {xuesu300::panelPins.sck, xuesu300::panelPins.mosi, xuesu300::panelPins.cs,
++                xuesu300::panelPins.dc, xuesu300::panelPins.reset, xuesu300::panelPins.busy, PIN_UNASSIGNED},
++    .displaySpiHz = 4000000,
++    .sd = {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, xuesu300::sdEnablePin, false, 0,
++           true, false},
++    .input = {.back = PIN_UNASSIGNED, .confirm = xuesu300::confirmKeyPin, .left = PIN_UNASSIGNED,
++              .right = PIN_UNASSIGNED, .up = xuesu300::previousKeyPin, .down = xuesu300::nextKeyPin,
++              .power = PIN_UNASSIGNED, .powerActiveHigh = false, .pageKeysActiveHigh = true},
++    .batteryAdc = xuesu300::batteryAdcPin,
++    .batteryChargeStatus = xuesu300::batteryChargeStatusPin,
++    .batteryDividerMultiplier = xuesu300::batteryDividerMultiplier,
++    .usbDetect = PIN_UNASSIGNED,
++    .touch = NO_TOUCH,
++    .frontlight = NO_FRONTLIGHT,
++    .audio = NO_AUDIO,
++    .leds = NO_LEDS,
++    .orientation = {true, true},
++    .sdmmc = {xuesu300::sdPins.clk, xuesu300::sdPins.cmd, xuesu300::sdPins.d0,
++              xuesu300::sdPins.d1, xuesu300::sdPins.d2, xuesu300::sdPins.d3, 4},
++    .batteryGauge = NO_GAUGE,
++    .grayscaleLevels = 2,
++};
++static_assert(panelBytes(XUESU_300) == 15000);
++constexpr uint32_t XUESU_300_FRAMEBUFFER_BYTES = panelBytes(XUESU_300);
++#else
++constexpr uint32_t XUESU_300_FRAMEBUFFER_BYTES = 0;
++#endif
++
+ // MAX_FRAMEBUFFER_BYTES = the largest framebuffer of the devices compiled in.
+ // The nested cmax tree above is left exactly as it was and only wrapped, so every
+ // existing term keeps its meaning; the Read Pico term (1216/8 x 684 = 103,968 B)
+ // is folded in as the outer call's second argument.
+ constexpr uint32_t MAX_FRAMEBUFFER_BYTES =
+     cmax(cmax(MAX_FRAMEBUFFER_BYTES_COMPILED_IN, FREEINK_DEVICE_PICCO ? panelBytes(PICCO) : 0u),
+-         FREEINK_DEVICE_READPICO ? panelBytes(READ_PICO) : 0u);
++         cmax(FREEINK_DEVICE_READPICO ? panelBytes(READ_PICO) : 0u, XUESU_300_FRAMEBUFFER_BYTES));
+ 
+ // Compile-time default device — the profile ACTIVE starts as. With a single
+ // device in the build this is the only device; with several same-MCU devices it
+ // is the boot default until the consumer calls selectDevice().
+-#if FREEINK_DEVICE_METALIO_EINK4
++#if FREEINK_DEVICE_XUESU_300
++constexpr BoardProfile DEFAULT_DEVICE = XUESU_300;
++#elif FREEINK_DEVICE_METALIO_EINK4
+ constexpr BoardProfile DEFAULT_DEVICE = METALIO_EINK4;
+ #elif FREEINK_DEVICE_WS397
+ constexpr BoardProfile DEFAULT_DEVICE = WS_EPAPER_397;
+@@ -2589,6 +2638,11 @@ inline bool selectDevice(Board which) {
+     case Board::Picco:
+       ACTIVE = PICCO;
+       break;
++#endif
++#if FREEINK_DEVICE_XUESU_300
++    case Board::Xuesu300:
++      ACTIVE = XUESU_300;
++      break;
+ #endif
+     default:
+       return false;
+diff --git a/libs/hardware/InputManager/include/InputManager.h b/libs/hardware/InputManager/include/InputManager.h
+index 8ff5bcb..bc0654f 100644
+--- a/libs/hardware/InputManager/include/InputManager.h
++++ b/libs/hardware/InputManager/include/InputManager.h
+@@ -409,7 +409,7 @@ private:
+   void asyncPoll();
+ 
+   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
+-  bool isDigitalPressed(int8_t pin) const;
++  bool isDigitalPressed(int8_t pin, bool activeHigh = false) const;
+   uint8_t getPhysicalState();
+   uint8_t getDigitalState() const;
+   void updateConfirmBackHold(unsigned long currentTime);
+diff --git a/libs/hardware/InputManager/src/InputManager.cpp b/libs/hardware/InputManager/src/InputManager.cpp
+index 34de790..1a4f54b 100644
+--- a/libs/hardware/InputManager/src/InputManager.cpp
++++ b/libs/hardware/InputManager/src/InputManager.cpp
+@@ -161,15 +161,18 @@ void InputManager::begin() {
+     return;
+   }
+ 
+-  const int8_t pins[] = {
+-      BoardConfig::ACTIVE.input.back, BoardConfig::ACTIVE.input.confirm,
+-      BoardConfig::ACTIVE.input.left, BoardConfig::ACTIVE.input.right,
+-      BoardConfig::ACTIVE.input.up,   BoardConfig::ACTIVE.input.down};
++  const auto &input = BoardConfig::ACTIVE.input;
++  const int8_t pins[] = {input.back, input.confirm, input.left, input.right};
+   for (const int8_t pin : pins) {
+     if (pin >= 0) {
+       pinMode(pin, INPUT_PULLUP);
+     }
+   }
++  for (const int8_t pin : {input.up, input.down}) {
++    if (pin >= 0) {
++      pinMode(pin, input.pageKeysActiveHigh ? INPUT : INPUT_PULLUP);
++    }
++  }
+   // Power follows its declared polarity, as in the ladder branch above. An
+   // active-high button (EEGO A4) needs INPUT_PULLDOWN: the unconditional
+   // pull-up fights its weak external pull-down into mid-rail phantom presses.
+@@ -539,8 +542,8 @@ bool InputManager::popMultiTouchPinch(float &scale, float &nxCenter,
+   return true;
+ }
+ 
+-bool InputManager::isDigitalPressed(const int8_t pin) const {
+-  return pin >= 0 && digitalRead(pin) == LOW;
++bool InputManager::isDigitalPressed(const int8_t pin, const bool activeHigh) const {
++  return pin >= 0 && digitalRead(pin) == (activeHigh ? HIGH : LOW);
+ }
+ 
+ uint8_t InputManager::getDigitalState() const {
+@@ -560,9 +563,9 @@ uint8_t InputManager::getDigitalState() const {
+     state |= (1 << BTN_LEFT);
+   if (isDigitalPressed(BoardConfig::ACTIVE.input.right))
+     state |= (1 << BTN_RIGHT);
+-  if (isDigitalPressed(BoardConfig::ACTIVE.input.up))
++  if (isDigitalPressed(BoardConfig::ACTIVE.input.up, BoardConfig::ACTIVE.input.pageKeysActiveHigh))
+     state |= (1 << BTN_UP);
+-  if (isDigitalPressed(BoardConfig::ACTIVE.input.down))
++  if (isDigitalPressed(BoardConfig::ACTIVE.input.down, BoardConfig::ACTIVE.input.pageKeysActiveHigh))
+     state |= (1 << BTN_DOWN);
+   // Power reads at its declared polarity (isDigitalPressed assumes active-low).
+   if (isPowerButtonPhysicallyPressed() &&

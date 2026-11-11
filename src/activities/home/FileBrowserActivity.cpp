@@ -8,6 +8,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <string_view>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -20,6 +21,9 @@
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "components/icons/book24.h"
+#include "components/icons/folder24.h"
+#include "components/icons/image24.h"
 #include "components/icons/inx_library.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
@@ -29,9 +33,15 @@ namespace fui = freeink::ui;
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
+#if FREEINK_DEVICE_XUESU_300
+constexpr bool enableFileHoldShortcuts = false;
+#else
+constexpr bool enableFileHoldShortcuts = true;
+#endif
 constexpr size_t NAME_BUFFER_SIZE = 500;
 constexpr size_t MAX_COMPONENT_BYTES = 255;
 constexpr char MOVE_HERE_ENTRY[] = "\x01";
+constexpr char CANCEL_MOVE_ENTRY[] = "\x02";
 
 std::string cleanEntryName(std::string entry) {
   if (!entry.empty() && entry.back() == '/') entry.pop_back();
@@ -111,7 +121,10 @@ void FileBrowserActivity::loadFiles() {
   }
   root.close();
   FsHelpers::sortFileList(files);
-  if (browserState == BrowserState::ChoosingMoveDestination) files.insert(files.begin(), MOVE_HERE_ENTRY);
+  if (browserState == BrowserState::ChoosingMoveDestination) {
+    if (FREEINK_DEVICE_XUESU_300) files.insert(files.begin(), CANCEL_MOVE_ENTRY);
+    files.insert(files.begin(), MOVE_HERE_ENTRY);
+  }
 }
 
 bool FileBrowserActivity::usesIconLayout() const {
@@ -120,40 +133,63 @@ bool FileBrowserActivity::usesIconLayout() const {
 }
 
 void FileBrowserActivity::drawIconGrid(UiScreen& screen, const fui::Rect rect) {
+  constexpr int smallIconSize = 24;
+  constexpr int largeIconSize = 72;
+  constexpr int columns = FREEINK_DEVICE_XUESU_300 ? 2 : InxGridGeometry::columns;
+  auto text = screen.theme().bodyText;
+  text.align = fui::TextAlign::Center;
+  text.bold = false;
+  text.maxLines = FREEINK_DEVICE_XUESU_300 ? 2 : 1;
+  const int labelHeight = screen.target().lineHeight(text.font) * text.maxLines;
+  const int rows = InxGridGeometry::fittingRows(rect.height, labelHeight, smallIconSize);
+  const int capacity = rows * columns;
+  int gridWidth = rect.width;
+#if FREEINK_DEVICE_XUESU_300
+  if (listCount() > capacity) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    gridWidth -= metrics.scrollBarWidth + metrics.scrollBarRightOffset;
+  }
+#endif
+  syncPagedViewport(capacity);
   const int start = nav.top;
-  constexpr int iconSize = 72;
-  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  prewarmRowGlyphs(start);
   const bool showSelection = showMainTabContentSelection();
-  for (int slot = 0; slot < InxGridGeometry::itemsPerPage && start + slot < listCount(); ++slot) {
+  for (int slot = 0; slot < capacity && start + slot < listCount(); ++slot) {
     const int index = start + slot;
-    Rect cell = InxGridGeometry::cellBounds(slot, rect.width, rect.height);
+    Rect cell = InxGridGeometry::cellBounds(slot, gridWidth, rect.height, rows, columns);
     cell.x += rect.x;
     cell.y += rect.y;
+    if (cell.width <= 0 || cell.height <= 0) continue;
+    const GfxRenderer::ClipScope clip(renderer, cell.x, cell.y, cell.width, cell.height);
     const bool selected = showSelection && index == nav.selected;
     if (selected) renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
-    const UIIcon type = UITheme::getFileIcon(files[index]);
-    const uint8_t* icon = type == UIIcon::Folder ? FolderLarge : (type == UIIcon::Image ? ImageLarge : BookLarge);
-    const int iconX = cell.x + (cell.width - iconSize) / 2;
-    const int iconY = cell.y + std::max(4, (cell.height - iconSize - lineHeight - 6) / 2);
-    if (selected)
-      renderer.drawIconInverted(icon, iconX, iconY, iconSize);
-    else
-      renderer.drawIcon(icon, iconX, iconY, iconSize);
+    const int iconLimit = InxGridGeometry::maximumIconSize(cell, labelHeight);
+    const bool large = iconLimit >= largeIconSize;
+    const int iconSize = large ? largeIconSize : (iconLimit >= smallIconSize ? smallIconSize : 0);
+    const int iconY = InxGridGeometry::tileTop(cell, labelHeight, iconSize);
+    if (iconSize > 0) {
+      const UIIcon type = UITheme::getFileIcon(files[index]);
+      const uint8_t* icon = large ? BookLarge : Book24Icon;
+      if (type == UIIcon::Folder) icon = large ? FolderLarge : Folder24Icon;
+      if (type == UIIcon::Image) icon = large ? ImageLarge : Image24Icon;
+      const int iconX = cell.x + (cell.width - iconSize) / 2;
+      if (selected)
+        renderer.drawIconInverted(icon, iconX, iconY, iconSize);
+      else
+        renderer.drawIcon(icon, iconX, iconY, iconSize);
+    }
     freeink::ui::ListItem item;
     provideRow(this, static_cast<uint16_t>(index), item);
-    auto text = screen.theme().bodyText;
-    text.align = fui::TextAlign::Center;
-    text.bold = false;
     text.color = selected ? fui::Color::White : fui::Color::Black;
-    screen.target().text(fui::Rect{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(iconY + iconSize + 6),
-                                   static_cast<int16_t>(std::max(1, cell.width - 8)), static_cast<int16_t>(lineHeight)},
+    const int labelY = iconY + (iconSize > 0 ? iconSize + InxGridGeometry::iconLabelGap : 0);
+    screen.target().text(fui::Rect{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(labelY),
+                                   static_cast<int16_t>(std::max(1, cell.width - 8)), static_cast<int16_t>(labelHeight)},
                          item.label, text);
     screen.frame().hit(fui::Rect{static_cast<int16_t>(cell.x), static_cast<int16_t>(cell.y),
                                  static_cast<int16_t>(cell.width), static_cast<int16_t>(cell.height)},
                        ACTION_ROW, static_cast<int16_t>(index), fui::InputTouch | fui::InputLongPress);
   }
-  GUI.drawSideScrollBar(renderer, Rect{rect.x, rect.y, rect.width, rect.height}, files.size(), start,
-                        InxGridGeometry::itemsPerPage);
+  GUI.drawSideScrollBar(renderer, Rect{rect.x, rect.y, rect.width, rect.height}, files.size(), start, capacity);
 }
 
 void FileBrowserActivity::onEnter() {
@@ -210,6 +246,24 @@ void FileBrowserActivity::showNotice(const StrId message) {
   requestUpdate();
 }
 
+#if FREEINK_DEVICE_XUESU_300
+const char* FileBrowserActivity::xuesuQuickActionLabel() const {
+  if (mode != Mode::Books || browserState != BrowserState::Browsing || editPopup.isActive() ||
+      !showMainTabContentSelection() || nav.selected < 0 || nav.selected >= listCount()) {
+    return nullptr;
+  }
+  std::string_view entry = files[nav.selected];
+  if (entry.ends_with('/')) entry.remove_suffix(1);
+  if (FsHelpers::isProtectedPathComponent(entry)) return nullptr;
+  return tr(STR_XUESU_FILE_ACTIONS);
+}
+
+void FileBrowserActivity::runXuesuQuickAction() {
+  app.clearTapFlash();
+  showEditMenu();
+}
+#endif
+
 void FileBrowserActivity::showEditMenu() {
   if (mode != Mode::Books || browserState != BrowserState::Browsing || files.empty() || nav.selected < 0 ||
       nav.selected >= listCount()) {
@@ -219,8 +273,17 @@ void FileBrowserActivity::showEditMenu() {
   const std::string entry = cleanEntryName(files[nav.selected]);
   if (FsHelpers::isProtectedPathComponent(entry)) return;
 
-  constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME, StrId::STR_MOVE};
-  static constexpr EditAction order[] = {EditAction::Open, EditAction::Delete, EditAction::Rename, EditAction::Move};
+  constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE,
+#if !FREEINK_DEVICE_XUESU_300
+                               StrId::STR_RENAME,
+#endif
+                               StrId::STR_MOVE};
+  static constexpr EditAction order[] = {EditAction::Open, EditAction::Delete,
+#if !FREEINK_DEVICE_XUESU_300
+                                         EditAction::Rename,
+#endif
+                                         EditAction::Move};
+  static_assert(std::size(actions) == std::size(order));
   editPopup.show(StrId::STR_FILENAME, actions, static_cast<int>(std::size(actions)), 0, [this](const int index) {
     if (index >= 0 && index < static_cast<int>(std::size(order))) executeEditAction(order[index]);
   });
@@ -430,9 +493,15 @@ void FileBrowserActivity::activateSelected() {
   if (nav.selected < 0 || nav.selected >= listCount()) return;
 
   const std::string& entry = files[nav.selected];
-  if (browserState == BrowserState::ChoosingMoveDestination && entry == MOVE_HERE_ENTRY) {
-    completeMove();
-    return;
+  if (browserState == BrowserState::ChoosingMoveDestination) {
+    if (entry == MOVE_HERE_ENTRY) {
+      completeMove();
+      return;
+    }
+    if (FREEINK_DEVICE_XUESU_300 && entry == CANCEL_MOVE_ENTRY) {
+      cancelMove();
+      return;
+    }
   }
   const bool isDirectory = (entry.back() == '/');
 
@@ -467,7 +536,7 @@ bool FileBrowserActivity::handleCustomInput() {
 
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
-  if (mode == Mode::Books && browserState == BrowserState::Browsing &&
+  if (enableFileHoldShortcuts && mode == Mode::Books && browserState == BrowserState::Browsing &&
       mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS &&
       basepath != "/") {
     {
@@ -487,7 +556,7 @@ bool FileBrowserActivity::handleCustomInput() {
 }
 
 bool FileBrowserActivity::handleButtons() {
-  if (mode == Mode::Books && browserState == BrowserState::Browsing &&
+  if (enableFileHoldShortcuts && mode == Mode::Books && browserState == BrowserState::Browsing &&
       mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS)) {
     app.clearTapFlash();
     showEditMenu();
@@ -500,8 +569,9 @@ bool FileBrowserActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    // Short press: go up one directory, or go home if at root
-    if (mappedInput.getHeldTime() < GO_HOME_MS) {
+    // Go up one directory, or go home if at root. On Xuesu the shared
+    // Confirm/Back key only emits Back after a hold.
+    if (!enableFileHoldShortcuts || mappedInput.getHeldTime() < GO_HOME_MS) {
       if (basepath != "/") {
         const std::string oldPath = basepath;
 
@@ -603,8 +673,6 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   }
 
   if (usesIconLayout()) {
-    syncPagedViewport(InxGridGeometry::itemsPerPage);
-    prewarmRowGlyphs(nav.top);
     drawIconGrid(screen, screen.body());
     return;
   }
@@ -702,8 +770,8 @@ void FileBrowserActivity::provideRow(void* ctx, const uint16_t index, fui::ListI
   auto* self = static_cast<FileBrowserActivity*>(ctx);
   if (index >= self->files.size()) return;
   const std::string& entry = self->files[index];
-  if (entry == MOVE_HERE_ENTRY) {
-    item.label = tr(STR_MOVE_HERE);
+  if (entry == MOVE_HERE_ENTRY || (FREEINK_DEVICE_XUESU_300 && entry == CANCEL_MOVE_ENTRY)) {
+    item.label = entry == MOVE_HERE_ENTRY ? tr(STR_MOVE_HERE) : tr(STR_CANCEL);
     item.actionValue = static_cast<int16_t>(index);
     return;
   }

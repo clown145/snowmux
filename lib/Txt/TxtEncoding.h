@@ -15,6 +15,8 @@ struct TranscodeResult {
 bool isSerializedValueValid(uint8_t value);
 bool isSupported(Encoding encoding);
 Encoding detect(const uint8_t* data, size_t length, bool finalChunk);
+// Returns zero for an unmapped pair or when GBK support is disabled.
+uint16_t decodeGbkPair(uint8_t lead, uint8_t trail);
 
 // Uses one buffer for both source and destination. The caller must provide
 // enough capacity for rawLength + the UTF-8 output.

@@ -63,13 +63,13 @@ constexpr bool showsStatusBar(const bool usesMainTabs, const bool hasTouch, cons
 }
 
 constexpr MainTabLayout layout(const Rect& safeArea, const int topPadding, const int tabHeight, const bool tabsAtBottom,
-                               const int statusHeight = 0) {
+                               const int statusHeight = 0, const bool statusAboveTopTabs = false) {
   const int top = safeArea.y + topPadding;
   const int bottom = safeArea.y + safeArea.height;
-  const int status = tabsAtBottom ? statusHeight : 0;
+  const int status = tabsAtBottom || statusAboveTopTabs ? statusHeight : 0;
   const int gap = status > 0 ? controlGap : 0;
-  const int tabTop = tabsAtBottom ? bottom - tabHeight : top;
-  const int contentTop = tabsAtBottom ? top + status + gap : top + tabHeight;
+  const int tabTop = tabsAtBottom ? bottom - tabHeight : top + status;
+  const int contentTop = tabsAtBottom ? top + status + gap : tabTop + tabHeight;
   const int contentBottom = tabsAtBottom ? tabTop - gap : bottom;
   return {Rect{safeArea.x, tabTop, safeArea.width, tabHeight}, Rect{safeArea.x, top, safeArea.width, status},
           Rect{safeArea.x, contentTop, safeArea.width, std::max(0, contentBottom - contentTop)}};

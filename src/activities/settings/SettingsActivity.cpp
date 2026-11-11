@@ -3,6 +3,9 @@
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#if FREEINK_DEVICE_XUESU_300
+#include <HalPowerManager.h>
+#endif
 #include <LibraryBuilder.h>
 #include <Logging.h>
 #if (FREEINK_DEVICE_MURPHY_M4 || FREEINK_CAP_HAPTIC) && !defined(SIMULATOR)
@@ -41,6 +44,7 @@
 #include "TapZoneSettingsActivity.h"
 #include "TextSettingsActivity.h"
 #include "activities/home/FileBrowserActivity.h"
+#include "activities/network/WifiProvisionActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/plugins/PluginCatalogActivity.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -58,6 +62,32 @@ namespace fui = freeink::ui;
 
 namespace {
 constexpr StrId OK_OPTION[] = {StrId::STR_OK_BUTTON};
+
+#if FREEINK_DEVICE_XUESU_300
+StrId saveFullBatteryCalibration() {
+  uint16_t fullMv = 0;
+  using Result = HalPowerManager::BatteryCalibrationResult;
+  switch (powerManager.sampleFullBatteryReference(fullMv)) {
+    case Result::Charging:
+      return StrId::STR_BATTERY_CALIBRATION_CHARGING;
+    case Result::ReadFailed:
+      return StrId::STR_BATTERY_CALIBRATION_READ_FAILED;
+    case Result::OutOfRange:
+      return StrId::STR_BATTERY_CALIBRATION_OUT_OF_RANGE;
+    case Result::Ready:
+      break;
+  }
+
+  const uint16_t previous = SETTINGS.xuesuBatteryFullMv;
+  SETTINGS.xuesuBatteryFullMv = fullMv;
+  if (!SETTINGS.saveToFile()) {
+    SETTINGS.xuesuBatteryFullMv = previous;
+    return StrId::STR_BATTERY_CALIBRATION_SAVE_FAILED;
+  }
+  powerManager.setFullBatteryReference(fullMv);
+  return StrId::STR_BATTERY_CALIBRATION_SAVED;
+}
+#endif
 }  // namespace
 
 SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -111,15 +141,24 @@ void SettingsActivity::rebuildSettingsLists() {
         return SettingsSection::End;
     }
   };
+#if FREEINK_DEVICE_XUESU_300
+  const bool showInxSettings = UITheme::getInstance().hasMainTabs();
+#else
+  const bool showInxSettings = usesAccordion();
+#endif
   const auto visible = [&](const SettingInfo& setting) {
     if (setting.webHidden || home_button::isSetting(setting.valuePtr) || sectionFor(setting) == SettingsSection::End)
       return false;
     if (setting.valuePtr == &CrossPointSettings::bluetoothEnabled) return false;
-    if (!usesAccordion() && (setting.valuePtr == &CrossPointSettings::inxRecentLayout ||
-                             setting.valuePtr == &CrossPointSettings::inxLibraryLayout ||
-                             setting.valuePtr == &CrossPointSettings::inxAppsLayout ||
-                             setting.valuePtr == &CrossPointSettings::inxTabPosition))
+    if (!showInxSettings && (setting.valuePtr == &CrossPointSettings::inxRecentLayout ||
+                            setting.valuePtr == &CrossPointSettings::inxLibraryLayout ||
+                            setting.valuePtr == &CrossPointSettings::inxAppsLayout ||
+                            setting.valuePtr == &CrossPointSettings::inxTabPosition))
       return false;
+#if FREEINK_DEVICE_XUESU_300
+    if (setting.valuePtr == &CrossPointSettings::shortPwrBtn || setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack)
+      return false;
+#endif
     if (setting.valuePtr == &CrossPointSettings::fadingFix && (BoardConfig::isX4Pro() || FREEINK_DEVICE_X4CLASSIC))
       return false;
     if (setting.category == StrId::STR_CAT_READER && (setting.inTextSettings || setting.inReadingStatsSettings))
@@ -133,7 +172,7 @@ void SettingsActivity::rebuildSettingsLists() {
            setting.valuePtr != &CrossPointSettings::clockFormat;
   };
   // Bound each activity-owned list before moving descriptors; fixed sections retain only their own rows.
-  static constexpr size_t EXTRA_ROWS[] = {9, 0, 7, 2, 0, 5};
+  static constexpr size_t EXTRA_ROWS[] = {9 + FREEINK_DEVICE_XUESU_300, 0, 7, 2, 0, 5};
   for (size_t i = 0; i < categories.size(); ++i) {
     auto& rows = categories[i];
     rows.clear();
@@ -148,20 +187,36 @@ void SettingsActivity::rebuildSettingsLists() {
       categories[static_cast<size_t>(target)].push_back(SettingInfo::Action(name, action));
   };
   addAction(SettingsSection::General, StrId::STR_LANGUAGE, SettingAction::Language);
+#if !FREEINK_DEVICE_XUESU_300
   addAction(SettingsSection::General, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
+#endif
+#if FREEINK_DEVICE_XUESU_300
+  addAction(SettingsSection::General, StrId::STR_SLEEP, SettingAction::Sleep);
+  addAction(SettingsSection::General, StrId::STR_BATTERY_CALIBRATION, SettingAction::BatteryCalibration);
+#endif
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts);
   addAction(SettingsSection::Reader, StrId::STR_MANAGE_DICTIONARIES, SettingAction::ManageDictionaries);
   if (BoardConfig::hasHomeKey())
     addAction(SettingsSection::Controls, StrId::STR_HOME_BUTTON, SettingAction::HomeButton);
+#if !FREEINK_DEVICE_XUESU_300
   if (!BoardConfig::hasTouch())
     addAction(SettingsSection::Controls, StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons);
+#endif
   for (auto& setting : all) {
     if (!visible(setting)) continue;
     const auto target = sectionFor(setting);
     if (section == SettingsSection::End || section == target)
       categories[static_cast<size_t>(target)].push_back(std::move(setting));
   }
+#if FREEINK_DEVICE_XUESU_300
+  auto& displayRows = categories[static_cast<size_t>(SettingsSection::Display)];
+  const auto sleepTimeout = std::find_if(displayRows.begin(), displayRows.end(), [](const SettingInfo& setting) {
+    return setting.nameId == StrId::STR_TIME_TO_SLEEP;
+  });
+  if (sleepTimeout != displayRows.end() && sleepTimeout != displayRows.begin())
+    std::rotate(displayRows.begin() + 1, sleepTimeout, sleepTimeout + 1);
+#endif
   if (hasDictionary && (section == SettingsSection::End || section == SettingsSection::Reader))
     categories[static_cast<size_t>(SettingsSection::Reader)].push_back(std::move(dictionarySetting));
   resourcesDirty = false;
@@ -194,7 +249,11 @@ void SettingsActivity::rebuildSettingsLists() {
   addAction(SettingsSection::General, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
 #endif
   addAction(SettingsSection::General, StrId::STR_ABOUT, SettingAction::About);
+#if FREEINK_DEVICE_XUESU_300
+  addAction(SettingsSection::Network, StrId::STR_WIFI_HOTSPOT_SETUP, SettingAction::Network);
+#else
   addAction(SettingsSection::Network, StrId::STR_WIFI_NETWORKS, SettingAction::Network);
+#endif
 #if FREEINK_CAP_BLE_HID_HOST
   addAction(SettingsSection::Network, StrId::STR_BT_PAGE_TURNER, SettingAction::Bluetooth);
 #endif
@@ -344,7 +403,7 @@ void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valueP
     RenderLock lock(*this);
     const bool hadMainTabs = UITheme::getInstance().hasMainTabs();
     UITheme::getInstance().reload();
-    if (hadMainTabs != UITheme::getInstance().hasMainTabs()) {
+    if (!FREEINK_DEVICE_XUESU_300 && hadMainTabs != UITheme::getInstance().hasMainTabs()) {
       activityManager.goToSettings(UITheme::getInstance().hasMainTabs() ? SettingsSection::End
                                                                         : SettingsSection::Display);
       return;
@@ -358,6 +417,11 @@ void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valueP
 }
 
 bool SettingsActivity::handleCustomInput() {
+  if (waitForBackRelease || waitForConfirmRelease) {
+    waitForBackRelease = waitForBackRelease && mappedInput.isPressed(MappedInputManager::Button::Back);
+    waitForConfirmRelease = waitForConfirmRelease && mappedInput.isPressed(MappedInputManager::Button::Confirm);
+    return true;  // Consume the child gesture's release frame as well.
+  }
   return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
@@ -544,6 +608,8 @@ void SettingsActivity::toggleSetting(const SettingInfo& setting) {
     // Every child page returns here through ActivityManager's Pop; make sure the
     // settings list is both rebuilt (values may have changed) and repainted.
     auto resultHandler = [this](const ActivityResult&) {
+      waitForBackRelease = mappedInput.isPressed(MappedInputManager::Button::Back);
+      waitForConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
       SETTINGS.saveToFile();
       rebuildSettingsLists();
       requestUpdate();
@@ -595,6 +661,9 @@ void SettingsActivity::toggleSetting(const SettingInfo& setting) {
         startActivityForResultWith<OpdsServerListActivity>(resultHandler);
         break;
       case SettingAction::Network: {
+#if FREEINK_DEVICE_XUESU_300
+        startActivityForResultWith<WifiProvisionActivity>(resultHandler);
+#else
         auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false);
         if (!activity) {
           LOG_ERR("SETTINGS", "OOM: WifiSelectionActivity");
@@ -614,6 +683,7 @@ void SettingsActivity::toggleSetting(const SettingInfo& setting) {
           RenderLock lock;
           silentRestartToSettings();
         });
+#endif
 
         break;
       }
@@ -692,6 +762,23 @@ void SettingsActivity::toggleSetting(const SettingInfo& setting) {
         break;
       case SettingAction::TapZones:
         startActivityForResultWith<TapZoneSettingsActivity>(resultHandler);
+        break;
+      case SettingAction::Sleep:
+        activityManager.requestSleep();
+        break;
+      case SettingAction::BatteryCalibration:
+#if FREEINK_DEVICE_XUESU_300
+        if (!startActivityForResultWith<ConfirmationActivity>(
+                [this](const ActivityResult& result) {
+                  if (result.isCancelled) return;
+                  optionPopup.show(saveFullBatteryCalibration(), OK_OPTION, 1, 0, [](int) {});
+                  requestUpdate();
+                },
+                tr(STR_BATTERY_CALIBRATION), tr(STR_BATTERY_CALIBRATION_PROMPT))) {
+          optionPopup.show(StrId::STR_MEMORY_ERROR, OK_OPTION, 1, 0, [](int) {});
+          requestUpdate();
+        }
+#endif
         break;
       case SettingAction::None:
         // Do nothing

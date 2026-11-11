@@ -113,7 +113,7 @@ void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& pr
     // to, because ring position 0 is the tab bar, not a row), so it must wire the nav
     // itself.
     props.nav = &n;
-    if (!mappedInput.hasTouch()) {
+    if (!mappedInput.hasTouch() && props.rowHeight <= 0) {
       // Non-touch hardware (X3/X4) keeps the original, denser per-theme row
       // height instead of FreeInkUI's touch-target-sized default (see
       // UiListActivity::syncListViewport, the non-tab counterpart of this).
@@ -204,6 +204,13 @@ void UiTabListActivity::buildTabBar(UiScreen& screen, const bool boldLabels) {
     if (mainTabs) {
       tabStyles.selected.background = fui::Paint::solid(fui::Color::Black);
       tabStyles.selected.foreground = fui::Paint::solid(fui::Color::White);
+#if FREEINK_DEVICE_XUESU_300
+      if (!tabsFocused) {
+        tabStyles.selected.background = {};
+        tabStyles.selected.foreground = fui::Paint::solid(fui::Color::Black);
+        tabProps.selectedUnderline = 2;
+      }
+#endif
     } else if (tabsFocused) {
       tabStyles.selected.background = fui::Paint::solid(fui::Color::Black);
       tabStyles.selected.foreground = fui::Paint::solid(fui::Color::White);

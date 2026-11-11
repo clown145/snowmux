@@ -12,6 +12,10 @@ class RecentBooksActivity : public UiListActivity {
   explicit RecentBooksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
   void onEnter() override;
   void onExit() override;
+#if FREEINK_DEVICE_XUESU_300
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
 
  protected:
   int listCount() const override { return static_cast<int>(recentBooks.size()); }

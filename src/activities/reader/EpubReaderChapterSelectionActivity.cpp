@@ -7,6 +7,7 @@
 #include <string>
 
 #include "MappedInputManager.h"
+#include "ReaderSubpageLayout.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -133,9 +134,10 @@ bool EpubReaderChapterSelectionActivity::handleButtons() {
 void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = uiThemeMetrics(true);
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int headerHeight = ReaderSubpageLayout::headerRect(renderer, true).height;
   // Content: the safe area minus the header band drawChrome paints the title in.
   screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+      static_cast<int16_t>(safe.y + metrics.topPadding + headerHeight),
       static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
       static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
@@ -163,6 +165,7 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
 }
 
 void EpubReaderChapterSelectionActivity::drawChrome() {
-  const Rect header = UITheme::getInstance().getHeaderRect(renderer, true, false, true);
-  GUI.drawHeaderWithStyle(renderer, header, tr(STR_SELECT_CHAPTER), nullptr, true, true);
+  const Rect header = ReaderSubpageLayout::headerRect(renderer, true);
+  GUI.drawHeaderWithStyle(renderer, header, tr(STR_SELECT_CHAPTER), nullptr, true, true,
+                          ReaderSubpageLayout::usesCompactHeader(renderer));
 }

@@ -23,8 +23,7 @@ bool renderBmpPass(const GfxRenderer& renderer, const Rect& bounds, const Select
   if (bitmap.parseHeaders() != BmpReaderError::Ok) return false;
   if (bitmap.getWidth() != selected.image.width || bitmap.getHeight() != selected.image.height) return false;
 
-  renderer.drawBitmap(bitmap, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0);
-  return true;
+  return renderer.drawBitmap(bitmap, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0);
 }
 
 bool renderPass(GfxRenderer& renderer, const Rect& bounds, const SelectedImage& selected, ImageBlock* jpegBlock,
@@ -87,12 +86,16 @@ AirPageImageRenderer::Result AirPageImageRenderer::render(GfxRenderer& renderer,
 
   struct RenderCleanup {
     GfxRenderer& renderer;
+    bool restoreDither;
     ~RenderCleanup() {
+      renderer.setDitherImagesInBw(restoreDither);
       renderer.cancelGrayscale16();
       renderer.setRenderMode(GfxRenderer::BW);
       ImageBlock::releaseRenderCache();
     }
-  } cleanup{renderer};
+  } cleanup{renderer, renderer.imagesDitheredInBw()};
+  const bool monochrome = renderer.getGrayscaleLevels() < 4;
+  renderer.setDitherImagesInBw(monochrome);
 
   if (renderer.getGrayscaleLevels() == 16) {
     if (cleanBeforeDisplay) cleanScreen(renderer);
@@ -151,7 +154,7 @@ AirPageImageRenderer::Result AirPageImageRenderer::render(GfxRenderer& renderer,
   if (!renderPass(renderer, bounds, selected, jpeg, &error)) return failure();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
-  if (!selected.image.hasGrayscale) return Result::Success;
+  if (monochrome || !selected.image.hasGrayscale) return Result::Success;
 
   const auto abortGrayscale = [&renderer] {
     renderer.setRenderMode(GfxRenderer::BW);

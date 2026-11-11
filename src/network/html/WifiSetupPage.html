@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CrossMux Wi-Fi</title>
+  <link rel="stylesheet" href="/assets/web.css">
+  <link rel="icon" type="image/svg+xml" href="/assets/crosspoint-icon.svg">
+  <style>
+    .web-ui .setup-page { max-width: 32rem; }
+    .setup-page form { display: grid; gap: .9rem; }
+    .setup-page label { display: grid; gap: .35rem; color: var(--label-color); }
+    .setup-page .network-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .5rem; }
+    .setup-page input, .setup-page select { min-width: 0; width: 100%; box-sizing: border-box; }
+    .setup-page .setup-description, #status { color: var(--label-color); }
+    #status { margin: 1rem 0 0; overflow-wrap: anywhere; }
+    #status:empty { display: none; }
+  </style>
+</head>
+<body class="web-ui">
+  <header class="brand">
+    <div class="brand-inner">
+      <h1><a class="brand-link" href="/"><img class="brand-logo" src="/assets/crosspoint-icon.svg" alt="" width="32" height="32">CrossMux</a></h1>
+    </div>
+  </header>
+  <main class="page-content setup-page">
+    <section class="card" aria-labelledby="heading">
+      <h2 id="heading">Wi-Fi 配网</h2>
+      <p id="intro" class="setup-description">选择 2.4 GHz 网络，或手动填写网络名称。</p>
+      <form id="setup">
+        <div class="network-picker">
+          <label><span id="nearby">附近网络</span><select id="networks"></select></label>
+          <button id="scan" class="folder-action-btn" type="button">重新扫描</button>
+        </div>
+        <label><span id="name">网络名称</span><input id="ssid" maxlength="32" required autocapitalize="none" spellcheck="false"></label>
+        <label><span id="key">密码（开放网络留空）</span><input id="password" type="password" maxlength="64" autocomplete="off"></label>
+        <button id="connect" class="save-btn" type="submit">连接并保存</button>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script>
+    const zh = navigator.language.toLowerCase().startsWith('zh');
+    const $ = id => document.getElementById(id);
+    if (!zh) {
+      document.documentElement.lang = 'en';
+      const labels = {
+        heading: 'Wi-Fi setup', intro: 'Select a 2.4 GHz network or enter its name.', nearby: 'Nearby networks',
+        scan: 'Scan again', name: 'Network name', key: 'Password (leave blank for open networks)', connect: 'Connect and save'
+      };
+      for (const [id, label] of Object.entries(labels)) $(id).textContent = label;
+    }
+    const setStatus = (cn, en) => { $('status').textContent = zh ? cn : en; };
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const post = (path, data) => fetch(path, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+    });
+    let connecting = false;
+    async function loadNetworks(rescan) {
+      $('scan').disabled = true;
+      try {
+        if (rescan && !(await post('/scan', {})).ok) return;
+        for (let i = 0; i < 20; i++) {
+          const response = await fetch('/networks');
+          if (response.status === 202) {
+            await sleep(500);
+            continue;
+          }
+          if (!response.ok) return;
+          const networks = await response.json();
+          $('networks').replaceChildren(new Option(zh ? '手动填写' : 'Enter manually', ''));
+          const seen = new Set();
+          for (const network of networks.sort((a, b) => b.rssi - a.rssi)) {
+            if (seen.has(network.ssid)) continue;
+            seen.add(network.ssid);
+            $('networks').add(new Option(network.ssid, network.ssid));
+          }
+          return;
+        }
+      } catch (_) {
+        if (!connecting) setStatus('扫描未完成，可以手动填写。', 'Scan did not finish. You can enter the network name.');
+      } finally {
+        $('scan').disabled = connecting;
+      }
+    }
+    $('networks').onchange = () => { $('ssid').value = $('networks').value; };
+    $('scan').onclick = () => loadNetworks(true);
+    $('setup').onsubmit = async event => {
+      event.preventDefault();
+      connecting = $('connect').disabled = $('scan').disabled = true;
+      let success = false;
+      try {
+        const response = await post('/connect', {ssid: $('ssid').value, password: $('password').value});
+        if (!response.ok) {
+          setStatus('请检查网络名称和密码。', 'Check the network name and password.');
+          return;
+        }
+        $('password').value = '';
+        setStatus('雪酥正在连接，请保持手机连着配网热点。', 'Connecting. Keep this browser on the setup hotspot.');
+        for (let i = 0; i < 24; i++) {
+          await sleep(1000);
+          // AP and station use the same radio. The hotspot can briefly move to the router's channel.
+          const state = await fetch('/status', {signal: AbortSignal.timeout(2000)}).then(r => r.json()).catch(() => null);
+          if (!state || state.state === 'connecting') continue;
+          if (state.state === 'connected') {
+            success = true;
+            setStatus('已连接并保存，IP ' + state.ip + '。热点即将关闭。',
+                      'Connected and saved. IP ' + state.ip + '. The setup hotspot will close.');
+            return;
+          }
+          if (state.state === 'save-failed') {
+            setStatus('已连上，但保存失败。请检查 SD 卡和已保存的网络数量。',
+                      'Connected, but could not save. Check the SD card and the number of saved networks.');
+            return;
+          }
+          break;
+        }
+        setStatus('连接失败，请检查密码和信号后重试。', 'Could not connect. Check the password and signal, then retry.');
+      } catch (_) {
+        setStatus('网页连接断开，请确认仍连着雪酥热点。', 'Connection lost. Check that you are on the setup hotspot.');
+      } finally {
+        connecting = $('connect').disabled = $('scan').disabled = success;
+      }
+    };
+    loadNetworks(false);
+  </script>
+</body>
+</html>

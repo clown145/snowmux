@@ -47,7 +47,10 @@ class PersistableStoreBase {
   // that per-TU duplication is exactly what this class exists to prevent.
 
   // Rejects overflowed documents before I/O; otherwise writes JSON (ensures /.crosspoint exists). Logs on failure.
-  static bool writeDocToFile(const char* path, const JsonDocument& doc);
+  static bool writeDocToFile(const char* path, const JsonDocument& doc, bool keepPrevious = false);
+
+  // Commits an already verified staging file while retaining the old data until rename succeeds.
+  static bool replaceStagedFile(const char* path, const char* stagingPath);
 
   // Promotes an available .tmp if path is missing; the caller must still validate its contents.
   static bool recoverTempFile(const char* path);

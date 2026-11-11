@@ -58,10 +58,11 @@ namespace {
 //   84 / 85 - CSS font variants, page boxes/drop caps, inheritance, and GIF layout
 //   88 / 89 - font-size line spacing, ruby space-around, RTL focus offsets and TTF advances
 //   86 / 87 - literal-space justification, wrapped NBSP, RTL gaps, and bounded drop-cap hyphenation
+//   90 / 91 - inline references for image-only EPUB footnotes and img3_ extraction paths
 #ifdef ENABLE_CHINESE_VERSION
-constexpr uint8_t SECTION_FILE_VERSION = 89;
+constexpr uint8_t SECTION_FILE_VERSION = 91;
 #else
-constexpr uint8_t SECTION_FILE_VERSION = 88;
+constexpr uint8_t SECTION_FILE_VERSION = 90;
 #endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
@@ -443,14 +444,14 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // Derive the content base directory and image cache path prefix for the parser
   const size_t lastSlash = localPath.find_last_of('/');
   ctx->contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
-  // The "img2_" prefix versions the extracted-image namespace. Content-based
+  // The extracted-image namespace also changes when note icons become inline
+  // text and no longer consume an image index. Content-based
   // decoder selection hands an imageCounter value to entries the old extension
   // gate skipped, which renumbers every later image in the chapter; without a new
   // prefix a rebuilt chapter would land on a pre-upgrade file (and reuse its .pxc)
   // that ImageBlock::ensureExtracted() accepts on existence alone. Bump it in
-  // lockstep with SECTION_FILE_VERSION above. Pre-upgrade "img_*" files are simply
-  // never referenced again.
-  ctx->imageBasePath = epub->getCachePath() + "/img2_" + std::to_string(spineIndex) + "_";
+  // lockstep with SECTION_FILE_VERSION above. Older extraction paths are not reused.
+  ctx->imageBasePath = epub->getCachePath() + "/img3_" + std::to_string(spineIndex) + "_";
 
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();

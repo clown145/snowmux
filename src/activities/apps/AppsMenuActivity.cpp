@@ -38,6 +38,8 @@ constexpr AppEntry kAppEntries[] = {
 #endif
     {AppId::AirPage, StrId::STR_AIRPAGE_TITLE, UIIcon::AirPage, &ActivityManager::goToAirPage},
     {AppId::ReadingStats, StrId::STR_READING_STATS, UIIcon::ReadingStats, &ActivityManager::goToReadingStatsMenu},
+#if !FREEINK_DEVICE_XUESU_300
+    // These games need left/right movement or touch to reach the whole board.
     {AppId::Sudoku, StrId::STR_SUDOKU_TITLE, UIIcon::Sudoku, &ActivityManager::goToSudoku},
     {AppId::Gomoku, StrId::STR_GOMOKU_TITLE, UIIcon::Gomoku, &ActivityManager::goToGomoku},
     {AppId::Sokoban, StrId::STR_SOKOBAN_TITLE, UIIcon::Sokoban, &ActivityManager::goToSokoban},
@@ -46,10 +48,13 @@ constexpr AppEntry kAppEntries[] = {
 #endif
     {AppId::Minesweeper, StrId::STR_MINESWEEPER_TITLE, UIIcon::Minesweeper, &ActivityManager::goToMinesweeper},
     {AppId::Game2048, StrId::STR_2048_TITLE, UIIcon::Game2048, &ActivityManager::goToGame2048},
+#endif
     {AppId::UglyAvatar, StrId::STR_UGLY_AVATAR, UIIcon::Avatar, &ActivityManager::goToUglyAvatar},
     {AppId::Buddy, StrId::STR_BUDDY_TITLE, UIIcon::Buddy, &ActivityManager::goToBuddy},
+#if !FREEINK_DEVICE_XUESU_300
     {AppId::PixelSwitch, StrId::STR_PIXEL_SWITCH_TITLE, UIIcon::PixelSwitch, &ActivityManager::goToPixelSwitch},
     {AppId::Calculator, StrId::STR_CALCULATOR_TITLE, UIIcon::Calculator, &ActivityManager::goToCalculator},
+#endif
     {AppId::Woodfish, StrId::STR_WOODFISH_TITLE, UIIcon::Woodfish, &ActivityManager::goToWoodfish},
     {AppId::Standby, StrId::STR_STANDBY_TITLE, UIIcon::Standby, &ActivityManager::goToStandby},
 };
@@ -184,37 +189,90 @@ void AppsMenuActivity::activateIndex(const int index) {
 }
 
 void AppsMenuActivity::drawIconGrid(UiScreen& screen, const Rect& rect, const int visibleCount,
-                                    const bool showSelection) const {
+                                   const bool showSelection) {
+  const int lineHeight = screen.target().lineHeight(screen.theme().bodyText.font);
+  int gridWidth = rect.width;
+  int gridHeight = rect.height;
+  int gridTop = rect.y;
+#if FREEINK_DEVICE_XUESU_300
+  constexpr int columns = 2;
+  constexpr int maxRows = 5;
+  constexpr int iconSize = InxAppIcons::size;
+  constexpr int padding = 8;
+  constexpr int labelInsetY = 2;
+  constexpr auto compactFont = fui::GfxRendererTarget::FONT_LABEL;
+  const int compactLineHeight = std::max<int>(1, screen.target().lineHeight(compactFont));
+  const int minimumTileHeight = std::max({iconSize + padding, lineHeight + 2 * labelInsetY,
+                                          2 * std::min(lineHeight, compactLineHeight) + 2 * labelInsetY});
+  const int fittingRows = std::clamp(rect.height / (minimumTileHeight + 2 * InxGridGeometry::cellInset), 1, maxRows);
+  const int rows = std::min(fittingRows, (visibleCount + columns - 1) / columns);
+  // Center shorter grids without making a single row fill the whole display.
+  gridHeight = rect.height * rows / std::max(rows, std::min(3, fittingRows));
+  gridTop += (rect.height - gridHeight) / 2;
+  if (visibleCount > rows * columns) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    gridWidth -= metrics.scrollBarWidth + metrics.scrollBarRightOffset;
+  }
+#else
+  constexpr int columns = InxGridGeometry::columns;
+  const int rows = InxGridGeometry::fittingRows(rect.height, lineHeight, InxAppIcons::size);
+#endif
+  const int capacity = rows * columns;
+  syncPagedViewport(capacity);
   const int start = nav.top;
-  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
 
-  for (int slot = 0; slot < InxGridGeometry::itemsPerPage && start + slot < visibleCount; ++slot) {
+  for (int slot = 0; slot < capacity && start + slot < visibleCount; ++slot) {
     const int visibleIndex = start + slot;
     const int appIndex = getAppIndexForVisibleIndex(visibleIndex);
     if (appIndex < 0) continue;
-    const auto bounds = InxGridGeometry::cellBounds(slot, rect.width, rect.height);
-    const Rect cell{rect.x + bounds.x, rect.y + bounds.y, bounds.width, bounds.height};
-    const int iconScale = cell.height >= InxAppIcons::size * 2 + lineHeight + 18 ? 2 : 1;
-    const int iconSize = InxAppIcons::size * iconScale;
+    const auto bounds = InxGridGeometry::cellBounds(slot, gridWidth, gridHeight, rows, columns);
+    const Rect cell{rect.x + bounds.x, gridTop + bounds.y, bounds.width, bounds.height};
+    if (cell.width <= 0 || cell.height <= 0) continue;
+    const GfxRenderer::ClipScope clip(renderer, cell.x, cell.y, cell.width, cell.height);
     const bool isSelected = showSelection && visibleIndex == nav.selected;
-    if (isSelected) renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
     screen.frame().hit(fui::Rect{static_cast<int16_t>(cell.x), static_cast<int16_t>(cell.y),
                                  static_cast<int16_t>(cell.width), static_cast<int16_t>(cell.height)},
                        ACTION_ROW, static_cast<int16_t>(visibleIndex), fui::InputTouch);
 
-    const int iconX = cell.x + (cell.width - iconSize) / 2;
-    const int iconY = cell.y + std::max(5, (cell.height - iconSize - lineHeight - 8) / 2);
-    InxAppIcons::draw(renderer, kAppEntries[appIndex].icon, iconX, iconY, iconScale, isSelected);
     auto text = screen.theme().bodyText;
-    text.align = fui::TextAlign::Center;
     text.bold = false;
+    const auto& entry = kAppEntries[appIndex];
+    const char* label = I18N.get(entry.titleId);
+#if FREEINK_DEVICE_XUESU_300
+    renderer.drawRoundedRect(cell.x, cell.y, cell.width, cell.height, isSelected ? 3 : 1, 6, true);
+    text.color = fui::Color::Black;
+    const int iconX = cell.x + padding;
+    const int iconY = cell.y + (cell.height - iconSize) / 2;
+    InxAppIcons::draw(renderer, entry.icon, iconX, iconY, 1, false);
+    const int labelX = iconX + iconSize + InxGridGeometry::iconLabelGap;
+    const fui::Rect labelRect{static_cast<int16_t>(labelX), static_cast<int16_t>(cell.y + labelInsetY),
+                              static_cast<int16_t>(cell.x + cell.width - padding - labelX),
+                              static_cast<int16_t>(cell.height - 2 * labelInsetY)};
+    text.align = fui::TextAlign::Left;
+    if (labelRect.height >= 2 * lineHeight) {
+      text.maxLines = 2;
+    } else if (compactLineHeight < lineHeight && labelRect.height >= 2 * compactLineHeight &&
+               screen.target().measureText(text.font, label, text).width > labelRect.width) {
+      text.font = compactFont;
+      text.maxLines = 2;
+    }
+#else
+    if (isSelected) renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
     text.color = isSelected ? fui::Color::White : fui::Color::Black;
-    screen.target().text(fui::Rect{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(iconY + iconSize + 8),
-                                   static_cast<int16_t>(std::max(1, cell.width - 8)), static_cast<int16_t>(lineHeight)},
-                         I18N.get(kAppEntries[appIndex].titleId), text);
+    const int iconScale = std::min(2, InxGridGeometry::maximumIconSize(cell, lineHeight) / InxAppIcons::size);
+    const int iconSize = InxAppIcons::size * iconScale;
+    const int iconX = cell.x + (cell.width - iconSize) / 2;
+    const int iconY = InxGridGeometry::tileTop(cell, lineHeight, iconSize);
+    if (iconSize > 0) InxAppIcons::draw(renderer, entry.icon, iconX, iconY, iconScale, isSelected);
+    text.align = fui::TextAlign::Center;
+    const int labelY = iconY + (iconSize > 0 ? iconSize + InxGridGeometry::iconLabelGap : 0);
+    const fui::Rect labelRect{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(labelY),
+                              static_cast<int16_t>(std::max(1, cell.width - 8)), static_cast<int16_t>(lineHeight)};
+#endif
+    screen.target().text(labelRect, label, text);
   }
 
-  GUI.drawSideScrollBar(renderer, rect, visibleCount, start, InxGridGeometry::itemsPerPage);
+  GUI.drawSideScrollBar(renderer, rect, visibleCount, start, capacity);
 }
 
 void AppsMenuActivity::buildScreen(UiScreen& screen) {
@@ -227,7 +285,6 @@ void AppsMenuActivity::buildScreen(UiScreen& screen) {
   if (visibleCount == 0) {
     UITheme::drawCenteredWrappedText(renderer, content, UI_12_FONT_ID, tr(STR_NO_APPS_ENABLED), 2);
   } else if (usesIconLayout()) {
-    syncPagedViewport(InxGridGeometry::itemsPerPage);
     drawIconGrid(screen, content, visibleCount, showSelection);
   } else {
     screen.setContentMarginFromScreen(

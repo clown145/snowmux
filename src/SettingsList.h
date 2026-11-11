@@ -434,6 +434,9 @@ inline bool isSettingAvailableOnBoard(const SettingInfo& setting) {
   if (setting.valuePtr == &CrossPointSettings::frontlightWarmth && !Frontlight.hasColorTemperature()) return false;
 #endif
 #endif
+#if FREEINK_DEVICE_XUESU_300
+  if (setting.nameId == StrId::STR_SHOW_BUTTON_HINTS || setting.nameId == StrId::STR_LONG_PRESS_MENU) return false;
+#endif
   if (!BoardConfig::hasTouch()) return true;
   return setting.nameId != StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION &&
          setting.nameId != StrId::STR_SUNLIGHT_FADING_FIX && setting.nameId != StrId::STR_SHOW_BUTTON_HINTS &&

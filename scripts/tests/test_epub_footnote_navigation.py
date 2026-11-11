@@ -1,5 +1,6 @@
 """Exercise production EPUB navigation and saved reading positions with small seams."""
 from pathlib import Path
+import re
 import unittest
 
 from test_reading_ui_regressions import method, run_cpp
@@ -9,6 +10,94 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class EpubFootnoteNavigationTest(unittest.TestCase):
+    def test_xuesu_menu_prioritizes_current_page_notes_when_opened_from_body(self):
+        source = (ROOT / 'src/activities/reader/EpubReaderMenuActivity.cpp').read_text(encoding='utf-8')
+        methods = '\n'.join(method(source, name) for name in (
+            'EpubReaderMenuActivity::EpubReaderMenuActivity(',
+            'void EpubReaderMenuActivity::onEnter()',
+            'void EpubReaderMenuActivity::buildMenuRowItems(',
+            'void EpubReaderMenuActivity::buildMenuItems(',
+        ))
+        labels = sorted(set(re.findall(r'\bSTR_\w+', methods)))
+        actions = sorted(set(re.findall(r'MenuAction::(\w+)', methods)))
+        program = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <vector>
+struct GfxRenderer {};
+struct MappedInputManager {};
+struct RenderLock { ~RenderLock() {} };
+struct UiListActivity {
+ UiListActivity(const char*,GfxRenderer&,MappedInputManager&,bool,bool) {}
+ struct { size_t selected=0; void reset(size_t index) { selected=index; } } nav;
+ void onEnter() { nav.reset(0); }
+};
+struct { bool present() const { return false; } } Frontlight;
+struct CrossPointSettings { enum { SLIDE_SWITCH_NIGHT_MODE }; };
+struct { char dictionaryName[1]={}; struct {char peerAddr[1]={};} ble; } SETTINGS;
+struct { bool hasCredentials() const { return false; } } KOREADER_STORE;
+bool slideSwitchOwns(int) { return false; }
+bool slideSwitchOwnsLight() { return false; }
+namespace bleturner { struct Status { bool compiledIn=false; }; Status status() { return {}; } }
+namespace pluginevents { enum class Event {COUNT}; bool anySubscriber(Event) {return false;} }
+namespace fui { struct ListItem { const char* label=nullptr; int16_t actionValue=0; }; }
+''' + 'enum class StrId {' + ','.join(labels) + '};\n' \
+            + 'enum class MenuAction {' + ','.join(actions) + '};\n' + r'''
+struct {
+ const char* get(StrId id) {
+  if (id==StrId::STR_PAGE_FOOTNOTES_FMT) return "Page Footnotes (%u)";
+  if (id==StrId::STR_FOOTNOTES) return "Links and Footnotes";
+  return "";
+ }
+} I18N;
+#define tr(id) I18N.get(StrId::id)
+struct EpubReaderMenuActivity : UiListActivity {
+ struct MenuItem { MenuAction action; StrId labelId; };
+ static constexpr size_t MAX_MENU_ITEMS=19;
+ std::vector<MenuItem> menuItems;
+ MenuAction& selectedAction;
+ bool focusPageFootnotes=false;
+ char pageFootnotesLabel[48]={};
+ std::string title;
+ uint8_t pendingOrientation;
+ int currentPage,totalPages,bookProgressPercent;
+ fui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
+ EpubReaderMenuActivity(GfxRenderer&,MappedInputManager&,const std::string&,int,int,int,uint8_t,size_t,bool,bool,
+                        MenuAction&,bool);
+ void onEnter();
+ void buildMenuRowItems(size_t);
+ static void buildMenuItems(std::vector<MenuItem>&,bool,bool,bool);
+};
+''' + methods + r'''
+int main() {
+ GfxRenderer renderer;
+ MappedInputManager input;
+ auto remembered=MenuAction::TEXT_SETTINGS;
+ for (size_t count : {0, 1, 3}) {
+  for (bool fresh : {false, true}) {
+   EpubReaderMenuActivity menu(renderer,input,"book",1,4,20,0,count,false,false,remembered,fresh);
+   menu.onEnter();
+   const auto& first=menu.menuItems.front();
+   const auto selected=menu.menuItems.at(menu.nav.selected).action;
+   if (FREEINK_DEVICE_XUESU_300 && count) {
+    assert(first.action==MenuAction::FOOTNOTES && menu.menuItems[1].action==MenuAction::SELECT_CHAPTER);
+    assert(menu.menuRowItems[0].label=="Page Footnotes ("+std::to_string(count)+")");
+    assert(selected==(fresh ? MenuAction::FOOTNOTES : remembered));
+   } else {
+    assert(first.action==MenuAction::SELECT_CHAPTER && selected==remembered);
+    if (count) assert(menu.menuItems[1].action==MenuAction::FOOTNOTES);
+    else for (const auto& item : menu.menuItems) assert(item.action!=MenuAction::FOOTNOTES);
+   }
+   assert(remembered==MenuAction::TEXT_SETTINGS);
+  }
+ }
+}
+'''
+        for board in (0, 1):
+            run_cpp(program, defines=(f'FREEINK_DEVICE_XUESU_300={board}',))
+
     def test_button_reader_uses_numbered_footnote_list_without_touch_link_storage(self):
         source = (ROOT / 'src/activities/reader/EpubReaderActivity.cpp').read_text()
         program = r'''

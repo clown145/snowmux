@@ -232,7 +232,153 @@ int main() {
     print("Sleep modes 0..8, transparent alias7, cover-overlay8, reader/night and ReadPico wash routing passed")
 
 
+def xuesu_battery():
+    source = (ROOT / "lib/hal/HalPowerManager.cpp").read_text(encoding="utf-8")
+    harness = r"""
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cassert>
+#include <BoardConfig.h>
+
+unsigned reads = 0;
+bool charging = false;
+std::array<uint16_t, 16> input;
+#define LOG_DBG(...) ((void)0)
+#define LOG_INF(...) ((void)0)
+struct BatteryMonitor {
+  uint16_t readMillivolts() const { return input[reads++ % input.size()]; }
+  bool isCharging() const { return charging; }
+};
+struct HalPowerManager {
+  enum class BatteryCalibrationResult : uint8_t { Ready, Charging, ReadFailed, OutOfRange };
+  std::atomic<uint16_t> _batteryCachedPercent{0};
+  unsigned long _batteryLastPollMs = 0;
+  uint16_t _batteryFullReferenceMv = 0;
+  BatteryCalibrationResult sampleFullBatteryReference(uint16_t& fullMv) const;
+  void setFullBatteryReference(uint16_t fullMv);
+  bool pollBattery();
+  uint16_t getBatteryPercentage() const;
+};
+""" + "\n".join(function(source, signature) for signature in (
+        "bool validFullBatteryReference(",
+        "uint16_t sampleXuesuBatteryMillivolts(",
+        "HalPowerManager::BatteryCalibrationResult HalPowerManager::sampleFullBatteryReference(",
+        "void HalPowerManager::setFullBatteryReference(",
+        "bool HalPowerManager::pollBattery()",
+        "uint16_t HalPowerManager::getBatteryPercentage() const",
+    )) + r"""
+int main() {
+  constexpr auto& board = BoardConfig::XUESU_300;
+  static_assert(board.batteryAdc == 14 && board.batteryChargeStatus == 16);
+  static_assert(!board.batteryChargeStatusActiveHigh && board.batteryDividerMultiplier == 4.3f);
+  static_assert(xuesu300::batteryPercentFromMillivolts(3200) == 0);
+  static_assert(xuesu300::batteryPercentFromMillivolts(3810) == 45);
+  static_assert(xuesu300::batteryPercentFromMillivolts(4200) == 100);
+
+  HalPowerManager manager;
+  hostMillis = 1;
+  input.fill(3830);
+  input[1] = 2500; input[6] = 3000; input[9] = 4400; input[14] = 4500;
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 50 && reads == 16);
+  assert(!manager.pollBattery() && reads == 16);
+  for (const uint16_t invalid : {0, 5000}) {
+    input.fill(invalid);
+    hostMillis += 15000;
+    assert(!manager.pollBattery() && manager.getBatteryPercentage() == 50);
+  }
+  input.fill(3920);
+  hostMillis += 15000;
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 70);
+  hostMillis += 15000;
+  assert(!manager.pollBattery() && manager.getBatteryPercentage() == 70);
+
+  using Result = HalPowerManager::BatteryCalibrationResult;
+  uint16_t fullMv = 0;
+  charging = true;
+  unsigned readsBefore = reads;
+  assert(manager.sampleFullBatteryReference(fullMv) == Result::Charging && reads == readsBefore && fullMv == 0);
+  charging = false;
+  assert(manager.sampleFullBatteryReference(fullMv) == Result::OutOfRange && fullMv == 0);
+  input.fill(0);
+  assert(manager.sampleFullBatteryReference(fullMv) == Result::ReadFailed && fullMv == 0);
+  assert(manager.getBatteryPercentage() == 70);
+
+  input.fill(4183);
+  hostMillis += 15000;
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 98);
+  readsBefore = reads;
+  assert(manager.sampleFullBatteryReference(fullMv) == Result::Ready && fullMv == 4183 && reads == readsBefore + 160);
+  assert(manager.getBatteryPercentage() == 98);
+  manager.setFullBatteryReference(fullMv);
+  assert(manager.getBatteryPercentage() == 100);
+
+  HalPowerManager restarted;
+  restarted.setFullBatteryReference(fullMv);
+  assert(restarted.getBatteryPercentage() == 100);
+  restarted.setFullBatteryReference(3800);
+  assert(restarted.getBatteryPercentage() == 98);
+}
+"""
+    hardware = ROOT / "freeink-sdk/libs/hardware"
+    includes = (ROOT / "include", hardware / "BoardConfig/include", hardware / "BatteryMonitor/test/host/stubs",
+                hardware / "XteinkDetect/test/host/stubs")
+    with tempfile.TemporaryDirectory(prefix="xuesu-battery-") as directory:
+        source = Path(directory) / "check.cpp"
+        binary = Path(directory) / "check"
+        source.write_text(harness, encoding="utf-8")
+        subprocess.run(["c++", "-std=c++20", "-DFREEINK_DEVICE_XUESU_300=1",
+                        *("-I" + str(path) for path in includes), str(source), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+    print("Xuesu battery pins, voltage curve, ADC recovery and full charge calibration passed")
+
+
+def xuesu_deep_sleep_wake():
+    arm = function((ROOT / "lib/hal/HalPowerManager.cpp").read_text(), "bool HalPowerManager::armXuesuDeepSleep() const")
+    harness = r"""
+#include <cassert>
+#include <boards/Xuesu300Board.h>
+using gpio_num_t = int;
+using esp_err_t = int;
+constexpr int LOW = 0, HIGH = 1, ESP_OK = 0, ESP_EXT1_WAKEUP_ANY_LOW = 0;
+constexpr uint64_t confirmMask = 1ULL << xuesu300::confirmKeyPin;
+int level = HIGH, armResult = ESP_OK;
+bool pullup = false, pulldown = true, armed = false;
+int digitalRead(int pin) { assert(pin == xuesu300::confirmKeyPin); return level; }
+esp_err_t rtc_gpio_pulldown_dis(int pin) { assert(pin == xuesu300::confirmKeyPin); pulldown = false; return ESP_OK; }
+esp_err_t rtc_gpio_pullup_en(int pin) { assert(pin == xuesu300::confirmKeyPin); pullup = true; return ESP_OK; }
+esp_err_t esp_sleep_enable_ext1_wakeup_io(uint64_t mask, int mode) {
+  assert(mask == confirmMask && mode == ESP_EXT1_WAKEUP_ANY_LOW && pullup && !pulldown);
+  armed = true;
+  return armResult;
+}
+void esp_sleep_disable_ext1_wakeup_io(uint64_t mask) { assert(mask == confirmMask); armed = false; }
+#define LOG_ERR(...) (void)0
+struct HalPowerManager { bool armXuesuDeepSleep() const; };
+""" + arm + r"""
+int main() {
+  HalPowerManager manager;
+  level = LOW;
+  assert(!manager.armXuesuDeepSleep() && !armed && !pullup);
+  level = HIGH;
+  armResult = 1;
+  assert(!manager.armXuesuDeepSleep() && !armed);
+  armResult = ESP_OK;
+  assert(manager.armXuesuDeepSleep() && armed);
+}
+"""
+    with tempfile.TemporaryDirectory(prefix="xuesu-deep-sleep-") as directory:
+        source = Path(directory) / "check.cpp"
+        binary = Path(directory) / "check"
+        source.write_text(harness, encoding="utf-8")
+        subprocess.run(["c++", "-std=c++20", "-I", str(ROOT / "include"), str(source), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+    print("Xuesu active-low EXT1 wake, held-key guard and failed setup cleanup passed")
+
+
 if __name__ == "__main__":
     run()
     sleep_order()
     sleep_modes()
+    xuesu_battery()
+    xuesu_deep_sleep_wake()

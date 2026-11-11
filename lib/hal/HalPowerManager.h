@@ -7,6 +7,9 @@
 #include <freertos/semphr.h>
 
 #include <cassert>
+#if FREEINK_DEVICE_XUESU_300
+#include <atomic>
+#endif
 
 #include "HalGPIO.h"
 
@@ -17,8 +20,14 @@ class HalPowerManager {
   int normalFreq = 0;  // MHz
   bool isLowPower = false;
 
+#if FREEINK_DEVICE_XUESU_300
+  std::atomic<uint16_t> _batteryCachedPercent{0};  // Sampled on the main task, read by the render task.
+  unsigned long _batteryLastPollMs = 0;
+  uint16_t _batteryFullReferenceMv = 0;  // Main task only. Zero uses the nominal scale.
+#else
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
+#endif
 
   enum LockMode { None, NormalSpeed };
   LockMode currentLockMode = None;
@@ -67,6 +76,14 @@ class HalPowerManager {
 
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
+#if FREEINK_DEVICE_XUESU_300
+  bool armXuesuDeepSleep() const;
+  enum class BatteryCalibrationResult : uint8_t { Ready, Charging, ReadFailed, OutOfRange };
+  // Main task, after the user confirms a full charge.
+  BatteryCalibrationResult sampleFullBatteryReference(uint16_t& fullMv) const;
+  void setFullBatteryReference(uint16_t fullMv);
+  bool pollBattery();  // Returns true when a valid sample changes the displayed percentage.
+#endif
 
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for example when running a task that needs

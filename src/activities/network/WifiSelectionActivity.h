@@ -98,6 +98,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   // Save/forget prompt selection (0 = Yes, 1 = No)
   int savePromptSelection = 0;
   int forgetPromptSelection = 0;
+  bool credentialWriteFailed = false;
 
   // Connection timeout
   static constexpr unsigned long CONNECTION_TIMEOUT_MS = 15000;
@@ -119,7 +120,9 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void addTouchControls(UiScreen& screen, const char* label, freeink::ui::ActionId action);
   void returnFromFailure();
   static void onPromptEvent(const freeink::ui::ActionEvent& event, void* user);
+  void applyCredentialPrompt(int choice);
   int subtitleHeight() const;
+  static Rect networkContentBounds(const Rect& safe, const ThemeMetrics& metrics, int subtitleHeight);
   void buildListScreen(UiScreen& screen);
   void buildPromptDialog(UiScreen& screen);
 
@@ -134,6 +137,12 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void processWifiScanResults();
   void appendHiddenNetworkEntry();
   void selectNetwork(int index);
+#if FREEINK_DEVICE_XUESU_300
+  void launchProvisioning();
+  bool rescanSelected = false;
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
   void promptHiddenSsid();
   void promptPasswordEntry();
   void attemptConnection();

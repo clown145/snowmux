@@ -53,4 +53,8 @@ class ReadingStatsActivity final : public Activity, public UiAppHost {
   MainTab mainTab() const override { return mainTabEnabled ? MainTab::Statistics : MainTab::None; }
   void selectMainTabContentEdge(MainTabContentEdge edge) override;
   bool hasContentSelection() const override;
+#if FREEINK_DEVICE_XUESU_300
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
 };

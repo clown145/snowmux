@@ -17,6 +17,9 @@
 #include <SPI.h>
 #include <XteinkDetect.h>
 #include <driver/gpio.h>
+#if FREEINK_DEVICE_XUESU_300
+#include <driver/rtc_io.h>
+#endif
 #include <esp_sleep.h>
 
 #include "Waveshare397Power.h"
@@ -247,6 +250,18 @@ void HalGPIO::begin() {
   BoardT5S3::begin();
   if (!BoardT5S3::pca9535Present()) LOG_ERR("HW", "LilyGo board bring-up failed: expander did not answer");
 #endif
+#if FREEINK_DEVICE_XUESU_300
+  if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
+    constexpr auto confirm = static_cast<gpio_num_t>(xuesu300::confirmKeyPin);
+    rtc_gpio_deinit(confirm);
+    pinMode(confirm, INPUT_PULLUP);
+    // Absorb the waking gesture before the input manager can turn its release
+    // into a Confirm click or a Back action on the resumed screen.
+    while (digitalRead(confirm) == LOW) delay(10);
+    LOG_INF("PWR", "Xuesu deep sleep wake cause=%d, ext1 mask=0x%llx", esp_sleep_get_wakeup_cause(),
+            static_cast<unsigned long long>(esp_sleep_get_ext1_wakeup_status()));
+  }
+#endif
   inputMgr.begin();
   inputBegun = true;
 }
@@ -296,6 +311,10 @@ void HalGPIO::update() {
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
+
+#if FREEINK_DEVICE_XUESU_300
+bool HalGPIO::isXuesuConfirmHeld() const { return digitalRead(xuesu300::confirmKeyPin) == LOW; }
+#endif
 
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
 

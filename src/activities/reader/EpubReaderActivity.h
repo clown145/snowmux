@@ -261,7 +261,7 @@ class EpubReaderActivity final : public ReaderActivity {
   ChapterPosition chapterPosition() const;
   float bookProgressFor(const ChapterPosition& position, bool includeCurrentPage = false) const;
   int bookPercentFor(const ChapterPosition& position) const;
-  void openReaderMenu();
+  void openReaderMenu(bool fromReadingPage = false);
   // Toolbar reader menu (see Overlay above).
   bool usesToolbarMenu() const;
   void openOverlay(Overlay target);

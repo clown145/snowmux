@@ -8,6 +8,10 @@
 #include <cstring>
 #include <limits>
 
+namespace {
+constexpr char ROLLBACK_SUFFIX[] = ".rollback";
+}
+
 bool PersistableStoreBase::recoverTempFile(const char* path) {
   if (!path || !*path) {
     LOG_ERR("PERSIST", "Missing JSON path for recovery");
@@ -15,6 +19,10 @@ bool PersistableStoreBase::recoverTempFile(const char* path) {
   }
   HalStorage::StorageLock lock;
   if (Storage.exists(path)) return true;
+  const std::string backupPath = std::string(path) + ROLLBACK_SUFFIX;
+  if (Storage.exists(backupPath.c_str())) {
+    return Storage.rename(backupPath.c_str(), path);
+  }
 
   const size_t pathLength = strlen(path);
   // Bookmark/export paths vary; allocate exactly the recovery path without a large stack buffer.
@@ -33,7 +41,28 @@ bool PersistableStoreBase::recoverTempFile(const char* path) {
   return true;
 }
 
-bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& doc) {
+bool PersistableStoreBase::replaceStagedFile(const char* path, const char* stagingPath) {
+  HalStorage::StorageLock lock;
+  const std::string backupPath = std::string(path) + ROLLBACK_SUFFIX;
+  const bool hadTarget = Storage.exists(path);
+  if (hadTarget && ((Storage.exists(backupPath.c_str()) && !Storage.remove(backupPath.c_str())) ||
+                    !Storage.rename(path, backupPath.c_str()))) {
+    LOG_ERR("PERSIST", "Could not back up %s", path);
+    Storage.remove(stagingPath);
+    return false;
+  }
+  if (!Storage.rename(stagingPath, path)) {
+    if (hadTarget && !Storage.rename(backupPath.c_str(), path))
+      LOG_ERR("PERSIST", "Previous data retained at %s", backupPath.c_str());
+    Storage.remove(stagingPath);
+    LOG_ERR("PERSIST", "Could not commit %s", path);
+    return false;
+  }
+  if (hadTarget && Storage.exists(backupPath.c_str())) Storage.remove(backupPath.c_str());
+  return true;
+}
+
+bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& doc, const bool keepPrevious) {
   if (doc.overflowed()) {
     LOG_ERR("PERSIST", "Insufficient heap for JSON document");
     return false;
@@ -48,8 +77,9 @@ bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& 
   HalStorage::StorageLock lock;
   Storage.mkdir("/.crosspoint");
   const std::string tempPath = targetPath + ".tmp";
-  if (!Storage.exists(targetPath.c_str()) && Storage.exists(tempPath.c_str()) &&
-      !Storage.rename(tempPath.c_str(), targetPath.c_str())) {
+  if (!Storage.exists(targetPath.c_str()) &&
+      (Storage.exists(tempPath.c_str()) || (keepPrevious && Storage.exists((targetPath + ROLLBACK_SUFFIX).c_str()))) &&
+      !recoverTempFile(targetPath.c_str())) {
     LOG_ERR("PERSIST", "Cannot recover staged JSON for %s", targetPath.c_str());
     return false;
   }
@@ -73,6 +103,7 @@ bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& 
     return false;
   }
 
+  if (keepPrevious) return replaceStagedFile(targetPath.c_str(), tempPath.c_str());
   if (Storage.exists(targetPath.c_str()) && !Storage.remove(targetPath.c_str())) {
     LOG_ERR("PERSIST", "Failed to replace %s", targetPath.c_str());
     return false;

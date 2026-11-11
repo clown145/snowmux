@@ -23,6 +23,7 @@
 #include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
+#include "activities/reader/ReaderSubpageLayout.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/settings/FontDownloadActivity.h"
 #endif
@@ -117,7 +118,8 @@ void TextSettingsActivity::onEnter() {
   metrics_ = UITheme::getInstance().getMetrics();
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int safeBottom = safeArea.y + safeArea.height;
-  afterHeader = safeArea.y + metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
+  const int headerHeight = ReaderSubpageLayout::headerRect(renderer, false).height;
+  afterHeader = safeArea.y + metrics_.topPadding + headerHeight + metrics_.verticalSpacing;
   const int usableHeight = safeBottom - afterHeader - metrics_.verticalSpacing;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
 
@@ -169,7 +171,9 @@ void TextSettingsActivity::onEnter() {
   for (auto& n : tabNavs) n.selected = 1;  // default to the first list row
   tabNavs[static_cast<int>(Tab::Family)].selected = currentFamilyIndex_ + 1;
   tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1;
+#if !FREEINK_DEVICE_XUESU_300
   tabNavs[static_cast<int>(tab_)].selected = 0;  // screen opens with the tab bar focused, not a list row
+#endif
 
   rebuildRowItems();
   if (startMode_ == StartMode::AskThenExit || startMode_ == StartMode::PreloadThenExit) {
@@ -243,6 +247,7 @@ void TextSettingsActivity::rebuildSizeList() {
 
 void TextSettingsActivity::onTabAction(const int index) {
   if (optionPopup_.isActive()) return;
+  RenderLock lock(*this);
   if (tab_ != static_cast<Tab>(index)) {
     tab_ = static_cast<Tab>(index);
     rebuildRowItems();
@@ -306,9 +311,16 @@ bool TextSettingsActivity::handleButtons() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (ringPos() == 0) {
+#if FREEINK_DEVICE_XUESU_300
+      if (listCount() > 0) {
+        const int row = tab_ == Tab::Family ? currentFamilyIndex_ : (tab_ == Tab::Size ? currentSizeIndex_ : 0);
+        moveRingTo(row + 1);
+      }
+#else
       switchTab();
-    } else {
-      activateRow(ringPos() - 1);
+#endif
+    } else if (ringPos() <= listCount()) {
+      activateIndex(ringPos() - 1);
     }
     return true;
   }
@@ -316,15 +328,51 @@ bool TextSettingsActivity::handleButtons() {
   return false;
 }
 
+#if FREEINK_DEVICE_XUESU_300
+void TextSettingsActivity::navigateButtons() {
+  const int count = listCount();
+  const auto step = [this, count](int direction) {
+    const int position = ringPos();
+    if (position == 0) {
+      switchTab(direction);
+    } else {
+      moveRingTo((position + direction + count + 1) % (count + 1));
+    }
+  };
+  buttonNavigator.onPreviousPress([&step] { step(-1); });
+  buttonNavigator.onNextPress([&step] { step(1); });
+  buttonNavigator.onPreviousContinuous([this, count] {
+    if (ringPos() > 0 && count > 0)
+      moveRingTo(ButtonNavigator::previousPageIndex(ringPos() - 1, count, activeNav().inputPageRows()) + 1);
+  });
+  buttonNavigator.onNextContinuous([this, count] {
+    if (ringPos() > 0 && count > 0)
+      moveRingTo(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().inputPageRows()) + 1);
+  });
+}
+#endif
+
+bool TextSettingsActivity::usesSidePreview() const {
+  return ReaderSubpageLayout::usesCompactHeader(renderer);
+}
+
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const int tabTop = afterHeader + previewHeight;
+  const bool sidePreview = usesSidePreview();
+  const int tabTop = afterHeader + (sidePreview ? 0 : previewHeight);
   const int rightInset = renderer.getScreenWidth() - (safeArea.x + safeArea.width);
   const int bottomInset = renderer.getScreenHeight() - (safeArea.y + safeArea.height);
   screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(tabTop), static_cast<int16_t>(rightInset),
                                                 static_cast<int16_t>(bottomInset), static_cast<int16_t>(safeArea.x)});
 
   buildTabBar(screen);
+  if (sidePreview) {
+    const auto content = screen.contentRect();
+    const int16_t previewWidth = content.width / 3;
+    constexpr int gap = 6;
+    screen.insetContent(fui::Insets{0, static_cast<int16_t>(previewWidth + gap), 0, 0});
+    drawPreview(Rect{content.right() - previewWidth, content.y, previewWidth, content.height}, tr(STR_PREVIEW));
+  }
 
   // rowItems_ (label/actionValue) was built by rebuildRowItems() when the tab
   // was last switched; only the live value text needs refreshing here, by
@@ -390,14 +438,25 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // Keep titles and values at the same list font size; long labels may wrap.
   props.labelText = UITheme::getInstance().hasMainTabs() ? screen.theme().bodyText : screen.theme().smallText;
   props.labelText.maxLines = 2;
+#if FREEINK_DEVICE_XUESU_300
+  // Fit more entries under the preview. Wrapped labels still grow by their measured height.
+  props.rowPaddingY = 5;
+  if (usesSidePreview()) props.sidePadding = 8;
+  props.rowHeight =
+      static_cast<int16_t>(std::max(36, screen.target().lineHeight(props.labelText.font) + 2 * props.rowPaddingY));
+#endif
   syncTabListViewport(screen, props);
   screen.list(props);
 }
 
 const char* TextSettingsActivity::confirmLabelText() const {
   if (ringPos() == 0) {
+#if FREEINK_DEVICE_XUESU_300
+    return tr(STR_SELECT);
+#else
     // Confirm on the tab bar advances to the next tab.
     return I18N.get(TAB_NAME_IDS[(static_cast<int>(tab_) + 1) % static_cast<int>(Tab::Count)]);
+#endif
   }
   switch (tab_) {
     case Tab::Layout:
@@ -417,6 +476,11 @@ const char* TextSettingsActivity::confirmLabelText() const {
 }
 
 void TextSettingsActivity::drawChrome() {
+  if (usesSidePreview()) {
+    GUI.drawHeaderWithStyle(renderer, ReaderSubpageLayout::headerRect(renderer, false), tr(STR_TEXT_SETTINGS), nullptr,
+                            false, false, true);
+    return;
+  }
   GUI.drawHeader(renderer, UITheme::getInstance().getHeaderRect(renderer, true, false), tr(STR_TEXT_SETTINGS));
 
   const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
@@ -428,7 +492,10 @@ void TextSettingsActivity::drawChrome() {
   char labelBuf[128];
   snprintf(labelBuf, sizeof(labelBuf), "%s \"%s, %s\"", tr(STR_PREVIEW), familyName, sizeName);
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const Rect previewBounds{safeArea.x, afterHeader, safeArea.width, previewHeight};
+  drawPreview(Rect{safeArea.x, afterHeader, safeArea.width, previewHeight}, labelBuf);
+}
+
+void TextSettingsActivity::drawPreview(const Rect& previewBounds, const char* caption) {
   const auto [savedX, savedY, savedWidth, savedHeight] = renderer.getClipRect();
   const int clipLeft = std::max(previewBounds.x, savedX);
   const int clipTop = std::max(previewBounds.y, savedY);
@@ -436,7 +503,7 @@ void TextSettingsActivity::drawChrome() {
   const int clipBottom = std::min(previewBounds.y + previewBounds.height, savedY + savedHeight);
   renderer.setClipRect(clipLeft, clipTop, std::max(0, clipRight - clipLeft), std::max(0, clipBottom - clipTop));
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing,
-                              previewBounds, labelBuf);
+                              previewBounds, caption);
   renderer.setClipRect(savedX, savedY, savedWidth, savedHeight);
 }
 
@@ -681,11 +748,13 @@ void TextSettingsActivity::confirmStyleRow(int row) {
     case StyleRow::FocusReading:
       SETTINGS.focusReadingEnabled = !SETTINGS.focusReadingEnabled;
       break;
-    case StyleRow::ReadingGuideLine:
+    case StyleRow::ReadingGuideLine: {
+      RenderLock lock(*this);
       SETTINGS.readingGuideLineEnabled = !SETTINGS.readingGuideLineEnabled;
       rebuildRowItems();
       activeNav().selected = std::min<int>(activeNav().selected, listCount());
       break;
+    }
     case StyleRow::ReadingGuideLineStyle:
       optionPopup_.show(StrId::STR_READING_GUIDE_LINE_STYLE, GUIDE_LINE_STYLE_IDS,
                         static_cast<int>(std::size(GUIDE_LINE_STYLE_IDS)), SETTINGS.readingGuideLineStyle, [](int idx) {
@@ -765,6 +834,7 @@ std::string TextSettingsActivity::styleValueText(int row) const {
 }
 
 void TextSettingsActivity::switchTab(const int direction) {
+  RenderLock lock(*this);
   const bool onTabBar = ringPos() == 0;
   constexpr int count = static_cast<int>(Tab::Count);
   tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + count) % count);

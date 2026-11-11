@@ -33,6 +33,7 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
   mutable std::mutex credentialMutex;
 
   static constexpr size_t MAX_NETWORKS = 8;
+  bool commitCredentials(std::vector<WifiCredential>&& next, std::string&& last);
 
   // Private constructor for singleton
   WifiCredentialStore() = default;

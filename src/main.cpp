@@ -66,6 +66,7 @@
 #include "util/ScreenshotUtil.h"
 #include "util/SlideSwitch.h"
 #include "util/Timezones.h"
+#include "util/TimeUtils.h"
 #include "util/UserGuide.h"
 
 #if CROSSPOINT_VECTOR_FONTS
@@ -606,6 +607,9 @@ static bool holdSleepWhileUsbPowered() {
 
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
+#if FREEINK_DEVICE_XUESU_300
+  if (!powerManager.armXuesuDeepSleep()) return;
+#endif
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
@@ -841,6 +845,10 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
 
 void setup() {
   BoardConfig::holdPowerRails();
+#if FREEINK_DEVICE_XUESU_300
+  // WifiCredentialStore persists credentials to SD when the user requests it.
+  WiFi.persistent(false);
+#endif
 
   // --- Read Pico boot order (read-pico.md 1.4) ------------------------------
   // This board's bring-up is ordered by its power tree, and the reference
@@ -996,6 +1004,9 @@ void setup() {
   HalSystem::checkPanic();
 
   const bool settingsLoaded = SETTINGS.loadFromFile();
+#if FREEINK_DEVICE_XUESU_300
+  powerManager.setFullBatteryReference(SETTINGS.xuesuBatteryFullMv);
+#endif
 #if FREEINK_DEVICE_READPICO
   if (!settingsLoaded) SETTINGS.readerMenuStyle = CrossPointSettings::READER_MENU_TOOLBAR;
 #endif
@@ -1069,7 +1080,7 @@ void setup() {
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
 #if FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || \
     FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO ||         \
-    FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_PICCO
+    FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300
       // X4 Pro must stay awake so USB Serial/JTAG remains available after leaving
       // USB Drive and reconnecting the cable. Paper Mono has no armable GPIO wake
       // (its button is behind the PMIC). Metalio also needs native USB available
@@ -1432,9 +1443,15 @@ void loop() {
     return;
   }
 
+  if (activityManager.takeSleepRequest()) {
+    enterDeepSleep();
+    return;
+  }
+
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
   if (sleepTimeoutMs > 0 && !activityManager.preventAutoSleep() && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
+    lastActivityTime = millis();
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
@@ -1497,7 +1514,17 @@ void loop() {
   // flash, the AA pass re-running, and a frontlight dip under the refresh
   // load); the reader's status bar picks the charging state up on the next
   // page turn instead.
-  if (gpio.wasUsbStateChanged() && !activityManager.isReaderActivity()) {
+  bool batteryChanged = gpio.wasUsbStateChanged();
+#if FREEINK_DEVICE_XUESU_300
+  batteryChanged |= powerManager.pollBattery();
+  if (SETTINGS.clockShowInHeader && activityManager.showsMainTabStatusBar()) {
+    static uint32_t displayedMinute = 0;
+    const uint32_t minute = TimeUtils::getCurrentValidTimestamp() / 60;
+    batteryChanged |= minute != displayedMinute;
+    displayedMinute = minute;
+  }
+#endif
+  if (batteryChanged && !activityManager.isReaderActivity()) {
     activityManager.requestUpdate();
   }
 

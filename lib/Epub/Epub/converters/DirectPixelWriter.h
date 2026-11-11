@@ -155,9 +155,7 @@ struct DirectPixelWriter {
     auto pixel = GfxRenderer::mapTwoBitPixel(mode, pixelValue, absolute);
     if (ditherBw) {
       if (mode != GfxRenderer::BW) return;
-      static constexpr uint8_t bayer[4] = {0, 2, 3, 1};
-      const auto threshold = bayer[((rowLogicalY & 1) << 1) | (logicalX & 1)];
-      const bool black = pixelValue == 0 || (pixelValue == 1 && threshold < 3) || (pixelValue == 2 && threshold < 1);
+      const bool black = GfxRenderer::ditherTwoBitPixel(pixelValue, logicalX, rowLogicalY);
       pixel = {writeWhiteInBw || black, black};
     } else if (mode == GfxRenderer::BW && writeWhiteInBw && pixelValue >= 3) {
       pixel = {true, false};

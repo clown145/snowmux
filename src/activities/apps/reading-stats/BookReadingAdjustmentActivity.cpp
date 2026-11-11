@@ -167,8 +167,12 @@ std::string BookReadingAdjustmentActivity::getDateLabel() const {
 }
 
 const char* BookReadingAdjustmentActivity::getDurationLabel() const {
-  static char label[12];
+  static char label[24];
+#if FREEINK_DEVICE_XUESU_300
+  snprintf(label, sizeof(label), tr(STR_SLEEP_TIMER_VALUE_FORMAT), static_cast<unsigned>(DURATION_MINUTES[selectedDuration]));
+#else
   snprintf(label, sizeof(label), "%d min", DURATION_MINUTES[selectedDuration]);
+#endif
   return label;
 }
 
@@ -176,18 +180,52 @@ bool BookReadingAdjustmentActivity::applyAdjustment() {
   const uint32_t dayOrdinal = selectedDayOrdinal;
   const int32_t deltaMs = getSelectedDeltaMs();
 
-  if (!READING_STATS.adjustBookReadingTime(bookPath, dayOrdinal, deltaMs)) {
-    lastApplyFailed = true;
+  bool saved;
+  {
+    RenderLock lock(*this);
+    saved = READING_STATS.adjustBookReadingTime(bookPath, dayOrdinal, deltaMs);
+    lastApplyFailed = !saved;
+    if (saved) ACHIEVEMENTS.rebuildProgressFromCurrentStats();
+  }
+  if (!saved) {
     requestUpdate();
     return false;
   }
 
-  ACHIEVEMENTS.rebuildProgressFromCurrentStats();
   finish();
   return true;
 }
 
+#if FREEINK_DEVICE_XUESU_300
+void BookReadingAdjustmentActivity::openSelectedField() {
+  if (selectedField == 0) {
+    constexpr StrId operations[] = {StrId::STR_ADD, StrId::STR_SUBTRACT};
+    adjustmentPicker.show(StrId::STR_ACTION, operations, OPERATION_COUNT, selectedOperation, [this](int choice) {
+      selectedOperation = choice;
+      lastApplyFailed = false;
+    });
+  } else if (selectedField == 1) {
+    openDateSelection();
+  } else {
+    char labels[DURATION_COUNT][24];
+    const char* choices[DURATION_COUNT];
+    for (int i = 0; i < DURATION_COUNT; ++i) {
+      snprintf(labels[i], sizeof(labels[i]), tr(STR_SLEEP_TIMER_VALUE_FORMAT), static_cast<unsigned>(DURATION_MINUTES[i]));
+      choices[i] = labels[i];
+    }
+    adjustmentPicker.show(tr(STR_AMOUNT), choices, DURATION_COUNT, selectedDuration, [this](int choice) {
+      selectedDuration = choice;
+      lastApplyFailed = false;
+    });
+  }
+  requestUpdate();
+}
+#endif
+
 void BookReadingAdjustmentActivity::loop() {
+#if FREEINK_DEVICE_XUESU_300
+  if (adjustmentPicker.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#endif
   // Exit on the Back release edge (consistent with the menu and sibling screens) so the same
   // Back actuation can't pop here and then leak its release to the parent's Back handler.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -195,6 +233,21 @@ void BookReadingAdjustmentActivity::loop() {
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (selectedField == FIELD_COUNT) applyAdjustment();
+    else openSelectedField();
+    return;
+  }
+  buttonNavigator.onNextRelease([this] {
+    selectedField = ButtonNavigator::nextIndex(selectedField, FIELD_COUNT + 1);
+    requestUpdate();
+  });
+  buttonNavigator.onPreviousRelease([this] {
+    selectedField = ButtonNavigator::previousIndex(selectedField, FIELD_COUNT + 1);
+    requestUpdate();
+  });
+#else
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (selectedField == 1) {
       openDateSelection();
@@ -255,39 +308,58 @@ void BookReadingAdjustmentActivity::loop() {
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { adjustSelectedValue(-1); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { adjustSelectedValue(1); });
+#endif
 }
 
 void BookReadingAdjustmentActivity::render(RenderLock&&) {
+#if FREEINK_DEVICE_XUESU_300
+  if (adjustmentPicker.processRender(renderer, mappedInput)) return;
+#endif
   renderer.clearScreen();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
   const int sidePadding = metrics.contentSidePadding;
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+#if FREEINK_DEVICE_XUESU_300
+  const int listHeight = renderer.getScreenHeight() - contentTop - 2 * renderer.getLineHeight(UI_10_FONT_ID) -
+                         2 * metrics.verticalSpacing;
+#else
   const int listHeight = metrics.listWithSubtitleRowHeight * FIELD_COUNT;
+#endif
   const std::string subtitle =
       renderer.truncatedText(UI_10_FONT_ID, bookTitle.c_str(), pageWidth - metrics.contentSidePadding * 2);
 
   HeaderDateUtils::drawHeaderWithDate(renderer, tr(STR_ADJUST_READING_TIME), subtitle.c_str());
 
-  GUI.drawList(
-      renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField,
-      [](int index) {
-        if (index == 0) return std::string(tr(STR_ACTION));
-        if (index == 1) return std::string(tr(STR_DATE));
-        return std::string(tr(STR_AMOUNT));
-      },
-      [this](int index) {
-        if (index == 0) return std::string(getOperationLabel());
-        if (index == 1) return getDateLabel();
-        return std::string(getDurationLabel());
-      },
-      [](int index) { return index == 0 ? UIIcon::Settings : UIIcon::Recent; }, nullptr, false);
+  const auto rowTitle = [](int index) {
+    if (index == 0) return std::string(tr(STR_ACTION));
+    if (index == 1) return std::string(tr(STR_DATE));
+    if (index == 2) return std::string(tr(STR_AMOUNT));
+    return std::string(tr(STR_SAVE));
+  };
+  const auto rowValue = [this](int index) {
+    if (index == 0) return std::string(getOperationLabel());
+    if (index == 1) return getDateLabel();
+    if (index == 2) return std::string(getDurationLabel());
+    return std::string();
+  };
+#if FREEINK_DEVICE_XUESU_300
+  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT + 1, selectedField, rowTitle, nullptr,
+               nullptr, rowValue, true);
+#else
+  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField, rowTitle, rowValue,
+               [](int index) { return index == 0 ? UIIcon::Settings : UIIcon::Recent; }, nullptr, false);
+#endif
 
   const int infoTop = contentTop + listHeight + metrics.verticalSpacing;
   const int infoWidth = pageWidth - sidePadding * 2;
   std::string info = getAdjustmentPreviewInfo();
+#if FREEINK_DEVICE_XUESU_300
+  std::string hint = selectedField == FIELD_COUNT ? tr(STR_SELECT_APPLIES_CORRECTION) : "";
+#else
   std::string hint = selectedField == 1 ? tr(STR_SELECT_OPENS_DATE_PICKER) : tr(STR_SELECT_APPLIES_CORRECTION);
+#endif
   if (lastApplyFailed) {
     hint = tr(STR_COULD_NOT_APPLY_CORRECTION);
   } else if (!canApplySelectedAdjustment()) {

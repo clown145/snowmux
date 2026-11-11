@@ -302,6 +302,8 @@ int main(int argc, char** argv) {
   trackBwAllocations = false;
 #endif
   testFourLevelBitmapPaths(renderer);
+  levels = 2;
+  assert(qrParams(renderer) == "&w=32&h=128&mode=gray4");
   levels = 4;
   assert(renderer.getGrayscaleLevels() == 4 && !renderer.beginGrayscale16());
   assert(qrParams(renderer) == "&w=32&h=128&mode=gray4");

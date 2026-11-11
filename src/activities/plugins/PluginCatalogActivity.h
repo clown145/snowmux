@@ -208,6 +208,10 @@ class PluginCatalogActivity final : public CatalogActivity {
   void onRowLongPress(int index) override;
   bool handleButtons() override;
   void confirmUninstallPlugin(int pickerIndex);
+#if FREEINK_DEVICE_XUESU_300
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override { confirmUninstallPlugin(activeNav().selected); }
+#endif
   void render(RenderLock&& lock) override;
   void buildScreen(UiScreen& screen) override;
   bool handleCustomInput() override;

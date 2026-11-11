@@ -49,6 +49,23 @@ namespace InxGridGeometry {
 inline constexpr int columns = 3;
 inline constexpr int rows = 4;
 inline constexpr int itemsPerPage = columns * rows;
+inline constexpr int cellInset = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap / 2 : 4;
+inline constexpr int tilePadding = 4;
+inline constexpr int iconLabelGap = 6;
+
+constexpr int fittingRows(const int height, const int lineHeight, const int minimumIconSize) {
+  const int minimumHeight = cellInset * 2 + tilePadding * 2 + minimumIconSize + iconLabelGap + lineHeight;
+  return std::clamp(height / minimumHeight, 1, rows);
+}
+
+constexpr int maximumIconSize(const Rect& cell, const int lineHeight) {
+  return std::max(0, std::min(cell.width - tilePadding * 2, cell.height - tilePadding * 2 - iconLabelGap - lineHeight));
+}
+
+constexpr int tileTop(const Rect& cell, const int lineHeight, const int iconSize) {
+  const int height = lineHeight + (iconSize > 0 ? iconSize + iconLabelGap : 0);
+  return cell.y + std::max(0, (cell.height - height) / 2);
+}
 
 constexpr InxItemLayout layoutFrom(const uint8_t value) {
   return value < static_cast<uint8_t>(InxItemLayout::Count) ? static_cast<InxItemLayout>(value) : InxItemLayout::Icons;
@@ -60,14 +77,14 @@ constexpr int pageStart(const int selected, const int itemCount) {
   return clamped / itemsPerPage * itemsPerPage;
 }
 
-constexpr Rect cellBounds(const int slot, const int width, const int height) {
-  constexpr int inset = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap / 2 : 4;
-  const int column = slot % columns;
-  const int row = slot / columns;
-  const int left = column * width / columns;
-  const int top = row * height / rows;
-  return Rect{left + inset, top + inset, (column + 1) * width / columns - left - inset * 2,
-              (row + 1) * height / rows - top - inset * 2};
+constexpr Rect cellBounds(const int slot, const int width, const int height, const int rowCount = rows,
+                          const int columnCount = columns) {
+  const int column = slot % columnCount;
+  const int row = slot / columnCount;
+  const int left = column * width / columnCount;
+  const int top = row * height / rowCount;
+  return Rect{left + cellInset, top + cellInset, (column + 1) * width / columnCount - left - cellInset * 2,
+              (row + 1) * height / rowCount - top - cellInset * 2};
 }
 
 constexpr int indexFromPoint(const int x, const int y, const int width, const int height, const int start,

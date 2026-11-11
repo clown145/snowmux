@@ -6,10 +6,12 @@
 #include <I18n.h>
 
 #include <array>
+#include <cstdio>
 
 #include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
+#include "ReaderSubpageLayout.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "components/themes/lyra/LyraTheme.h"
@@ -21,8 +23,9 @@ namespace fui = freeink::ui;
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
-                                               const bool hasFootnotes, const bool hasBookmarks,
-                                               const bool hasClippings, MenuAction& selectedAction)
+                                               const size_t footnoteCount, const bool hasBookmarks,
+                                               const bool hasClippings, MenuAction& selectedAction,
+                                               [[maybe_unused]] const bool fromReadingPage)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput, false, true),
       selectedAction(selectedAction),
       title(title),
@@ -30,15 +33,22 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {
-  buildMenuItems(menuItems, hasFootnotes, hasBookmarks, hasClippings);
-  buildMenuRowItems();
+#if FREEINK_DEVICE_XUESU_300
+  focusPageFootnotes = fromReadingPage && footnoteCount > 0;
+#endif
+  buildMenuItems(menuItems, footnoteCount > 0, hasBookmarks, hasClippings);
+  buildMenuRowItems(footnoteCount);
 }
 
 void EpubReaderMenuActivity::onEnter() {
   RenderLock lock;
   UiListActivity::onEnter();
+  auto initialAction = selectedAction;
+#if FREEINK_DEVICE_XUESU_300
+  if (focusPageFootnotes) initialAction = MenuAction::FOOTNOTES;
+#endif
   for (size_t i = 0; i < menuItems.size(); ++i) {
-    if (menuItems[i].action == selectedAction) {
+    if (menuItems[i].action == initialAction) {
       nav.reset(static_cast<int>(i));
       break;
     }
@@ -55,10 +65,17 @@ void EpubReaderMenuActivity::onExit() {
 // Populates menuRowItems's labels/actionValue from menuItems. Called once
 // here since menuItems (and thus which rows exist) never changes after
 // construction; buildScreen() only touches the two rows with a live value.
-void EpubReaderMenuActivity::buildMenuRowItems() {
+void EpubReaderMenuActivity::buildMenuRowItems([[maybe_unused]] const size_t footnoteCount) {
   for (size_t i = 0; i < menuItems.size() && i < MAX_MENU_ITEMS; i++) {
     fui::ListItem item;
     item.label = I18N.get(menuItems[i].labelId);
+#if FREEINK_DEVICE_XUESU_300
+    if (menuItems[i].action == MenuAction::FOOTNOTES) {
+      std::snprintf(pageFootnotesLabel, sizeof(pageFootnotesLabel), tr(STR_PAGE_FOOTNOTES_FMT),
+                    static_cast<unsigned>(footnoteCount));
+      item.label = pageFootnotesLabel;
+    }
+#endif
     item.actionValue = static_cast<int16_t>(i);
     menuRowItems[i] = item;
   }
@@ -70,7 +87,11 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, const 
   items.reserve(MAX_MENU_ITEMS);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
+#if FREEINK_DEVICE_XUESU_300
+    items.insert(items.begin(), {MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
+#else
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
+#endif
   }
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
@@ -214,25 +235,35 @@ bool EpubReaderMenuActivity::handleButtons() {
   return false;
 }
 
+std::string EpubReaderMenuActivity::progressSummary(const bool compact) const {
+  std::string progress;
+  if (totalPages > 0) {
+    if (!compact) progress = tr(STR_CHAPTER_PREFIX);
+    progress += std::to_string(currentPage) + "/" + std::to_string(totalPages);
+    progress += compact ? " | " : tr(STR_PAGES_SEPARATOR);
+  }
+  if (!compact) progress += tr(STR_BOOK_PREFIX);
+  progress += std::to_string(bookProgressPercent) + "%";
+  return progress;
+}
+
 void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = uiThemeMetrics(true);
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const bool compact = ReaderSubpageLayout::usesCompactHeader(renderer);
+  const int headerHeight = ReaderSubpageLayout::headerRect(renderer, true).height;
   // Content: the safe area minus the header band GUI.drawHeader paints.
   screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+      static_cast<int16_t>(safe.y + metrics.topPadding + headerHeight),
       static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
       static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
 
-  // Progress summary where the old sub-header band sat.
-  std::string progressLine;
-  if (totalPages > 0) {
-    progressLine = std::string(tr(STR_CHAPTER_PREFIX)) + std::to_string(currentPage) + "/" +
-                   std::to_string(totalPages) + std::string(tr(STR_PAGES_SEPARATOR));
+  if (!compact) {
+    const std::string progressLine = progressSummary(false);
+    const fui::Rect band = screen.takeTop(static_cast<int16_t>(metrics.tabBarHeight));
+    const int16_t pad = screen.theme().headerSidePadding;
+    screen.target().text(band.inset(fui::Insets{0, pad, 0, pad}), progressLine.c_str(), screen.theme().smallText);
   }
-  progressLine += std::string(tr(STR_BOOK_PREFIX)) + std::to_string(bookProgressPercent) + "%";
-  const fui::Rect band = screen.takeTop(static_cast<int16_t>(metrics.tabBarHeight));
-  const int16_t pad = screen.theme().headerSidePadding;
-  screen.target().text(band.inset(fui::Insets{0, pad, 0, pad}), progressLine.c_str(), screen.theme().smallText);
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // menuRowItems's labels/actionValue were set once in the constructor (see
@@ -269,8 +300,10 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
 void EpubReaderMenuActivity::drawChrome() {
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
-  const Rect header = UITheme::getInstance().getHeaderRect(renderer, true, false, true);
-  GUI.drawHeaderWithStyle(renderer, header, title.c_str(), nullptr, true, true);
+  const bool compact = ReaderSubpageLayout::usesCompactHeader(renderer);
+  const std::string progress = compact ? progressSummary(true) : std::string{};
+  const Rect header = ReaderSubpageLayout::headerRect(renderer, true);
+  GUI.drawHeaderWithStyle(renderer, header, title.c_str(), compact ? progress.c_str() : nullptr, true, true, compact);
 }
 
 void EpubReaderMenuActivity::render(RenderLock&& lock) {

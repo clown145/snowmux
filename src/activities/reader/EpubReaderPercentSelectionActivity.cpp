@@ -136,6 +136,10 @@ void EpubReaderPercentSelectionActivity::loop() {
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { adjustPercent(-kSmallStep); });
+  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { adjustPercent(kSmallStep); });
+#else
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] { adjustPercent(-kSmallStep); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] { adjustPercent(kSmallStep); });
 
@@ -147,6 +151,7 @@ void EpubReaderPercentSelectionActivity::loop() {
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this, upDelta] { adjustPercent(upDelta); });
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down},
                                        [this, downDelta] { adjustPercent(downDelta); });
+#endif
 }
 
 void EpubReaderPercentSelectionActivity::percentScreen(UiScreen& screen, void* user) {
@@ -157,9 +162,13 @@ void EpubReaderPercentSelectionActivity::buildPercentScreen(UiScreen& screen) {
   char readout[16];
   snprintf(readout, sizeof(readout), "%d%%", percent);
   char hint1[64];
+#if FREEINK_DEVICE_XUESU_300
+  snprintf(hint1, sizeof(hint1), "%s %d%%", tr(STR_STEP_HINT_UP_DOWN), kSmallStep);
+#else
   snprintf(hint1, sizeof(hint1), "%s %d%%", I18N.get(StrId::STR_STEP_HINT_FRONT), kSmallStep);
   char hint2[64];
   snprintf(hint2, sizeof(hint2), "%s %d%%", I18N.get(StrId::STR_STEP_HINT_SIDE), kLargeStep);
+#endif
 
   UiSliderDialogSpec spec;
   spec.title = tr(STR_GO_TO_PERCENT);
@@ -173,7 +182,9 @@ void EpubReaderPercentSelectionActivity::buildPercentScreen(UiScreen& screen) {
   spec.okAction = ACTION_OK;
   spec.chromeAction = ACTION_CHROME;
   spec.hintLine1 = hint1;
+#if !FREEINK_DEVICE_XUESU_300
   spec.hintLine2 = hint2;
+#endif
   buildSliderDialogScreen(screen, uiTarget, mappedInput, spec, true);
 }
 

@@ -1325,6 +1325,16 @@ HttpDownloader::DownloadError PluginCatalogActivity::downloadBook(const Item& it
 }
 
 // Sign-in and completion states precede the shared catalog input handling.
+#if FREEINK_DEVICE_XUESU_300
+const char* PluginCatalogActivity::xuesuQuickActionLabel() const {
+  const int firstPlugin = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0);
+  return state == State::PLUGIN_PICKER && !pluginHubPopup.isActive() && nav.selected >= firstPlugin &&
+                 nav.selected - firstPlugin < static_cast<int>(installedPlugins.size())
+             ? tr(STR_PLUGIN_UNINSTALL_TITLE)
+             : nullptr;
+}
+#endif
+
 void PluginCatalogActivity::onRowLongPress(const int index) {
   if (state != State::PLUGIN_PICKER) return;
   activeNav().selected = index;

@@ -44,6 +44,13 @@ constexpr int kTileCols = 2;
 constexpr int kInxTileCount = 4;
 constexpr int16_t kQuickControlSize = kSliderRowHeight;
 constexpr int16_t kQuickIconSize = 32;
+#if FREEINK_DEVICE_XUESU_300
+constexpr int kSleepTile = 5;
+constexpr int kXuesuTileActions[] = {kSleepTile, 0, 1, 2};
+constexpr int16_t kXuesuTileHeight = 52;
+constexpr int16_t kXuesuTileGap = 8;
+constexpr int16_t kContextActionHeight = 36;
+#endif
 // One percent per press, on the -/+ buttons and on the physical Left/Right keys
 // alike (both repeat while held), so a level can be set exactly.
 constexpr int BRIGHTNESS_STEP = 1;
@@ -195,6 +202,12 @@ void FrontlightPanelActivity::runTile(const int idx) {
       SETTINGS.saveToFile();
       requestUpdate();
       break;
+#if FREEINK_DEVICE_XUESU_300
+    case kSleepTile:
+      setResult(QuickPanelResult::Sleep);
+      close();
+      break;
+#endif
     default:
       break;
   }
@@ -276,6 +289,25 @@ void FrontlightPanelActivity::loop() {
     close();
     return;
   }
+#if FREEINK_DEVICE_XUESU_300
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (contextAction && selectedQuickTile == 0) {
+      setResult(QuickPanelResult::ContextAction);
+      close();
+    } else {
+      runTile(kXuesuTileActions[selectedQuickTile - (contextAction ? 1 : 0)]);
+    }
+    return;
+  }
+  const auto move = [this](const int direction) {
+    const int count = std::size(kXuesuTileActions) + (contextAction ? 1 : 0);
+    selectedQuickTile = (selectedQuickTile + count + direction) % count;
+    requestUpdate();
+  };
+  buttonNavigator.onPreviousPress([&] { move(-1); });
+  buttonNavigator.onNextPress([&] { move(1); });
+  return;
+#endif
   if (!Frontlight.present()) return;
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (!slideSwitchOwnsLight()) toggleLight();
@@ -293,7 +325,8 @@ int FrontlightPanelActivity::computePanelBottom() const {
   const auto& metrics = uiThemeMetrics(true);
   const int16_t lineHeight = uiTarget.lineHeight(tokens.smallText.font);
   // Slim battery band + the air around it (mirrors buildPanelScreen).
-  const int y0 = std::max<int>(metrics.batteryHeight, lineHeight);
+  const int y0 = std::max<int>(FREEINK_DEVICE_XUESU_300 ? BaseTheme::headerStatusHeight() : metrics.batteryHeight,
+                               lineHeight);
   int y = tokens.spaceMd + y0 + tokens.spaceMd;
   if (Frontlight.present()) {
     // Screen::sliderRow reserves caption + spaceMd + control band, then a
@@ -304,12 +337,15 @@ int FrontlightPanelActivity::computePanelBottom() const {
     }
     y += tokens.spaceSm;
   }
-  // Icons are touch targets, so a buttons-only board gets no row and the
-  // sheet is exactly the frontlight controls.
+#if FREEINK_DEVICE_XUESU_300
+  if (contextAction) y += kContextActionHeight + kXuesuTileGap;
+  y += fui::tileGridHeight(std::size(kXuesuTileActions), kTileCols, kXuesuTileHeight, kXuesuTileGap);
+#else
   if (mappedInput.hasTouch()) {
     y += UITheme::getInstance().hasMainTabs() ? fui::tileGridHeight(kInxTileCount, kTileCols, kTileHeight, kTileGap)
                                               : kQuickControlSize;
   }
+#endif
   // The sheet's grabber band: content margin + grabber + air to the edge.
   // buildPanelScreen() feeds the same theme spacings into SheetProps.
   y += UITheme::getInstance().hasMainTabs() ? 2 * tokens.spaceLg + tokens.spaceMd + kGrabberHeight
@@ -376,14 +412,22 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
   // the base implementation directly because RoundedRaff suppresses its
   // untitled Home header.
   {
-    const auto& metrics = uiThemeMetrics(true);
     screen.spacer(theme.spaceMd);
+#if FREEINK_DEVICE_XUESU_300
+    const int16_t bandH =
+        std::max<int16_t>(BaseTheme::headerStatusHeight(), screen.target().lineHeight(theme.smallText.font));
+    const auto band = screen.takeTop(bandH, theme.spaceMd);
+    GUI.drawHeaderStatus(renderer, Rect{band.x, band.y, band.width, band.height}, nullptr,
+                         SETTINGS.clockShowInHeader != 0);
+#else
+    const auto& metrics = uiThemeMetrics(true);
     const int16_t bandH = std::max<int16_t>(static_cast<int16_t>(metrics.batteryHeight),
                                             screen.target().lineHeight(theme.smallText.font));
     screen.takeTop(bandH, theme.spaceMd);
     GUI.drawHeaderWithStyle(
         renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.homeTopPadding - metrics.topPadding},
         nullptr, nullptr, true, true);
+#endif
   }
 
   if (Frontlight.present()) {
@@ -395,6 +439,41 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
     screen.spacer(theme.spaceSm);
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  if (contextAction) {
+    const auto band = screen.takeTop(kContextActionHeight, kXuesuTileGap);
+    auto style = theme.bodyText;
+    style.align = fui::TextAlign::Center;
+    const auto ink = fui::Paint::solid(fui::Color::Black);
+    if (selectedQuickTile == 0) {
+      screen.target().fill(band, ink, 6);
+      style.color = fui::Color::White;
+    } else {
+      screen.target().stroke(band, ink, 1, 6);
+    }
+    screen.target().text(band, contextAction, style);
+  }
+  static constexpr StrId kOrientNames[] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
+                                           StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
+  char nightLabel[48];
+  snprintf(nightLabel, sizeof(nightLabel), "%s %s", tr(STR_NIGHT_MODE),
+           I18N.get(SETTINGS.screenInverted ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF));
+  const char* labels[] = {tr(STR_SLEEP), nightLabel, tr(STR_FORCE_REFRESH),
+                          I18N.get(kOrientNames[SETTINGS.orientation % std::size(kOrientNames)])};
+  for (size_t index = 0; index < std::size(kXuesuTileActions); ++index) {
+    gridItems[index].label = labels[index];
+    gridItems[index].value = kXuesuTileActions[index];
+    const int position = static_cast<int>(index) + (contextAction ? 1 : 0);
+    gridItems[index].state = position == selectedQuickTile ? fui::StateFocused : fui::StateNormal;
+  }
+  gridProps.items = gridItems;
+  gridProps.count = std::size(kXuesuTileActions);
+  gridProps.tileHeight = kXuesuTileHeight;
+  gridProps.gap = kXuesuTileGap;
+  gridProps.text.font = fui::GfxRendererTarget::FONT_LABEL;
+  gridProps.text.maxLines = 2;
+  screen.tileGrid(gridProps);
+#else
   // Quick-setting tiles. Two columns of finger-sized cards; a tile whose
   // setting is currently on draws filled (StateChecked -> selected style).
   // Touch boards only — the tiles are touch targets.
@@ -474,6 +553,7 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
       if (!switchOwned) screen.frame().hit(slot, ACTION_TILE, static_cast<int16_t>(id), fui::InputTouch);
     }
   }
+#endif
 }
 
 void FrontlightPanelActivity::render(RenderLock&&) {

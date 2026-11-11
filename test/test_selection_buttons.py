@@ -176,9 +176,17 @@ int main() {
 with tempfile.TemporaryDirectory() as directory:
     cpp = Path(directory) / "selection.cpp"
     executable = Path(directory) / "selection"
-    cpp.write_text(harness)
-    subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(executable)], check=True)
-    subprocess.run([str(executable)], check=True)
+    for xuesu in (False, True):
+        source = harness
+        if xuesu:
+            source = source.replace("Input::INPUT_LEFT", "Input::INPUT_PREVIOUS")
+            source = source.replace("Input::INPUT_RIGHT", "Input::INPUT_NEXT")
+        cpp.write_text(source)
+        subprocess.run(
+            ["c++", "-std=c++20", f"-DFREEINK_DEVICE_XUESU_300={int(xuesu)}", str(cpp), "-o", str(executable)],
+            check=True,
+        )
+        subprocess.run([str(executable)], check=True)
     cpp.write_text(popup_harness)
     subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

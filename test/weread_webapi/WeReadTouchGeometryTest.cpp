@@ -2,6 +2,23 @@
 
 #include "activities/apps/weread/WeReadTouchGeometry.h"
 
+TEST(WeReadTouchGeometry, KeepsDetailSectionsSeparateOnShortScreens) {
+  ThemeMetrics metrics{};
+  metrics.contentSidePadding = 18;
+  metrics.verticalSpacing = 10;
+  for (const Rect content : {Rect{0, 76, 300, 324}, Rect{6, 76, 388, 214}, Rect{0, 76, 480, 684}}) {
+    const auto layout = weReadDetailLayout(content, metrics, 66, 4, 22);
+    EXPECT_GT(layout.cover.height, 0);
+    EXPECT_GE(layout.metadata.x, layout.cover.x + layout.cover.width);
+    EXPECT_GE(layout.introduction.y, layout.cover.y + layout.cover.height + 6);
+    EXPECT_GE(layout.actions.y, layout.introduction.y + layout.introduction.height + 6);
+    EXPECT_GE(layout.actionStep - layout.actionGap, 22);
+    EXPECT_EQ(layout.actions.height, layout.actionStep * 4);
+    EXPECT_EQ(layout.actions.y + layout.actions.height, content.y + content.height);
+    EXPECT_EQ(layout.actionGap, content.height < 472 ? 6 : 0);
+  }
+}
+
 TEST(WeReadTouchGeometry, MapsPortraitGridAndRejectsGaps) {
   const Rect content{0, 0, 480, 700};
   const WeReadShelfGridLayout layout{
