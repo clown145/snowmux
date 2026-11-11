@@ -199,10 +199,15 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
                          {StrId::STR_HAPTIC_LOW, StrId::STR_HAPTIC_MEDIUM, StrId::STR_HAPTIC_HIGH}, "hapticIntensity",
                          StrId::STR_CAT_CONTROLS));
 #endif
-  emit(SettingInfo::Enum(
-      StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-      {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED, StrId::STR_NEXT_NEXT, StrId::STR_PREV_PREV},
-      "sideButtonLayout", StrId::STR_CAT_CONTROLS));
+  // Xuesu has no other physical page keys: both directions must remain available.
+  static constexpr StrId SIDE_BUTTON_LAYOUTS[] = {
+      StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV,
+#if !FREEINK_DEVICE_XUESU_300
+      StrId::STR_DISABLED,  StrId::STR_NEXT_NEXT, StrId::STR_PREV_PREV,
+#endif
+  };
+  emit(SettingInfo::StaticEnum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout, SIDE_BUTTON_LAYOUTS,
+                               "sideButtonLayout", StrId::STR_CAT_CONTROLS));
 #if FREEINK_DEVICE_PICCO
   emit(SettingInfo::Enum(StrId::STR_SLIDE_SWITCH, &CrossPointSettings::slideSwitchAction,
                          {StrId::STR_FRONTLIGHT, StrId::STR_NIGHT_MODE, StrId::STR_TOUCH_READER_CONTROLS},

@@ -401,6 +401,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     } else {
       const uint8_t fieldDefault = s.*(info.valuePtr);  // struct-initializer default, read before we overwrite it
       uint8_t v = doc[info.key] | fieldDefault;
+#if FREEINK_DEVICE_XUESU_300
+      if (info.valuePtr == &CrossPointSettings::sideButtonLayout && v > NEXT_PREV) {
+        v = PREV_NEXT;
+        needsResave = true;
+      }
+#endif
       if (info.type == SettingType::ENUM) {
         // Clamp against the stored-value range, not the number of rows the UI
         // shows: a row can be worth more than one stored value. The page-turn
@@ -834,6 +840,9 @@ bool CrossPointSettings::loadFromBinaryFile() {
   orientation = validated(4, orientation, ORIENTATION_COUNT);
   frontButtonLayout = validated(5, frontButtonLayout, FRONT_BUTTON_LAYOUT_COUNT);
   sideButtonLayout = validated(6, sideButtonLayout, SIDE_BUTTON_LAYOUT_COUNT);
+#if FREEINK_DEVICE_XUESU_300
+  if (sideButtonLayout > NEXT_PREV) sideButtonLayout = PREV_NEXT;
+#endif
   if (fileSettingsCount > 7) {
     const uint8_t legacyFontFamily = values[7];
     if (legacyFontFamily < BUILTIN_FONT_COUNT) {

@@ -155,10 +155,6 @@ void SettingsActivity::rebuildSettingsLists() {
                             setting.valuePtr == &CrossPointSettings::inxAppsLayout ||
                             setting.valuePtr == &CrossPointSettings::inxTabPosition))
       return false;
-#if FREEINK_DEVICE_XUESU_300
-    if (setting.valuePtr == &CrossPointSettings::shortPwrBtn || setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack)
-      return false;
-#endif
     if (setting.valuePtr == &CrossPointSettings::fadingFix && (BoardConfig::isX4Pro() || FREEINK_DEVICE_X4CLASSIC))
       return false;
     if (setting.category == StrId::STR_CAT_READER && (setting.inTextSettings || setting.inReadingStatsSettings))

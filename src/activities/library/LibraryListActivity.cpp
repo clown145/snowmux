@@ -114,6 +114,9 @@ void LibraryListActivity::onEnter() {
   }
   resolvePinned();
 
+  // The unsorted shelf has no tab strip to focus. Start on its first book.
+  if (degraded && listCount() > 0) activeNav().selected = 1;
+
   // Entered while Confirm was still held (typical when launched from the home
   // menu): ignore its release, or we would open whatever sits at row 0.
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
@@ -260,13 +263,19 @@ void LibraryListActivity::onRowLongPress(const int index) {
 // modification time. Only store rows can be removed from recents.
 #if FREEINK_DEVICE_XUESU_300
 const char* LibraryListActivity::xuesuQuickActionLabel() const {
-  if (optionPopup.isActive() || degraded) return nullptr;
-  if (tabsFocused() || (listCount() > 0 && !groupsCollapsed)) return tr(STR_XUESU_LIBRARY_ACTIONS);
+  if (optionPopup.isActive()) return nullptr;
+  if (degraded || tabsFocused() || (listCount() > 0 && !groupsCollapsed)) return tr(STR_XUESU_LIBRARY_ACTIONS);
   return nullptr;
 }
 
 void LibraryListActivity::runXuesuQuickAction() {
-  if (tabsFocused()) {
+  if (!xuesuQuickActionLabel()) return;
+  if (degraded && (tabsFocused() || listCount() == 0)) {
+    constexpr StrId options[] = {StrId::STR_LIBRARY_REBUILD};
+    optionPopup.show(StrId::STR_XUESU_LIBRARY_ACTIONS, options, std::size(options), 0, [this](int choice) {
+      if (choice == 0) promptRebuildIndex();
+    });
+  } else if (tabsFocused()) {
     constexpr StrId options[] = {StrId::STR_XUESU_REVERSE_SORT, StrId::STR_LIBRARY_REBUILD};
     optionPopup.show(StrId::STR_XUESU_LIBRARY_ACTIONS, options, std::size(options), 0, [this](int choice) {
       if (choice == 0) toggleSortDirection();
@@ -371,16 +380,20 @@ void LibraryListActivity::promptRebuildIndex() {
 
 void LibraryListActivity::resetAfterRebuild() {
   // Sort positions, group starts, and pinned rows all point into the old order.
+  degraded = index.isOpen() && index.ranksDegraded();
   applyFilter();
   resolvePinned();
   auto& nav = activeNav();
   const int count = listCount();
   if (count == 0) {
     nav.selected = 0;
+  } else if (degraded && nav.selected == 0) {
+    nav.selected = 1;
   } else if (nav.selected > count) {
     nav.selected = count;
   }
   nav.followOnBuild = true;
+  navigationStartedOnTabs = false;
 }
 
 void LibraryListActivity::promptRemoveRecentBook(const std::string& path, const std::string& title) {
@@ -809,7 +822,7 @@ bool LibraryListActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (tabsFocused()) {
+    if (tabsFocused() && !degraded) {
       stepTab(1);
       return true;
     }
@@ -824,7 +837,7 @@ void LibraryListActivity::navigateButtons() {
   const int count = listCount();
   if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
       mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
-    navigationStartedOnTabs = tabsFocused();
+    navigationStartedOnTabs = tabsFocused() && !degraded;
   }
   buttonNavigator.onNextPress([this, count] {
     if (count > 0) moveRingTo(ringPos() == count ? 1 : ringPos() + 1);

@@ -243,6 +243,10 @@ not remove these protections. Non-empty folders are rejected. EPUB cache data fo
 Returns a streamed JSON array of editable settings. Each item contains common
 fields plus type-specific fields.
 
+Board-specific options match the device settings. On Xuesu, `sideButtonLayout`
+offers only Previous/Next (`0`) and Next/Previous (`1`); `shortPwrBtn` and
+`pwrBtnFootnoteBack` are omitted because there is no separate power key.
+
 ```bash
 curl http://crosspoint.local/api/settings
 ```
@@ -309,6 +313,11 @@ Background > Custom Image**. Disabling the setting does not delete that cache.
 ### `POST /api/settings`
 
 Applies a partial settings update from a JSON object.
+
+The same board filter applies to writes. On Xuesu, the two power-key settings
+are ignored, and side-button values outside `0..1` are ignored without changing
+the saved layout. Old JSON or binary settings with disabled or same-direction
+side keys are migrated to Previous/Next when loaded on Xuesu.
 
 ```bash
 curl -X POST \
