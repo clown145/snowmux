@@ -51,6 +51,9 @@
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "activities/boot_sleep/XuesuSleepClock.h"
+#endif
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/settings/FontDownloadActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
@@ -609,6 +612,8 @@ static bool holdSleepWhileUsbPowered() {
 void enterDeepSleep(bool fromTimeout = false) {
 #if FREEINK_DEVICE_XUESU_300
   if (!powerManager.armXuesuDeepSleep()) return;
+  xuesu_sleep_clock::clear();
+  const auto standby = activityManager.xuesuStandbyState();
 #endif
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
@@ -623,17 +628,27 @@ void enterDeepSleep(bool fromTimeout = false) {
   if (!bluetoothStopped) LOG_ERR("SLP", "Bluetooth did not stop; deferring sleep-event delivery");
   deliverSleepPluginEvents(bluetoothStopped);
 
+#if FREEINK_DEVICE_XUESU_300
+  const bool clockSleep = standby.has_value() || xuesu_sleep_clock::isSelected(SETTINGS.sleepScreen);
+#else
+  constexpr bool clockSleep = false;
+#endif
   const bool isQuickResumeSleep =
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+      !clockSleep &&
+      (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
+       (fromTimeout &&
+        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT));
   // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
   // it visible until the first useful reader or home paint replaces it.
   APP_STATE.showBootScreen = false;
 
   APP_STATE.saveToFile();
 
+#if FREEINK_DEVICE_XUESU_300
+  activityManager.goToSleep(fromTimeout, standby);
+#else
   activityManager.goToSleep(fromTimeout);
+#endif
 
   if (!READING_STATS.saveToFile()) {
     LOG_ERR("RST", "Failed to save reading stats before deep sleep");
@@ -676,8 +691,46 @@ void enterDeepSleep(bool fromTimeout = false) {
   display.deepSleep();
   Storage.prepareForDeepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
+#if FREEINK_DEVICE_XUESU_300
+  if (clockSleep) xuesu_sleep_clock::armFirstTimer();
+#endif
 
   powerManager.startDeepSleep(gpio, wakeOnHeldButton);
+}
+
+static void setupBasicUiFonts() {
+#if FREEINK_DEVICE_XUESU_300
+  // A timer boot interrupted by the confirm key continues into normal setup.
+  static bool installed = false;
+  if (installed) return;
+  installed = true;
+#endif
+  renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
+  renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
+  renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  renderer.insertFont(CJK_UI_8_FONT_ID, cjk8FontFamily);
+  renderer.insertFont(CJK_UI_10_FONT_ID, cjk10FontFamily);
+  renderer.insertFont(CJK_UI_12_FONT_ID, cjk12FontFamily);
+  renderer.setFallbackFont(SMALL_FONT_ID, CJK_UI_8_FONT_ID);
+  renderer.setFallbackFont(UI_10_FONT_ID, CJK_UI_10_FONT_ID);
+  renderer.setFallbackFont(UI_12_FONT_ID, CJK_UI_12_FONT_ID);
+#if FREEINK_DEVICE_XUESU_300
+  static const EpdFont clockSmallFont(&notosans_8_regular);
+  renderer.insertFont(xuesu_sleep_clock::fontSmall, EpdFontFamily(8, &clockSmallFont));
+  renderer.insertFont(xuesu_sleep_clock::fontBody, ui10FontFamily);
+  renderer.insertFont(xuesu_sleep_clock::fontTitle, ui12FontFamily);
+  renderer.setFallbackFont(xuesu_sleep_clock::fontSmall, CJK_UI_8_FONT_ID);
+  renderer.setFallbackFont(xuesu_sleep_clock::fontBody, CJK_UI_10_FONT_ID);
+  renderer.setFallbackFont(xuesu_sleep_clock::fontTitle, CJK_UI_12_FONT_ID);
+#endif
+}
+
+static bool setupEmbeddedFontCache() {
+  const bool ready = fontDecompressor.init();
+  if (!ready) LOG_ERR("MAIN", "Font decompressor init failed");
+  fontCacheManager.setFontDecompressor(&fontDecompressor);
+  renderer.setFontCacheManager(&fontCacheManager);
+  return ready;
 }
 
 bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false) {
@@ -711,12 +764,7 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
   LOG_DBG("MAIN", "Display initialized");
 
   // Initialize font decompressor for compressed reader fonts
-  const bool fontDecompressorReady = fontDecompressor.init();
-  if (!fontDecompressorReady) {
-    LOG_ERR("MAIN", "Font decompressor init failed");
-  }
-  fontCacheManager.setFontDecompressor(&fontDecompressor);
-  renderer.setFontCacheManager(&fontCacheManager);
+  const bool fontDecompressorReady = setupEmbeddedFontCache();
   renderer.insertFont(NOTOSERIF_14_FONT_ID, offlineReaderFontFamily);
 #ifndef OMIT_FONTS
   renderer.insertFont(NOTOSERIF_12_FONT_ID, offlineReaderFontFamily);
@@ -730,16 +778,8 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
 #endif  // OMIT_FONTS
   // The fixed slider title font keeps its face while INX uses its historical large-text fallback.
   renderer.insertFont(CONTROL_18_FONT_ID, control18FontFamily);
-  renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
-  renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
-  renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
-  renderer.insertFont(CJK_UI_8_FONT_ID, cjk8FontFamily);
-  renderer.insertFont(CJK_UI_10_FONT_ID, cjk10FontFamily);
-  renderer.insertFont(CJK_UI_12_FONT_ID, cjk12FontFamily);
-  renderer.setFallbackFont(SMALL_FONT_ID, CJK_UI_8_FONT_ID);
+  setupBasicUiFonts();
   renderer.setFallbackFont(CONTROL_18_FONT_ID, CJK_UI_12_FONT_ID);
-  renderer.setFallbackFont(UI_10_FONT_ID, CJK_UI_10_FONT_ID);
-  renderer.setFallbackFont(UI_12_FONT_ID, CJK_UI_12_FONT_ID);
   renderer.setFallbackFont(NOTOSANS_18_FONT_ID, CJK_UI_12_FONT_ID);
   renderer.insertFont(BaseTheme::STATUS_NUMERIC_FONT_ID, smallFontFamily);
 #if FREEINK_DEVICE_READPICO
@@ -846,8 +886,10 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
 void setup() {
   BoardConfig::holdPowerRails();
 #if FREEINK_DEVICE_XUESU_300
-  // WifiCredentialStore persists credentials to SD when the user requests it.
-  WiFi.persistent(false);
+  const bool clockTimerWake = powerManager.isXuesuClockTimerWake();
+  if (clockTimerWake) gpio.beginXuesuClockWakeWatch();
+#else
+  constexpr bool clockTimerWake = false;
 #endif
 
   // --- Read Pico boot order (read-pico.md 1.4) ------------------------------
@@ -891,6 +933,15 @@ void setup() {
 #endif
 #endif
 
+#if FREEINK_DEVICE_XUESU_300
+  if (clockTimerWake) {
+    setupBasicUiFonts();
+    setupEmbeddedFontCache();
+    xuesu_sleep_clock::refreshAfterTimerWake(renderer);
+  }
+  // WifiCredentialStore persists credentials to SD when the user requests it.
+  WiFi.persistent(false);
+#endif
   HalSystem::begin();
   const bool otaPendingAtBoot = HalOtaSlot::runningImageState() == HalOtaSlot::RunningImageState::PendingVerify;
 
@@ -943,6 +994,10 @@ void setup() {
   }
 
   const auto wakeupReason = gpio.getWakeupReason();
+#if FREEINK_DEVICE_XUESU_300
+  const auto standbyResume = xuesu_sleep_clock::takeStandbyResume(
+      clockTimerWake || wakeupReason == HalGPIO::WakeupReason::PowerButton);
+#endif
   // Sample the wake hold now — a click wake is released within milliseconds of
   // boot — but defer the sleep-or-boot decision until SETTINGS is loaded below:
   // click-to-wake is a setting, and an X4 battery power-off cuts all power, so
@@ -1018,7 +1073,7 @@ void setup() {
 #endif
   halClock.setAutoSyncEnabled(SETTINGS.clockAutoSync != 0);
   APP_STATE.loadFromFile();
-  const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
+  const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton || clockTimerWake;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 
   timezones::applyToClock();
@@ -1196,6 +1251,11 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+#if FREEINK_DEVICE_XUESU_300
+  } else if (standbyResume) {
+    if (needsWakeRefresh) renderer.requestNextRefresh(HalDisplay::HALF_REFRESH);
+    activityManager.goToStandby(*standbyResume);
+#endif
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity

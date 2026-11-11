@@ -11,6 +11,15 @@
 
 #include "StandbyTime.h"
 
+namespace {
+void drawClock(GfxRenderer& renderer, const Rect& viewport, unsigned hh, unsigned mm, const sloppy::Style& style,
+               const sloppy::Seeds& seeds) {
+  char buf[8];
+  std::snprintf(buf, sizeof(buf), "%02u\n%02u", hh, mm);
+  sloppy::draw(renderer, style, seeds, buf, sloppy::Bounds{viewport.x, viewport.y, viewport.width, viewport.height});
+}
+}  // namespace
+
 void SloppyClockFace::onEnter() {
   style_ = makeUniqueNoThrow<sloppy::Style>();
   seeds_ = makeUniqueNoThrow<sloppy::Seeds>();
@@ -38,6 +47,9 @@ void SloppyClockFace::onPagePrev() { onShake(esp_random() ^ static_cast<uint32_t
 void SloppyClockFace::onPageNext() { onShake(esp_random() ^ static_cast<uint32_t>(millis())); }
 
 void SloppyClockFace::regenerate(uint32_t seed) {
+#if FREEINK_DEVICE_XUESU_300
+  styleSeed_ = seed;
+#endif
   sloppy::rollStyle(seed, *style_);
   sloppy::prepareSeeds(seed, *style_, *seeds_);
   lastMin_ = -1;
@@ -60,11 +72,19 @@ void SloppyClockFace::render(GfxRenderer& renderer, const Rect& viewport) {
   unsigned hh = 0;
   unsigned mm = 0;
   standby_time::getNowHHMM(startMs_, hh, mm);
-  char buf[8];
-  std::snprintf(buf, sizeof(buf), "%02u\n%02u", hh, mm);
-  sloppy::draw(renderer, *style_, *seeds_, buf,
-               sloppy::Bounds{viewport.x, viewport.y, viewport.width, viewport.height});
+  drawClock(renderer, viewport, hh, mm, *style_, *seeds_);
 }
+
+#if FREEINK_DEVICE_XUESU_300
+void SloppyClockFace::renderSleep(GfxRenderer& renderer, const Rect& viewport, const std::tm& time,
+                                  const uint32_t styleSeed) {
+  sloppy::Style style{};
+  sloppy::Seeds seeds{};
+  sloppy::rollStyle(styleSeed, style);
+  sloppy::prepareSeeds(styleSeed, style, seeds);
+  drawClock(renderer, viewport, time.tm_hour, time.tm_min, style, seeds);
+}
+#endif
 
 uint32_t SloppyClockFace::secondsUntilNextWake() const {
   uint32_t sec;

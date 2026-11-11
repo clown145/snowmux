@@ -28,6 +28,9 @@
 #include "fontIds.h"
 #include "images/MoonIcon.h"
 #include "util/SleepCover.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "XuesuSleepClock.h"
+#endif
 
 namespace {
 // Metalio: B/W sleep images use the full 0xF7 waveform instead of HALF (two
@@ -586,6 +589,14 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+#if FREEINK_DEVICE_XUESU_300
+  if (standby || xuesu_sleep_clock::isSelected(SETTINGS.sleepScreen)) {
+    if (xuesu_sleep_clock::drawBeforeSleep(renderer, standby)) return;
+    display.setInverted(false);
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+    return renderDefaultSleepScreen();
+  }
+#endif
   if (!sleepCover::recover()) {
     display.setInverted(false);
     return renderDefaultSleepScreen();

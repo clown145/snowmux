@@ -314,6 +314,27 @@ bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
 #if FREEINK_DEVICE_XUESU_300
 bool HalGPIO::isXuesuConfirmHeld() const { return digitalRead(xuesu300::confirmKeyPin) == LOW; }
+
+namespace {
+volatile bool xuesuClockWakeKey = false;
+void IRAM_ATTR latchXuesuClockWakeKey() { xuesuClockWakeKey = true; }
+}  // namespace
+
+void HalGPIO::beginXuesuClockWakeWatch() const {
+  constexpr auto pin = static_cast<gpio_num_t>(xuesu300::confirmKeyPin);
+  rtc_gpio_deinit(pin);
+  pinMode(pin, INPUT_PULLUP);
+  xuesuClockWakeKey = false;
+  attachInterrupt(pin, latchXuesuClockWakeKey, FALLING);
+  if (isXuesuConfirmHeld()) xuesuClockWakeKey = true;
+}
+
+bool HalGPIO::xuesuClockWakeKeyPending() const { return xuesuClockWakeKey || isXuesuConfirmHeld(); }
+
+bool HalGPIO::endXuesuClockWakeWatch() const {
+  detachInterrupt(xuesu300::confirmKeyPin);
+  return xuesuClockWakeKeyPending();
+}
 #endif
 
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }

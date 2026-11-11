@@ -74,6 +74,7 @@ class Activity {
   virtual bool allowsXuesuQuickPanel() const { return usesMainTabBar(); }
   virtual const char* xuesuQuickActionLabel() const { return nullptr; }
   virtual void runXuesuQuickAction() {}
+  virtual std::optional<xuesu_sleep_clock::FaceState> xuesuStandbyState() const { return std::nullopt; }
 #endif
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 

@@ -4,6 +4,9 @@
 
 #include "I18nKeys.h"
 #include "components/themes/BaseTheme.h"  // for ::Rect
+#if FREEINK_DEVICE_XUESU_300
+#include "activities/boot_sleep/XuesuSleepClock.h"
+#endif
 
 class GfxRenderer;
 
@@ -69,6 +72,10 @@ class StandbyFace {
   // applyGrayscalePass. Normal-mode renders skip it to keep face/page
   // navigation responsive.
   virtual bool wantsGrayscale() const { return false; }
+#if FREEINK_DEVICE_XUESU_300
+  virtual void saveAppearance(xuesu_sleep_clock::FaceState&) const {}
+  virtual void restoreAppearance(const xuesu_sleep_clock::FaceState&) {}
+#endif
 
   // Note on per-orientation availability: StandbyActivity decides whether to
   // include a face in the active rotation via the `FaceEntry::isAvailable

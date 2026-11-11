@@ -166,19 +166,21 @@ void formatOffset(const uint8_t index, char* buf, const size_t bufSize) {
   snprintf(buf, bufSize, "UTC%c%d:%02d", q < 0 ? '-' : '+', absQ / 4, (absQ % 4) * 15);
 }
 
-void applyToClock() {
-  const TimezoneInfo& tz = TABLE[activeIndex()];
-  if (SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_AUTO) {
+void applyToClock(const uint8_t index, const uint8_t dstMode) {
+  const TimezoneInfo& tz = TABLE[index < count() ? index : utcIndex()];
+  if (dstMode == CrossPointSettings::CLOCK_DST_AUTO) {
     halClock.setTimezone(tz.posixTz);
     return;
   }
   // Forced DST: replace the zone's rule with a fixed offset — the standard
   // offset, plus one hour when forced on. POSIX offset sign is inverted.
-  const int q = tz.stdOffsetQ + (SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_ON ? 4 : 0);
+  const int q = tz.stdOffsetQ + (dstMode == CrossPointSettings::CLOCK_DST_ON ? 4 : 0);
   const int absQ = q < 0 ? -q : q;
   char fixed[16];
   snprintf(fixed, sizeof(fixed), "UTC%c%d:%02d", q < 0 ? '+' : '-', absQ / 4, (absQ % 4) * 15);
   halClock.setTimezone(fixed);
 }
+
+void applyToClock() { applyToClock(activeIndex(), SETTINGS.clockDst); }
 
 }  // namespace timezones

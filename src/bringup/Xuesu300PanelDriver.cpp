@@ -55,6 +55,11 @@ class Xuesu300PanelDriver final : public PanelDriver {
   bool displayCommitted() const override { return committed; }
   OpticalState opticalState() const override { return committed ? OpticalState::Bw : OpticalState::Unknown; }
 
+  void seedBaseline(const uint8_t* framebuffer) {
+    std::memcpy(previous.data(), framebuffer, previous.size());
+    committed = true;
+  }
+
   void display(EpdBus& bus, const uint8_t* framebuffer, const uint8_t*, RefreshMode mode, bool) override {
     const bool previousKnown = committed;
     // Half is the reader's scheduled cleanup. This panel has two verified waveforms.
@@ -114,12 +119,16 @@ class Xuesu300PanelDriver final : public PanelDriver {
   bool committed = false;
 };
 
-}  // namespace
-
-PanelDriver& xuesu300PanelDriver() {
+Xuesu300PanelDriver& driverInstance() {
   static Xuesu300PanelDriver driver;
   return driver;
 }
+
+}  // namespace
+
+PanelDriver& xuesu300PanelDriver() { return driverInstance(); }
+
+void seedXuesu300PanelBaseline(const uint8_t* framebuffer) { driverInstance().seedBaseline(framebuffer); }
 
 }  // namespace freeink
 

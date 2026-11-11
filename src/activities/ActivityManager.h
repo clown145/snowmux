@@ -17,6 +17,9 @@
 #include "activities/MainTab.h"
 #include "settings/SettingsSection.h"
 #include "util/ScreenshotInfo.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "activities/boot_sleep/XuesuSleepClock.h"
+#endif
 
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
@@ -134,7 +137,11 @@ class ActivityManager {
   void goToBrowser();
   void goToPlugins(bool showOpds);
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
+#if FREEINK_DEVICE_XUESU_300
+  void goToSleep(bool fromTimeout, const std::optional<xuesu_sleep_clock::FaceState>& standby);
+#else
   void goToSleep(bool fromTimeout = false);
+#endif
   void requestSleep() { sleepRequested.store(true, std::memory_order_relaxed); }
   bool takeSleepRequest() { return sleepRequested.exchange(false, std::memory_order_relaxed); }
   void goToBoot();
@@ -152,6 +159,10 @@ class ActivityManager {
   void goToAirPage();
   void goToBuddy();
   void goToStandby();
+#if FREEINK_DEVICE_XUESU_300
+  void goToStandby(const xuesu_sleep_clock::FaceState& face);
+  std::optional<xuesu_sleep_clock::FaceState> xuesuStandbyState() const;
+#endif
   void goToGame2048();
 #ifdef ENABLE_CHINESE_VERSION
   void goToChineseChess();

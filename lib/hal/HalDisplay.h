@@ -148,6 +148,10 @@ class HalDisplay {
   bool canUseTextTransition() const;
   void cancelGrayscale();
   bool displayCommitted() const;
+#if FREEINK_DEVICE_XUESU_300
+  // The caller has redrawn the exact B/W frame already visible on the panel.
+  void seedXuesuSleepClockBaseline() const;
+#endif
 
   // Runtime geometry passthrough — the authoritative source for every layout
   // decision (GfxRenderer reads exactly these in its begin()). Prefer them over

@@ -22,6 +22,11 @@ class SloppyClockFace final : public StandbyFace {
   void render(GfxRenderer& renderer, const Rect& viewport) override;
   StrId titleId() const override { return StrId::STR_FACE_SLOPPY_CLOCK; }
   uint32_t secondsUntilNextWake() const override;
+#if FREEINK_DEVICE_XUESU_300
+  void saveAppearance(xuesu_sleep_clock::FaceState& state) const override { state.styleSeed = styleSeed_; }
+  void restoreAppearance(const xuesu_sleep_clock::FaceState& state) override { onShake(state.styleSeed); }
+  static void renderSleep(GfxRenderer& renderer, const Rect& viewport, const std::tm& time, uint32_t styleSeed);
+#endif
 
  private:
   std::unique_ptr<sloppy::Style> style_;
@@ -29,6 +34,9 @@ class SloppyClockFace final : public StandbyFace {
   uint32_t startMs_ = 0;  // millis() anchor for the pre-sync fallback display
   int32_t lastMin_ = -1;  // last rendered minute tick, for "did the minute change?" gating
   int16_t lastTenMinuteBucket_ = -1;
+#if FREEINK_DEVICE_XUESU_300
+  uint32_t styleSeed_ = 1;
+#endif
 
   void regenerate(uint32_t seed);
 };

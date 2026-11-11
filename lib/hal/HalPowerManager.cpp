@@ -268,6 +268,37 @@ bool HalPowerManager::armXuesuDeepSleep() const {
   LOG_ERR("PWR", "Failed to arm Xuesu wake GPIO: %s", esp_err_to_name(err));
   return false;
 }
+
+bool HalPowerManager::isXuesuClockTimerWake() const {
+  return esp_reset_reason() == ESP_RST_DEEPSLEEP && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
+}
+
+bool HalPowerManager::armXuesuClockTimer(const uint64_t delayUs) const {
+  const esp_err_t err = esp_sleep_enable_timer_wakeup(delayUs);
+  if (err == ESP_OK) return true;
+  LOG_ERR("PWR", "Failed to arm Xuesu clock timer: %s", esp_err_to_name(err));
+  return false;
+}
+
+void HalPowerManager::continueXuesuClockSleep(HalGPIO& gpio, const uint64_t delayUs) const {
+  // The timer boot has not started SD, input, Wi-Fi, Bluetooth, or the UI task.
+  // A short click during display refresh is latched until this handoff.
+  if (!gpio.xuesuClockWakeKeyPending() && armXuesuDeepSleep()) {
+    freeink::PowerManager::powerDownRailsForSleep();
+    if (!gpio.xuesuClockWakeKeyPending() && armXuesuClockTimer(delayUs)) {
+#ifdef ENABLE_SERIAL_LOG
+      logSerial.end();
+#endif
+      if (!gpio.endXuesuClockWakeWatch()) freeink::PowerManager::deepSleep();
+#ifdef ENABLE_SERIAL_LOG
+      Serial.begin(115200);
+#endif
+      esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+      return;
+    }
+  }
+  gpio.endXuesuClockWakeWatch();
+}
 #endif
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio, const bool wakeOnHeldButton) const {

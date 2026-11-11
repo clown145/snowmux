@@ -78,6 +78,9 @@ class HalPowerManager {
   uint16_t getBatteryPercentage() const;
 #if FREEINK_DEVICE_XUESU_300
   bool armXuesuDeepSleep() const;
+  bool isXuesuClockTimerWake() const;
+  bool armXuesuClockTimer(uint64_t delayUs) const;
+  void continueXuesuClockSleep(HalGPIO& gpio, uint64_t delayUs) const;
   enum class BatteryCalibrationResult : uint8_t { Ready, Charging, ReadFailed, OutOfRange };
   // Main task, after the user confirms a full charge.
   BatteryCalibrationResult sampleFullBatteryReference(uint16_t& fullMv) const;

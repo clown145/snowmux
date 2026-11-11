@@ -9,6 +9,11 @@
 #include "components/themes/BaseTheme.h"
 
 class CoverGridHomeUi;
+#if FREEINK_DEVICE_XUESU_300
+namespace xuesu_sleep_clock {
+struct Frame;
+}
+#endif
 
 class UITheme {
   // Static instance
@@ -24,6 +29,7 @@ class UITheme {
   const BaseTheme& getTheme() const { return *currentTheme; }
   bool usesClassicTabs() const { return currentType == CrossPointSettings::UI_THEME::CLASSIC; }
   bool hasMainTabs() const { return currentType == CrossPointSettings::UI_THEME::INX; }
+  bool hasCarouselHome() const { return currentType == CrossPointSettings::UI_THEME::LYRA_CAROUSEL; }
   static Rect getContentArea(const GfxRenderer& renderer);
   Rect getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints = false,
                          bool hasSideButtonHints = false);
@@ -41,8 +47,11 @@ class UITheme {
                                       TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
   static bool supportsCoverGrid();
   static bool hasCoverGridHome();
-  bool hasCarouselHome() const { return currentType == CrossPointSettings::UI_THEME::LYRA_CAROUSEL; }
   static void drawCoverGridHome(CoverGridHomeUi& home);
+#if FREEINK_DEVICE_XUESU_300
+  static void drawXuesuSleepClock(GfxRenderer& renderer, const xuesu_sleep_clock::Frame& frame);
+  static void drawXuesuSleepClock(GfxRenderer& renderer, const xuesu_sleep_clock::Frame& frame, const Rect& viewport);
+#endif
   void reload();
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,

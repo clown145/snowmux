@@ -34,5 +34,9 @@ void formatOffset(uint8_t index, char* buf, size_t bufSize);
 // Push the active zone's TZ rule into HalClock. Call once at boot after
 // settings load, and again whenever clockTimezone changes.
 void applyToClock();
+#if FREEINK_DEVICE_XUESU_300
+// Timer wake uses the saved zone without mounting the card.
+void applyToClock(uint8_t index, uint8_t dstMode);
+#endif
 
 }  // namespace timezones

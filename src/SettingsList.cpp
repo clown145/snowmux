@@ -20,6 +20,13 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
     values[CrossPointSettings::QUICK_RESUME] = StrId::STR_QUICK_RESUME;
     values[CrossPointSettings::TRANSPARENT_CUSTOM] = StrId::STR_TRANSPARENT;
     values[CrossPointSettings::COVER_TRANSPARENT] = StrId::STR_COVER_TRANSPARENT;
+#if FREEINK_DEVICE_XUESU_300
+    values[CrossPointSettings::CLOCK_MONTH_GRID] = StrId::STR_SLEEP_CLOCK_MONTH_GRID;
+    values[CrossPointSettings::CLOCK_NEWSPAPER] = StrId::STR_SLEEP_CLOCK_NEWSPAPER;
+    values[CrossPointSettings::CLOCK_FIREWORKS] = StrId::STR_SLEEP_CLOCK_FIREWORKS;
+    values[CrossPointSettings::CLOCK_SLOPPY] = StrId::STR_FACE_SLOPPY_CLOCK;
+    values[CrossPointSettings::CLOCK_ALMANAC] = StrId::STR_FACE_CHINESE_CALENDAR;
+#endif
     return values;
   }();
   static constexpr auto STATUS_BAR_CLOCK_VALUES = [] {

@@ -12,6 +12,13 @@ class StandbyActivity final : public Activity {
  public:
   explicit StandbyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : Activity("Standby", renderer, mappedInput) {}
+#if FREEINK_DEVICE_XUESU_300
+  StandbyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const xuesu_sleep_clock::FaceState& face)
+      : Activity("Standby", renderer, mappedInput), resumedFace_(face) {}
+  std::optional<xuesu_sleep_clock::FaceState> xuesuStandbyState() const override;
+  const char* xuesuQuickActionLabel() const override;
+  void runXuesuQuickAction() override;
+#endif
 
   void onEnter() override;
   void loop() override;
@@ -45,6 +52,10 @@ class StandbyActivity final : public Activity {
   DisplayMode mode_ = DisplayMode::Normal;
   uint32_t lastInputMs_ = 0;
   bool inverseMode_ = false;  // Confirm toggles black-bg/white-content. Not persisted.
+#if FREEINK_DEVICE_XUESU_300
+  std::optional<xuesu_sleep_clock::FaceState> resumedFace_;
+  bool sleepSaveFailed_ = false;
+#endif
 
   void switchFace(int8_t delta);
   void startTimeSync();

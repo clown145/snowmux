@@ -106,6 +106,9 @@ class HalGPIO {
   // Cheap enough to call every few ms.
   bool rawInputActive();
 #if FREEINK_DEVICE_XUESU_300
+  void beginXuesuClockWakeWatch() const;
+  bool xuesuClockWakeKeyPending() const;
+  bool endXuesuClockWakeWatch() const;
   bool isXuesuConfirmHeld() const;
 #endif
   bool hasTouch() const;

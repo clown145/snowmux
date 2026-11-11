@@ -632,10 +632,26 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
   if (activity) replaceActivity(std::move(activity));
 }
 
-void ActivityManager::goToSleep(bool fromTimeout) {
-  if (replaceActivityWith<SleepActivity>(fromTimeout)) {
+#if FREEINK_DEVICE_XUESU_300
+void ActivityManager::goToSleep(const bool fromTimeout, const std::optional<xuesu_sleep_clock::FaceState>& standby) {
+  const bool ready = replaceActivityWith<SleepActivity>(fromTimeout, standby);
+#else
+void ActivityManager::goToSleep(const bool fromTimeout) {
+  const bool ready = replaceActivityWith<SleepActivity>(fromTimeout);
+#endif
+  if (ready) {
     pendingAction.store(PendingAction::ReplaceForSleep);
     loop();  // The caller sleeps immediately after this returns, so render now.
+#if FREEINK_DEVICE_XUESU_300
+    // A scheduled standby paint can already own the render lock. Wait until
+    // SleepActivity has drawn and recorded the face before powering off.
+    while (pendingAction.load() == PendingAction::ReplaceForSleep) {
+      {
+        RenderLock lock;
+      }
+      loop();
+    }
+#endif
   }
 }
 
@@ -653,7 +669,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
   if (!CrossPointSettings::requiresOnboarding(SETTINGS.onboardingVersion)) {
     UserGuide::installIfPending(static_cast<Language>(SETTINGS.language) == Language::ZH_CN);
   }
-  if (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::INX) {
+  if (UITheme::getInstance().hasMainTabs()) {
 #if FREEINK_DEVICE_XUESU_300
     mainTabFocus = RECENT_BOOKS.getBooks().empty() ? MainTabFocus::Tabs : MainTabFocus::Content;
 #else
@@ -708,6 +724,16 @@ void ActivityManager::goToAirPage() { replaceActivityWith<AirPageActivity>(); }
 void ActivityManager::goToBuddy() { replaceActivityWith<BuddyActivity>(); }
 
 void ActivityManager::goToStandby() { replaceActivityWith<StandbyActivity>(); }
+#if FREEINK_DEVICE_XUESU_300
+void ActivityManager::goToStandby(const xuesu_sleep_clock::FaceState& face) {
+  if (!replaceActivityWith<StandbyActivity>(face)) goHome();
+}
+
+std::optional<xuesu_sleep_clock::FaceState> ActivityManager::xuesuStandbyState() const {
+  RenderLock lock;
+  return currentActivity ? currentActivity->xuesuStandbyState() : std::nullopt;
+}
+#endif
 
 #ifdef ENABLE_CHINESE_VERSION
 void ActivityManager::goToChineseChess() { replaceActivityWith<ChineseChessMenuActivity>(); }

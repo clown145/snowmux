@@ -219,6 +219,14 @@ void HalDisplay::cancelGrayscale() {
 
 bool HalDisplay::displayCommitted() const { return einkDisplay.displayCommitted(); }
 
+#if FREEINK_DEVICE_XUESU_300
+namespace freeink {
+void seedXuesu300PanelBaseline(const uint8_t* framebuffer);
+}
+
+void HalDisplay::seedXuesuSleepClockBaseline() const { freeink::seedXuesu300PanelBaseline(getFrameBuffer()); }
+#endif
+
 uint16_t HalDisplay::getDisplayWidth() const { return einkDisplay.getDisplayWidth(); }
 
 uint16_t HalDisplay::getDisplayHeight() const { return einkDisplay.getDisplayHeight(); }

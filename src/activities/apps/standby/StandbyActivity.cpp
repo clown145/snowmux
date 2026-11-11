@@ -42,6 +42,58 @@ constexpr uint32_t kSyncDelayMs = 1500u;
 constexpr uint32_t kMaxLightSleepSeconds = 60u;
 #endif
 
+#if FREEINK_DEVICE_XUESU_300
+using xuesu_sleep_clock::Layout;
+
+class StockClockFace final : public StandbyFace {
+ public:
+  StockClockFace(Layout layout, StrId title) : layout_(layout), title_(title) {}
+
+  void onEnter() override {
+    environment_ = hal_environment::sample();
+    lastSampleMs_ = millis();
+  }
+
+  TickResult tick() override {
+    const uint32_t nowMs = millis();
+    const bool sampleDue = nowMs - lastSampleMs_ >= xuesu_sleep_clock::environmentIntervalSeconds * 1000;
+    if (sampleDue) {
+      const auto reading = hal_environment::sample();
+      const RenderLock lock;
+      environment_ = reading;
+      lastSampleMs_ = nowMs;
+    }
+    const uint32_t minute = TimeUtils::getCurrentValidTimestamp() / 60;
+    if (minute == lastMinute_ && !sampleDue) return TickResult::None;
+    lastMinute_ = minute;
+    return TickResult::Redraw;
+  }
+  void render(GfxRenderer& renderer, const Rect& viewport) override {
+    xuesu_sleep_clock::Frame frame{.date = {},
+                                   .layout = layout_,
+                                   .battery = 0,
+                                   .twelveHour = SETTINGS.clockFormat == 1,
+                                   .environment = environment_};
+#if CROSSPOINT_EMULATED == 0
+    frame.battery = static_cast<uint8_t>(powerManager.getBatteryPercentage());
+#endif
+    const uint32_t now = TimeUtils::getCurrentValidTimestamp();
+    if (now && TimeUtils::getLocalDateTime(now, frame.date)) {
+      UITheme::drawXuesuSleepClock(renderer, frame, viewport);
+    }
+  }
+  StrId titleId() const override { return title_; }
+  uint32_t secondsUntilNextWake() const override { return 60; }
+
+ private:
+  Layout layout_;
+  StrId title_;
+  uint32_t lastMinute_ = 0;
+  uint32_t lastSampleMs_ = 0;
+  hal_environment::Reading environment_{};
+};
+#endif
+
 // Face factory table. Add new faces by appending a row here and including the
 // corresponding header above. Each entry also declares an isAvailable()
 // predicate so faces can be hidden under specific runtime conditions (e.g.
@@ -50,13 +102,40 @@ constexpr uint32_t kMaxLightSleepSeconds = 60u;
 struct FaceEntry {
   std::unique_ptr<StandbyFace> (*create)();
   bool (*isAvailable)(int sw, int sh);
+#if FREEINK_DEVICE_XUESU_300
+  Layout layout;
+#endif
 };
 constexpr FaceEntry kFaces[] = {
-    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<SloppyClockFace>(); },
-     [](int, int) { return true; }},
+    {
+        []() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<SloppyClockFace>(); },
+        [](int, int) { return true; },
+#if FREEINK_DEVICE_XUESU_300
+        Layout::Sloppy,
+#endif
+    },
 #ifdef ENABLE_CHINESE_VERSION
-    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<ChineseCalendarFace>(); },
-     [](int sw, int sh) { return sh > sw; }},  // portrait only
+    {
+        []() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<ChineseCalendarFace>(); },
+        [](int sw, int sh) { return sh > sw; },  // portrait only
+#if FREEINK_DEVICE_XUESU_300
+        Layout::Almanac,
+#endif
+    },
+#endif
+#if FREEINK_DEVICE_XUESU_300
+    {[]() -> std::unique_ptr<StandbyFace> {
+       return makeUniqueNoThrow<StockClockFace>(Layout::MonthGrid, StrId::STR_SLEEP_CLOCK_MONTH_GRID);
+     },
+     [](int sw, int sh) { return sh > sw; }, Layout::MonthGrid},
+    {[]() -> std::unique_ptr<StandbyFace> {
+       return makeUniqueNoThrow<StockClockFace>(Layout::Newspaper, StrId::STR_SLEEP_CLOCK_NEWSPAPER);
+     },
+     [](int sw, int sh) { return sh > sw; }, Layout::Newspaper},
+    {[]() -> std::unique_ptr<StandbyFace> {
+       return makeUniqueNoThrow<StockClockFace>(Layout::Fireworks, StrId::STR_SLEEP_CLOCK_FIREWORKS);
+     },
+     [](int sw, int sh) { return sh > sw; }, Layout::Fireworks},
 #endif
 };
 constexpr uint8_t kFaceCount = static_cast<uint8_t>(sizeof(kFaces) / sizeof(kFaces[0]));
@@ -102,11 +181,13 @@ bool g_promptedForWifiThisSession = false;
 // Bottom-center page indicator dots. One dot per face, filled for the current
 // face. Drawn only in Normal mode — hidden once we go Immersive. Shares the dot
 // style with the Apps menu via drawPaginationDots().
+#if !FREEINK_DEVICE_XUESU_300
 constexpr int kDotBottomInset = 24;  // distance from bottom edge to top of dots
 
 void drawFaceDots(const GfxRenderer& renderer, int sw, int sh, uint8_t total, uint8_t current) {
   drawPaginationDots(renderer, sw, sh - kDotBottomInset, total, current);
 }
+#endif
 
 }  // namespace
 
@@ -116,6 +197,19 @@ void StandbyActivity::onEnter() {
   // Always default to face 0 (Sloppy Clock). If face 0 is somehow unavailable
   // (currently impossible), fall back to the first available index.
   faceIndex_ = 0;
+#if FREEINK_DEVICE_XUESU_300
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  const auto requested =
+      resumedFace_ ? std::optional(resumedFace_->layout) : xuesu_sleep_clock::layoutForMode(SETTINGS.sleepScreen);
+  if (requested) {
+    for (uint8_t i = 0; i < kFaceCount; ++i) {
+      if (kFaces[i].layout == *requested) {
+        faceIndex_ = i;
+        break;
+      }
+    }
+  }
+#endif
   if (!kFaces[0].isAvailable(renderer.getScreenWidth(), renderer.getScreenHeight())) {
     const uint8_t idx = availableFaceIndexFromRank(renderer.getScreenWidth(), renderer.getScreenHeight(), 0);
     if (idx < kFaceCount) faceIndex_ = idx;
@@ -128,6 +222,13 @@ void StandbyActivity::onEnter() {
     return;
   }
   currentFace_->onEnter();
+#if FREEINK_DEVICE_XUESU_300
+  if (resumedFace_) {
+    inverseMode_ = resumedFace_->inverse;
+    currentFace_->restoreAppearance(*resumedFace_);
+    resumedFace_.reset();
+  }
+#endif
   mode_ = DisplayMode::Normal;
   lastInputMs_ = millis();
   if (!TimeUtils::isClockValid() && SETTINGS.clockAutoSync) {
@@ -178,9 +279,40 @@ void StandbyActivity::switchFace(int8_t delta) {
     return;
   }
   currentFace_->onEnter();
+#if FREEINK_DEVICE_XUESU_300
+  sleepSaveFailed_ = false;
+#endif
   LOG_DBG("STANDBY", "Selected face %u", static_cast<unsigned>(faceIndex_));
   requestUpdate();
 }
+
+#if FREEINK_DEVICE_XUESU_300
+std::optional<xuesu_sleep_clock::FaceState> StandbyActivity::xuesuStandbyState() const {
+  if (!currentFace_) return std::nullopt;
+  xuesu_sleep_clock::FaceState state{.layout = kFaces[faceIndex_].layout, .inverse = inverseMode_};
+  currentFace_->saveAppearance(state);
+  return state;
+}
+
+const char* StandbyActivity::xuesuQuickActionLabel() const { return tr(STR_STANDBY_SET_SLEEP_FACE); }
+
+void StandbyActivity::runXuesuQuickAction() {
+  RenderLock lock(*this);
+  lastInputMs_ = millis();
+  mode_ = DisplayMode::Normal;
+  sleepSaveFailed_ = false;
+  const auto previous = SETTINGS.sleepScreen;
+  const auto selected = xuesu_sleep_clock::modeForLayout(kFaces[faceIndex_].layout);
+  if (previous != selected) {
+    SETTINGS.sleepScreen = selected;
+    if (!SETTINGS.saveToFile()) {
+      SETTINGS.sleepScreen = previous;
+      sleepSaveFailed_ = true;
+    }
+  }
+  requestUpdate();
+}
+#endif
 
 void StandbyActivity::startTimeSync() {
   if (TimeUtils::isClockValid() || !SETTINGS.clockAutoSync) return;
@@ -428,6 +560,16 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
 }
 
 void StandbyActivity::loop() {
+#if FREEINK_DEVICE_XUESU_300
+  // Raw edge summary includes the releases the double-confirm recognizer is
+  // holding while it waits to distinguish a single from a double press.
+  if (mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased() ||
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Up) ||
+      mappedInput.isPressed(MappedInputManager::Button::Down)) {
+    lastInputMs_ = millis();
+  }
+#endif
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     activityManager.goHome();
     return;
@@ -544,7 +686,15 @@ void StandbyActivity::loop() {
     return;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  if (mode_ == DisplayMode::Immersive && idle >= standby_time::kLightSleepIdleMs && currentFace_ &&
+      syncState_ == SyncState::Idle && WiFi.getMode() == WIFI_MODE_NULL && TimeUtils::isClockValid()) {
+    activityManager.requestSleep();
+    return;
+  }
+#else
   if (tryLightSleep(idle)) return;
+#endif
 
   processFaceTick(false);
 }
@@ -562,15 +712,26 @@ void StandbyActivity::render(RenderLock&&) {
   renderer.getOrientedViewableTRBL(&viewTop, &viewRight, &viewBottom, &viewLeft);
   const Rect faceViewport{viewLeft, viewTop, sw - viewLeft - viewRight, sh - viewTop - viewBottom};
   const int overlayTop = std::max(metrics.topPadding, viewTop);
+  Rect drawing = faceViewport;
+#if FREEINK_DEVICE_XUESU_300
+  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 6;
+  if (mode_ == DisplayMode::Normal) {
+    drawing.height -= footerHeight;
+    if (kFaces[faceIndex_].layout != Layout::Almanac) {
+      const int heading = overlayTop - viewTop + renderer.getLineHeight(SMALL_FONT_ID) + 2;
+      drawing.y += heading;
+      drawing.height -= heading;
+    }
+  }
+#endif
 
   renderer.clearScreen();
 
   // Face renders inside the physically viewable screen regardless of mode. Normal
   // chrome is overlaid without reflow; the unsynced warning remains in Immersive.
   {
-    const GfxRenderer::ClipScope clip(renderer, faceViewport.x, faceViewport.y, faceViewport.width,
-                                      faceViewport.height);
-    currentFace_->render(renderer, faceViewport);
+    const GfxRenderer::ClipScope clip(renderer, drawing.x, drawing.y, drawing.width, drawing.height);
+    currentFace_->render(renderer, drawing);
   }
 
   const bool clockValid = TimeUtils::isClockValid();
@@ -604,9 +765,17 @@ void StandbyActivity::render(RenderLock&&) {
   GUI.drawBatteryRight(renderer, Rect{sw - viewRight - kBatW - metrics.contentSidePadding, overlayTop, kBatW, kBatH},
                        /*showPercentage=*/false);
 
+#if FREEINK_DEVICE_XUESU_300
+  const bool selected = SETTINGS.sleepScreen == xuesu_sleep_clock::modeForLayout(kFaces[faceIndex_].layout);
+  const char* hint = sleepSaveFailed_ ? tr(STR_STANDBY_SAVE_FAILED)
+                     : selected       ? tr(STR_STANDBY_CURRENT_SLEEP_FACE)
+                                      : tr(STR_STANDBY_SET_SLEEP_HINT);
+  UITheme::drawCenteredText(renderer, faceViewport, SMALL_FONT_ID, sh - viewBottom - footerHeight + 2, hint);
+#else
   const uint8_t availFaces = countAvailableFaces(sw, sh);
   const uint8_t curRank = rankOfAvailableFace(sw, sh, faceIndex_);
   drawFaceDots(renderer, sw, sh, availFaces, curRank);
+#endif
 
   // Standby stays on FAST_REFRESH end-to-end — no full/half waveform flashes.
   // We accept some long-term ghosting in exchange for a calm, non-blinking face.

@@ -27,6 +27,11 @@ class ChineseCalendarFace final : public StandbyFace {
   StrId titleId() const override;
   uint32_t secondsUntilNextWake() const override;
   bool wantsGrayscale() const override { return true; }
+#if FREEINK_DEVICE_XUESU_300
+  void saveAppearance(xuesu_sleep_clock::FaceState& state) const override;
+  void restoreAppearance(const xuesu_sleep_clock::FaceState& state) override;
+  static void renderSleep(GfxRenderer& renderer, const Rect& viewport, const std::tm& day);
+#endif
 
   // Up → previous day; Down → next day. Clamped to 1900-01-01 / 2100-12-31.
   void onPagePrev() override;

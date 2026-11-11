@@ -7,11 +7,13 @@
 #include <Memory.h>
 #include <time.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 #include "ChineseAlmanac.h"
 #include "I18nKeys.h"
+#include "SdCardFontSystem.h"
 #include "fontIds.h"
 #include "util/TimeUtils.h"
 
@@ -30,6 +32,16 @@
 // because basic Latin (U+0020-007E) is always in the OTF subset.
 
 namespace {
+
+#if FREEINK_DEVICE_XUESU_300
+constexpr int kCalendarSmallFont = xuesu_sleep_clock::fontSmall;
+constexpr int kCalendarBodyFont = xuesu_sleep_clock::fontBody;
+constexpr int kCalendarHeadingFont = xuesu_sleep_clock::fontTitle;
+#else
+constexpr int kCalendarSmallFont = SMALL_FONT_ID;
+constexpr int kCalendarBodyFont = NOTOSANS_14_FONT_ID;
+constexpr int kCalendarHeadingFont = NOTOSANS_18_FONT_ID;
+#endif
 
 constexpr StrId kWeekdayStrIds[7] = {
     StrId::STR_CAL_WEEKDAY_SUN, StrId::STR_CAL_WEEKDAY_MON, StrId::STR_CAL_WEEKDAY_TUE, StrId::STR_CAL_WEEKDAY_WED,
@@ -133,19 +145,22 @@ void drawCenteredRow(const GfxRenderer& renderer, int fontId, const Rect& viewpo
   }
 }
 
-int verticalCenterY(const GfxRenderer& renderer, int fontId, int bandY, int heightPx) {
-  return bandY + (heightPx - renderer.getFontAscenderSize(fontId)) / 2;
+int compactSmallLineHeight(const GfxRenderer& renderer) {
+  return std::max(renderer.getLineHeight(kCalendarSmallFont), renderer.getLineHeight(CJK_UI_8_FONT_ID));
 }
 
 // 宜 / 忌 card: black header strip with white label + 2×2 grid of body items.
 void drawYiJiBox(const GfxRenderer& renderer, int x, int y, int w, int h, const char* headerLabel,
                  const char* const items[4]) {
   constexpr int kBorderW = 1;
-  constexpr int kLabelFont = FREEINK_DEVICE_XUESU_300 ? SMALL_FONT_ID : NOTOSANS_12_FONT_ID;
+  constexpr int kLabelFont = FREEINK_DEVICE_XUESU_300 ? kCalendarSmallFont : NOTOSANS_12_FONT_ID;
   constexpr int kItemFont = kLabelFont;
   constexpr int kBodyRows = 2;
   constexpr int kBodyCols = 2;
-  const int headerHeight = FREEINK_DEVICE_XUESU_300 ? renderer.getLineHeight(kLabelFont) + 2 : 36;
+  constexpr bool compact = FREEINK_DEVICE_XUESU_300;
+  constexpr int kBodyInset = compact ? kBorderW : 0;
+  const int textHeight = compact ? compactSmallLineHeight(renderer) : renderer.getFontAscenderSize(kLabelFont);
+  const int headerHeight = compact ? textHeight + 2 : 36;
   if (w <= 0 || h <= headerHeight) return;
 
   renderer.drawRect(x, y, w, h, kBorderW, true);
@@ -153,11 +168,11 @@ void drawYiJiBox(const GfxRenderer& renderer, int x, int y, int w, int h, const 
   renderer.drawLine(x, y + headerHeight, x + w - 1, y + headerHeight, true);
 
   const int labelW = renderer.getTextWidth(kLabelFont, headerLabel);
-  const int labelY = verticalCenterY(renderer, kLabelFont, y, headerHeight);
+  const int labelY = y + (headerHeight - textHeight) / 2;
   renderer.drawText(kLabelFont, x + (w - labelW) / 2, labelY, headerLabel, /*black=*/false);
 
-  const int bodyTop = y + headerHeight;
-  const int rowH = (h - headerHeight) / kBodyRows;
+  const int bodyTop = y + headerHeight + kBodyInset;
+  const int rowH = (h - headerHeight - 2 * kBodyInset) / kBodyRows;
   const int colW = w / kBodyCols;
   for (int row = 0; row < kBodyRows; ++row) {
     for (int col = 0; col < kBodyCols; ++col) {
@@ -165,7 +180,7 @@ void drawYiJiBox(const GfxRenderer& renderer, int x, int y, int w, int h, const 
       const int textW = renderer.getTextWidth(kItemFont, item);
       const int cellY = bodyTop + row * rowH;
       const int cx = x + col * colW + (colW - textW) / 2;
-      const int cy = verticalCenterY(renderer, kItemFont, cellY, rowH);
+      const int cy = cellY + (rowH - textHeight) / 2;
       const GfxRenderer::ClipScope clip(renderer, x + col * colW + 1, cellY, colW - 2, rowH);
       renderer.drawText(kItemFont, cx, cy, item, /*black=*/true);
     }
@@ -181,7 +196,12 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
   const int vh = viewport.height;
   if (vw <= 0 || vh <= 0) return;
   constexpr bool compact = FREEINK_DEVICE_XUESU_300;
-  const int footerLineY = viewport.y + vh - (compact ? 58 : kFooterHairlineFromBottom);
+  constexpr int kCompactFooterTextOffset = 5;
+  constexpr int kCompactFooterBottomPad = 10;
+  const int footerHeight = compact
+                               ? kCompactFooterTextOffset + compactSmallLineHeight(renderer) + kCompactFooterBottomPad
+                               : kFooterHairlineFromBottom;
+  const int footerLineY = viewport.y + vh - footerHeight;
 
   // Year row:  二〇二六 · 丙午年
   {
@@ -190,8 +210,7 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     formatYearCjk(day.gregYear, yearCjk, sizeof(yearCjk));
     formatGanzhiYearLabel(day, ganzhiBuf, sizeof(ganzhiBuf));
     const char* row[] = {yearCjk, kDot, ganzhiBuf};
-    drawCenteredRow(renderer, compact ? UI_10_FONT_ID : NOTOSANS_14_FONT_ID, viewport, viewport.y + (compact ? 26 : 32),
-                    row, 3, /*gap=*/8);
+    drawCenteredRow(renderer, kCalendarBodyFont, viewport, viewport.y + (compact ? 26 : 32), row, 3, /*gap=*/8);
   }
 
   // Month + weekday:  5月    星期一
@@ -200,8 +219,8 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     std::snprintf(monthBuf, sizeof(monthBuf), "%u%s", static_cast<unsigned>(day.gregMonth), tr(STR_CAL_MONTH_SUFFIX));
     const uint8_t wi = (day.weekdayIdx < 7) ? day.weekdayIdx : 0;
     const char* row[] = {monthBuf, I18n::getInstance().get(kWeekdayStrIds[wi])};
-    drawCenteredRow(renderer, compact ? UI_10_FONT_ID : NOTOSANS_14_FONT_ID, viewport, viewport.y + (compact ? 52 : 80),
-                    row, 2, /*gap=*/compact ? 18 : 40);
+    drawCenteredRow(renderer, kCalendarBodyFont, viewport, viewport.y + (compact ? 52 : 80), row, 2,
+                    /*gap=*/compact ? 18 : 40);
   }
 
   // Hero day digit — SloppyDigits fits to the bounding rect; width-bound.
@@ -227,15 +246,15 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     formatLunarFull(day, lunar, sizeof(lunar));
     char buf[40];
     std::snprintf(buf, sizeof(buf), "%s   %s", tr(STR_CAL_LUNAR_PREFIX), lunar);
-    renderer.drawCenteredText(compact ? UI_12_FONT_ID : NOTOSANS_18_FONT_ID,
-                              dividerY + (compact ? 6 : kLunarOffsetBelowDivider), buf);
+    renderer.drawCenteredText(kCalendarHeadingFont, dividerY + (compact ? 6 : kLunarOffsetBelowDivider), buf);
   }
 
   // Zodiac:  生肖 · 马
   {
     const char* zodiac = chinese_almanac::kZodiacNames[day.yearBranchIdx];
     const char* row[] = {tr(STR_CAL_ZODIAC_LABEL), kDot, zodiac};
-    drawCenteredRow(renderer, SMALL_FONT_ID, viewport, dividerY + (compact ? 33 : kZodiacOffsetBelowDivider), row, 3,
+    drawCenteredRow(renderer, kCalendarSmallFont, viewport, dividerY + (compact ? 33 : kZodiacOffsetBelowDivider), row,
+                    3,
                     /*gap=*/6);
   }
 
@@ -247,7 +266,7 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     std::snprintf(distanceBuf, sizeof(distanceBuf), tr(STR_CAL_DAYS_TO_NEXT_FMT), termNext,
                   static_cast<int>(day.daysToNextTerm));
     const char* row[] = {tr(STR_CAL_TERM_LABEL), kDot, termCur, kDot, distanceBuf};
-    drawCenteredRow(renderer, compact ? SMALL_FONT_ID : NOTOSANS_12_FONT_ID, viewport,
+    drawCenteredRow(renderer, compact ? kCalendarSmallFont : NOTOSANS_12_FONT_ID, viewport,
                     viewport.y + static_cast<int>(vh * (compact ? 0.60f : kTermRowYRatio)), row, 5,
                     /*gap=*/compact ? 4 : 8);
   }
@@ -276,8 +295,9 @@ void drawAlmanacPage(GfxRenderer& renderer, const Rect& viewport, const AlmanacD
     char leftBuf[64];
     std::snprintf(leftBuf, sizeof(leftBuf), "%s %s %s %s%s", tr(STR_CAL_DAY_PILLAR_LABEL), dayPillar, kDot,
                   tr(STR_CAL_CLASH_LABEL), clashBuf);
-    renderer.drawText(SMALL_FONT_ID, viewport.x + 24,
-                      compact ? footerLineY + 5 : viewport.y + vh - kFooterTextFromBottom, leftBuf, /*black=*/true);
+    renderer.drawText(kCalendarSmallFont, viewport.x + 24,
+                      compact ? footerLineY + kCompactFooterTextOffset : viewport.y + vh - kFooterTextFromBottom,
+                      leftBuf, /*black=*/true);
   }
 }
 
@@ -311,6 +331,12 @@ bool getTodayLocal(struct tm& out) {
   return now && TimeUtils::getLocalDateTime(now, out);
 }
 
+void prepareHero(sloppy::Style& style, sloppy::Seeds& seeds) {
+  // Stable Geometric digits with no jitter.
+  style = {sloppy::AlphabetId::Geometric, 0.0f, 7, 0.0f, 0.0f, 18, false};
+  sloppy::prepareSeeds(1u, style, seeds);
+}
+
 }  // namespace
 
 void ChineseCalendarFace::onEnter() {
@@ -321,15 +347,7 @@ void ChineseCalendarFace::onEnter() {
     return;
   }
 
-  // Stable Geometric digits — zero jitter, max stroke.
-  heroStyle_->alphabet = sloppy::AlphabetId::Geometric;
-  heroStyle_->wobble = 0.0f;
-  heroStyle_->strokeWidth = 7;
-  heroStyle_->slantDeg = 0.0f;
-  heroStyle_->digitRotateMax = 0.0f;
-  heroStyle_->digitGap = 18;
-  heroStyle_->oneIsPlain = false;
-  sloppy::prepareSeeds(/*seed=*/1u, *heroStyle_, *heroSeeds_);
+  prepareHero(*heroStyle_, *heroSeeds_);
 
   dayOffset_ = 0;
   refreshCachedDay();
@@ -417,3 +435,30 @@ void ChineseCalendarFace::render(GfxRenderer& renderer, const Rect& viewport) {
   }
   drawAlmanacPage(renderer, viewport, cachedDay_, *heroStyle_, *heroSeeds_);
 }
+
+#if FREEINK_DEVICE_XUESU_300
+void ChineseCalendarFace::saveAppearance(xuesu_sleep_clock::FaceState& state) const {
+  if (dayOffset_ == 0 || !cacheValid_) return;
+  state.pinnedDay = TimeUtils::getDayOrdinalForDate(cachedDay_.gregYear, cachedDay_.gregMonth, cachedDay_.gregDay);
+}
+
+void ChineseCalendarFace::restoreAppearance(const xuesu_sleep_clock::FaceState& state) {
+  std::tm today{};
+  if (state.pinnedDay < 0 || !getTodayLocal(today)) return;
+  const auto todayDay = TimeUtils::getDayOrdinalForDate(today.tm_year + 1900, today.tm_mon + 1, today.tm_mday);
+  dayOffset_ = state.pinnedDay - static_cast<int32_t>(todayDay);
+  if (!refreshCachedDay()) {
+    dayOffset_ = 0;
+    refreshCachedDay();
+  }
+}
+
+void ChineseCalendarFace::renderSleep(GfxRenderer& renderer, const Rect& viewport, const std::tm& localDay) {
+  AlmanacDay day{};
+  if (!computeAlmanac(localDay, day)) return;
+  sloppy::Style style{};
+  sloppy::Seeds seeds{};
+  prepareHero(style, seeds);
+  drawAlmanacPage(renderer, viewport, day, style, seeds);
+}
+#endif
