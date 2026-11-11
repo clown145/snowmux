@@ -356,7 +356,7 @@ class BaseTheme {
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
                         const std::function<bool(int index)>& rowDimmed = nullptr, bool showSelection = true,
                         const std::function<bool(int index)>& rowHeading = nullptr) const;
-  virtual void drawMainTabBar(const GfxRenderer& renderer, Rect rect, MainTab selected) const;
+  virtual void drawMainTabBar(const GfxRenderer& renderer, Rect rect, MainTab selected, MainTabFocus focus) const;
   virtual void drawMainTabStatusBar(const GfxRenderer& renderer, Rect rect) const;
   static void drawSelectionFrame(const GfxRenderer& renderer, Rect rect, int thickness = 3);
   static void drawSplash(const GfxRenderer& renderer, const char* status, const char* version = nullptr);

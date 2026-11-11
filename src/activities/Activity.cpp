@@ -92,9 +92,10 @@ Rect Activity::pageContentRect() const {
 void Activity::drawPageHeader(const Rect& rect, const char* title, const char* subtitle) const {
   if (usesMainTabBar()) {
     const MainTabLayout layout = mainTabLayout();
-    GUI.drawMainTabBar(renderer, layout.tabBar, mainTab());
+    const auto focus = activityManager.getMainTabFocus();
+    GUI.drawMainTabBar(renderer, layout.tabBar, mainTab(), focus);
 #if FREEINK_DEVICE_XUESU_300
-    if (activityManager.getMainTabFocus() == MainTabFocus::Tabs) {
+    if (focus == MainTabFocus::Tabs && mainTabsAtBottom()) {
       const auto& bar = layout.tabBar;
       const auto bounds = MainTabs::tabBounds(MainTabs::indexOf(mainTab()), bar.width);
       constexpr int inset = MainTabs::controlGap;

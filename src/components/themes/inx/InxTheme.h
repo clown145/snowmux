@@ -143,6 +143,6 @@ class InxTheme final : public LyraTheme {
                                      int rowCount) const override;
   void drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
                        int selectedIndex, int firstVisible = -1) const override;
-  void drawMainTabBar(const GfxRenderer& renderer, Rect rect, MainTab selected) const override;
+  void drawMainTabBar(const GfxRenderer& renderer, Rect rect, MainTab selected, MainTabFocus focus) const override;
   void drawMainTabStatusBar(const GfxRenderer& renderer, Rect rect) const override;
 };

@@ -1145,6 +1145,7 @@ struct UITheme {
   Rect safe{}, drawn{}, focusFrame{};
   ThemeMetrics metrics=InxMetrics::values;
   MainTab selected=MainTab::None;
+  MainTabFocus focus=MainTabFocus::Content;
   int headers=0;
   static UITheme& getInstance() { static UITheme theme; return theme; }
   bool hasMainTabs() const { return tabs; }
@@ -1152,7 +1153,9 @@ struct UITheme {
   const ThemeMetrics& getMetrics() const { return metrics; }
   Rect getScreenSafeArea(const GfxRenderer&,bool,bool=false) { return safe; }
   void drawMainTabStatusBar(const GfxRenderer&,Rect) {}
-  void drawMainTabBar(const GfxRenderer&,Rect rect,MainTab tab) { drawn=rect; selected=tab; }
+  void drawMainTabBar(const GfxRenderer&,Rect rect,MainTab tab,MainTabFocus nextFocus) {
+    drawn=rect; selected=tab; focus=nextFocus;
+  }
   void drawSelectionFrame(const GfxRenderer&,Rect rect,int) { focusFrame=rect; }
   void drawHeader(const GfxRenderer&,Rect rect,const char*,const char*) { drawn=rect; ++headers; }
 };
@@ -1308,6 +1311,10 @@ int main() {
   m.mappedInput.released=Button::Back;
   assert(m.handleMainTabInput() && m.mainTabFocus==MainTabFocus::Tabs);
   activityManager.mainTabFocus=MainTabFocus::Tabs;
+  page.bottom=false;
+  page.drawPageHeader(legacy,"picker");
+  assert(theme.focus==MainTabFocus::Tabs && theme.focusFrame.width==0);
+  page.bottom=true;
   page.drawPageHeader(legacy,"picker");
   const auto bar=page.mainTabLayout().tabBar;
   const auto bounds=MainTabs::tabBounds(0,bar.width);

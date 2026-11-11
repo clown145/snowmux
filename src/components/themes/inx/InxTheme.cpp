@@ -494,13 +494,20 @@ void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
   renderer.drawRect(panelX + 1, panelY + 1, panelWidth - 2, panelHeight - 2, true);
 }
 
-void InxTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, const MainTab selected) const {
+void InxTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, const MainTab selected,
+                              const MainTabFocus focus) const {
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
   constexpr int bottomIconInset = UiHighDpiProfile::enabled ? 18 : 6;
   const bool tabsAtBottom = SETTINGS.inxTabPosition == CrossPointSettings::INX_TAB_BOTTOM;
-  const int iconY =
-      rect.y + std::max(0, tabsAtBottom ? rect.height - kIconSize - bottomIconInset : (rect.height - kIconSize) / 2);
-  const int indicatorY = tabsAtBottom ? rect.y : rect.y + rect.height - kUnderlineHeight;
+  const bool compactTopTabs = FREEINK_DEVICE_XUESU_300 && !tabsAtBottom;
+  const bool tabsFocused = focus == MainTabFocus::Tabs;
+  const int markerWidth = compactTopTabs ? (tabsFocused ? 28 : 18) : kIconSize;
+  const int markerHeight = compactTopTabs ? (tabsFocused ? 3 : 2) : kUnderlineHeight;
+  const int markerBottomInset = compactTopTabs ? 3 : 0;
+  const int topIconAreaHeight = rect.height - (compactTopTabs ? 8 : 0);
+  const int iconY = rect.y + std::max(0, tabsAtBottom ? rect.height - kIconSize - bottomIconInset
+                                                      : (topIconAreaHeight - kIconSize) / 2);
+  const int markerY = tabsAtBottom ? rect.y : rect.y + rect.height - markerBottomInset - markerHeight;
 
   for (size_t i = 0; i < MainTabs::values.size(); ++i) {
     const MainTab tab = MainTabs::values[i];
@@ -510,11 +517,11 @@ void InxTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, cons
     const int iconX = left + (right - left - kIconSize) / 2;
     if (const uint8_t* icon = iconForTab(tab)) drawInxIcon(renderer, icon, iconX, iconY);
     if (tab == selected) {
-      renderer.fillRect(iconX, indicatorY, kIconSize, kUnderlineHeight);
+      renderer.fillRect(left + (right - left - markerWidth) / 2, markerY, markerWidth, markerHeight);
     }
   }
 
-  if (!tabsAtBottom) {
+  if (!tabsAtBottom && !compactTopTabs) {
     renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
   }
 }

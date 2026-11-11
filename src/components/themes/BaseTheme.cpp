@@ -778,7 +778,7 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
   fui::header(ui.frame, band, props);
 }
 
-void BaseTheme::drawMainTabBar(const GfxRenderer&, Rect, MainTab) const {}
+void BaseTheme::drawMainTabBar(const GfxRenderer&, Rect, MainTab, MainTabFocus) const {}
 void BaseTheme::drawMainTabStatusBar(const GfxRenderer&, Rect) const {}
 
 void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label, const char* rightLabel) const {
