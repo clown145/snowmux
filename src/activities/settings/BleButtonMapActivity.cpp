@@ -8,6 +8,7 @@
 #include "BleInput.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "XuesuSettingsLayout.h"
 #include "activities/RenderLock.h"
 #include "components/UITheme.h"
 
@@ -116,5 +117,5 @@ void BleButtonMapActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }

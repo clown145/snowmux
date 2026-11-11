@@ -8,6 +8,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "XuesuSettingsLayout.h"
 #include "components/UITheme.h"
 
 namespace {
@@ -131,6 +132,6 @@ void ReadingStatsSettingsActivity::buildScreen(UiScreen& screen) {
     rect.width = renderer.getScreenWidth();
     fui::list(screen.frame(), rect, screen.resolveListProps(props));
   } else {
-    screen.list(props);
+    XuesuSettingsLayout::drawRows(screen, props);
   }
 }

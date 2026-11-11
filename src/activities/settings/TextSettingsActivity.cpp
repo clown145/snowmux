@@ -27,6 +27,7 @@
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/settings/FontDownloadActivity.h"
 #endif
+#include "XuesuSettingsLayout.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/FontPreloadView.h"
 #include "components/UITheme.h"
@@ -352,9 +353,7 @@ void TextSettingsActivity::navigateButtons() {
 }
 #endif
 
-bool TextSettingsActivity::usesSidePreview() const {
-  return ReaderSubpageLayout::usesCompactHeader(renderer);
-}
+bool TextSettingsActivity::usesSidePreview() const { return ReaderSubpageLayout::usesCompactHeader(renderer); }
 
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
@@ -446,7 +445,7 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
       static_cast<int16_t>(std::max(36, screen.target().lineHeight(props.labelText.font) + 2 * props.rowPaddingY));
 #endif
   syncTabListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }
 
 const char* TextSettingsActivity::confirmLabelText() const {

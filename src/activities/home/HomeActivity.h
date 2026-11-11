@@ -41,6 +41,9 @@ class HomeActivity final : public Activity {
   int coverRectY = 0;
   int coverRectW = 0;
   int coverRectH = 0;
+#if FREEINK_DEVICE_XUESU_300
+  int coverOrientation = -1;
+#endif
   std::vector<RecentBook> recentBooks;
   const HomeMenuItem initialMenuItem;
 
@@ -66,7 +69,9 @@ class HomeActivity final : public Activity {
   void loadRecentCovers(int coverHeight);
   void fillCoverGridFromLibrary();
   void resolveGridCoverPaths();
+#if !FREEINK_DEVICE_XUESU_300
   void loadGridCover(RecentBook& book, int height, bool& showingLoading, Rect& popupRect);
+#endif
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -76,5 +81,9 @@ class HomeActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+#if FREEINK_DEVICE_XUESU_300
+  uint32_t idleRenderDelayMs() const override;
+  void renderIdle(uint32_t generation) override;
+#endif
   bool isHomeActivity() const override { return true; }
 };

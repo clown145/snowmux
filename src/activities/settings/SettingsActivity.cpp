@@ -43,6 +43,7 @@
 #include "StatusBarSettingsActivity.h"
 #include "TapZoneSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "XuesuSettingsLayout.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiProvisionActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -62,6 +63,15 @@ namespace fui = freeink::ui;
 
 namespace {
 constexpr StrId OK_OPTION[] = {StrId::STR_OK_BUTTON};
+
+uint8_t enumSelection(uint8_t CrossPointSettings::* valuePtr) {
+  const uint8_t value = SETTINGS.*valuePtr;
+  if (valuePtr == &CrossPointSettings::uiTheme && value == CrossPointSettings::COVER_GRID &&
+      !UITheme::supportsCoverGrid()) {
+    return CrossPointSettings::LYRA;
+  }
+  return value;
+}
 
 #if FREEINK_DEVICE_XUESU_300
 StrId saveFullBatteryCalibration() {
@@ -151,9 +161,9 @@ void SettingsActivity::rebuildSettingsLists() {
       return false;
     if (setting.valuePtr == &CrossPointSettings::bluetoothEnabled) return false;
     if (!showInxSettings && (setting.valuePtr == &CrossPointSettings::inxRecentLayout ||
-                            setting.valuePtr == &CrossPointSettings::inxLibraryLayout ||
-                            setting.valuePtr == &CrossPointSettings::inxAppsLayout ||
-                            setting.valuePtr == &CrossPointSettings::inxTabPosition))
+                             setting.valuePtr == &CrossPointSettings::inxLibraryLayout ||
+                             setting.valuePtr == &CrossPointSettings::inxAppsLayout ||
+                             setting.valuePtr == &CrossPointSettings::inxTabPosition))
       return false;
     if (setting.valuePtr == &CrossPointSettings::fadingFix && (BoardConfig::isX4Pro() || FREEINK_DEVICE_X4CLASSIC))
       return false;
@@ -212,6 +222,10 @@ void SettingsActivity::rebuildSettingsLists() {
   });
   if (sleepTimeout != displayRows.end() && sleepTimeout != displayRows.begin())
     std::rotate(displayRows.begin() + 1, sleepTimeout, sleepTimeout + 1);
+  const auto theme = std::find_if(displayRows.begin(), displayRows.end(), [](const SettingInfo& setting) {
+    return setting.valuePtr == &CrossPointSettings::uiTheme;
+  });
+  if (!showInxSettings && theme != displayRows.end()) std::rotate(displayRows.begin(), theme, theme + 1);
 #endif
   if (hasDictionary && (section == SettingsSection::End || section == SettingsSection::Reader))
     categories[static_cast<size_t>(SettingsSection::Reader)].push_back(std::move(dictionarySetting));
@@ -410,6 +424,14 @@ void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valueP
     resetUi();
   }
   rebuildSettingsLists();
+#if FREEINK_DEVICE_XUESU_300
+  // Keep the picker one press away after restyling the Display section.
+  if (section == SettingsSection::Display) {
+    const auto themeRow = std::find_if(currentSettings->begin(), currentSettings->end(),
+                                       [valuePtr](const auto& row) { return row.valuePtr == valuePtr; });
+    if (themeRow != currentSettings->end()) moveSelectionTo(static_cast<int>(themeRow - currentSettings->begin()));
+  }
+#endif
 }
 
 bool SettingsActivity::handleCustomInput() {
@@ -578,12 +600,13 @@ void SettingsActivity::toggleSetting(const SettingInfo& setting) {
     }
     setting.valueSetter((cur + 1) % totalValues);
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
+    const uint8_t currentValue = enumSelection(setting.valuePtr);
     const auto enumLabels = setting.enumLabels();
     if (enumLabels.size() > 2) {
       const auto valuePtr = setting.valuePtr;
       optionPopup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), currentValue,
                        [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+                         if (valuePtr == &CrossPointSettings::uiTheme && idx == SETTINGS.*valuePtr) return;
                          SETTINGS.*valuePtr = idx;
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
                          SETTINGS.saveToFile();
@@ -955,10 +978,7 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch above: a corrupt/migrated settings
     // byte must not index past the enum table.
-    const uint8_t value = setting.valuePtr == &CrossPointSettings::uiTheme &&
-                                  SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && !UITheme::supportsCoverGrid()
-                              ? CrossPointSettings::LYRA
-                              : SETTINGS.*(setting.valuePtr);
+    const uint8_t value = enumSelection(setting.valuePtr);
     const auto enumLabels = setting.enumLabels();
     if (value >= enumLabels.size()) return "";
     return I18N.get(enumLabels[value]);
@@ -992,7 +1012,13 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   };
   const auto& metrics = UITheme::getInstance().getMetrics();
   const bool boldChineseCategories = usesAccordion() && I18N.getLanguage() == Language::ZH_CN;
+#if FREEINK_DEVICE_XUESU_300
+  const bool compact = XuesuSettingsLayout::enabled();
+  const Rect content = compact ? XuesuSettingsLayout::content(renderer) : pageContentRect();
+#else
+  [[maybe_unused]] constexpr bool compact = false;
   const Rect content = pageContentRect();
+#endif
   screen.setContentMarginFromScreen(fui::Insets{
       static_cast<int16_t>(content.y), static_cast<int16_t>(renderer.getScreenWidth() - content.x - content.width),
       static_cast<int16_t>(renderer.getScreenHeight() - content.y - content.height), static_cast<int16_t>(content.x)});
@@ -1033,7 +1059,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
                                                                 : CrossPointSettings::SYNTHETIC_BOLD_OFF);
     if (section == SettingsSection::End)
       buildTabBar(screen, boldChineseCategories);
-    else
+    else if (!compact)
       screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   }
 
@@ -1063,14 +1089,25 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // common fits-on-one-line case takes the renderer's fast path anyway.
   props.labelText = section == SettingsSection::End ? screen.theme().smallText : screen.theme().bodyText;
   props.labelText.maxLines = 2;
+#if FREEINK_DEVICE_XUESU_300
+  if (compact) XuesuSettingsLayout::fitRows(screen.target(), screen.theme(), props);
+#endif
   if (section == SettingsSection::End)
     syncTabListViewport(screen, props);
   else
     syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }
 
 void SettingsActivity::drawChrome() {
+#if FREEINK_DEVICE_XUESU_300
+  if (XuesuSettingsLayout::enabled()) {
+    drawPageHeader(XuesuSettingsLayout::header(renderer), section == SettingsSection::End
+                                                              ? tr(STR_SETTINGS_TITLE)
+                                                              : I18N.get(categoryNames[selectedCategoryIndex]));
+    return;
+  }
+#endif
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();
 

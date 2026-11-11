@@ -11,6 +11,7 @@
 #include "KOReaderAuthActivity.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
+#include "XuesuSettingsLayout.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #if FREEINK_DEVICE_XUESU_300
@@ -257,7 +258,7 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
     props.labelText.maxLines = 2;
   }
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }
 
 void KOReaderSettingsActivity::render(RenderLock&& lock) {

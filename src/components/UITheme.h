@@ -41,6 +41,7 @@ class UITheme {
                                       TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
   static bool supportsCoverGrid();
   static bool hasCoverGridHome();
+  bool hasCarouselHome() const { return currentType == CrossPointSettings::UI_THEME::LYRA_CAROUSEL; }
   static void drawCoverGridHome(CoverGridHomeUi& home);
   void reload();
   void setTheme(CrossPointSettings::UI_THEME type);

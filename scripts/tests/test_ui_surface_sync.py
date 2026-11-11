@@ -94,10 +94,10 @@ struct Home {
  bool hasContinueReading=true; struct Book {std::string path;}; std::vector<Book> recentBooks{{"last"}};
  MappedInputManager mappedInput; int opened=0,otherActions=0;
  void onRecentBookSelected(const std::string& path) {assert(path=="last");++opened;}
- void step();
+ void step(bool flatKeyNavigation=false);
 };
 ''' +
-                "void Home::step() {\n" + branch + "++otherActions;\n}\n" + "const char* hint(bool hasContinueReading) {\n" + hint + "return backLabel;\n}\n" + r'''
+                "void Home::step(bool flatKeyNavigation) {\n" + branch + "++otherActions;\n}\n" + "const char* hint(bool hasContinueReading) {\n" + hint + "return backLabel;\n}\n" + r'''
 int main() {
  Home home;
  assert(std::string(hint(true))=="Resume" && std::string(hint(false)).empty());
@@ -110,6 +110,7 @@ int main() {
  SETTINGS.standbyShortcutEnabled=true;home.mappedInput.released=true;home.step();assert(home.opened==1);
  SETTINGS.standbyShortcutEnabled=false;home.recentBooks.clear();home.step();assert(home.opened==1);
  home.hasContinueReading=false;home.step();assert(home.opened==1);
+ Home xuesu;xuesu.mappedInput.released=true;xuesu.step(true);assert(xuesu.opened==0 && xuesu.otherActions==1);
 }
 ''')
 
@@ -137,10 +138,10 @@ struct Device {fui::Rect all,safe;fui::Rect screen() const{return all;}fui::Rect
 fui::Rect layout(Device device,bool upstreamStyle,bool inx) {
  Theme::getInstance().inx=inx;
  struct {int optionPopupDialogSideMargin=10;} metrics;
- fui::Props props;int target=0,totalOptions=2,selectedIndex=0,visibleOptionRows=0;
+ fui::Props props;int target=0,totalOptions=2,selected=0,visibleOptionRows=0;
  constexpr int MAX_OPTIONS=16,ACTION_OPTION=1;
  std::vector<std::string> ownedStrings{"Cancel","Confirm"};fui::DialogOption options[MAX_OPTIONS];
- auto windowStart=[](int){return 0;};
+ auto windowStart=[](int,int){return 0;};
 """ + geometry + r"""
  assert(visibleOptionRows>=1 && options[0].label!=nullptr);
  return dialogRect;

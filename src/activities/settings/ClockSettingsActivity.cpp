@@ -13,6 +13,7 @@
 #include "DateTimeSettingsActivity.h"
 #include "MappedInputManager.h"
 #include "TimezonePickerActivity.h"
+#include "XuesuSettingsLayout.h"
 #include "components/UITheme.h"
 #include "util/TimeUtils.h"
 #include "util/Timezones.h"
@@ -154,5 +155,5 @@ void ClockSettingsActivity::buildScreen(UiScreen& screen) {
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }

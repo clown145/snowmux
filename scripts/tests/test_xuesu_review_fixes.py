@@ -227,7 +227,10 @@ int main() {
 #include <cassert>
 #include "InxRecentLayout.h"
 int main() {
+  static_assert(InxRecentGeometry::footerReservedHeight == 24);
   for(const Rect screen:{Rect{0,0,300,400},Rect{0,0,400,300},Rect{0,0,480,800},Rect{0,0,800,480}}) {
+    const Rect battery=InxRecentGeometry::batteryRect(screen);
+    assert(battery.y==screen.height-24 && battery.y+battery.height<=screen.height);
     for(bool bottom:{false,true}) for(int titleHeight:{24,28}) for(int authorHeight:{23,28}) {
       const auto tabs=MainTabs::layout(screen,10,bottom?56:52,bottom,20,true);
       const auto& content=tabs.content;

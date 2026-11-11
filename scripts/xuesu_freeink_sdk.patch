@@ -262,3 +262,41 @@ index 9097092..ab90739 100644
      ButtonProps bp;
      const char* label =
          (key.kind == KeyKind::Space || key.kind == KeyKind::Delete || key.kind == KeyKind::Lang) ? nullptr : key.label;
+diff --git a/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h b/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h
+index 18f0773..31edc60 100644
+--- a/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h
++++ b/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h
+@@ -303,7 +303,12 @@ class GfxRendererTarget final : public DrawTarget {
+     // re-measures made every wrapped-capable label pay for wrapping it never
+     // needed). Matters on e-paper list screens that rebuild every row per
+     // repaint.
+-    if (renderer.getTextWidth(fontId, text, epdStyle) <= rect.width) {
++#if defined(FREEINK_DEVICE_XUESU_300) && FREEINK_DEVICE_XUESU_300
++    const bool hardBreak = maxLines > 1 && strchr(text, '\n') != nullptr;
++#else
++    constexpr bool hardBreak = false;
++#endif
++    if (!hardBreak && renderer.getTextWidth(fontId, text, epdStyle) <= rect.width) {
+       drawAligned(text, rect.y + std::max(0, (rect.height - lh) / 2));
+       return;
+     }
+@@ -314,6 +319,11 @@ class GfxRendererTarget final : public DrawTarget {
+       return;
+     }
+
++#if defined(FREEINK_DEVICE_XUESU_300) && FREEINK_DEVICE_XUESU_300
++    // Settings and dialogs reserve their height with layoutText. Use the
++    // same UTF-8 line breaks for drawing, including Chinese text without spaces.
++    layoutText(*this, rect, text, style, [&](const char* line, Rect bounds) { drawAligned(line, bounds.y); });
++#else
+     const std::vector<std::string> lines = renderer.wrappedText(fontId, text, rect.width, maxLines, epdStyle);
+     const int blockH = static_cast<int>(lines.size()) * lh;
+     int y = rect.y + std::max(0, (rect.height - blockH) / 2);
+@@ -321,6 +331,7 @@ class GfxRendererTarget final : public DrawTarget {
+       drawAligned(textLine.c_str(), y);
+       y += lh;
+     }
++#endif
+   }
+
+   void bitmap(const Rect rect, const BitmapRef bitmap, const BitmapMode mode,

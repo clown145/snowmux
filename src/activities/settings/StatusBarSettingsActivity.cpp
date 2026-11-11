@@ -8,6 +8,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "XuesuSettingsLayout.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -209,7 +210,7 @@ void StatusBarSettingsActivity::buildScreen(UiScreen& screen) {
   props.labelText = UITheme::getInstance().hasMainTabs() ? screen.theme().bodyText : screen.theme().smallText;
   props.labelText.maxLines = 2;  // also the explicitly-set marker, see SettingsActivity
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }
 
 void StatusBarSettingsActivity::render(RenderLock&&) {

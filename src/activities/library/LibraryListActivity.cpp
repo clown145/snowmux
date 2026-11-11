@@ -76,9 +76,13 @@ const char* tabLabelFor(const int tab) {
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiTabListActivity("Library", renderer, mappedInput, true) {
+#if !FREEINK_DEVICE_XUESU_300
   // Three short tab labels: a full-slot pill would stretch across a third of
   // the screen, so cap it at the label plus padding (slots stay put).
+  // On the narrow Xuesu screen, this padding would leave too little width for
+  // the complete label and its sort arrow. Let its pill use the full slot.
   tabPillMaxPad = 16;
+#endif
 }
 
 void LibraryListActivity::onEnter() {
@@ -278,8 +282,10 @@ void LibraryListActivity::runXuesuQuickAction() {
   } else if (tabsFocused()) {
     constexpr StrId options[] = {StrId::STR_XUESU_REVERSE_SORT, StrId::STR_LIBRARY_REBUILD};
     optionPopup.show(StrId::STR_XUESU_LIBRARY_ACTIONS, options, std::size(options), 0, [this](int choice) {
-      if (choice == 0) toggleSortDirection();
-      else promptRebuildIndex();
+      if (choice == 0)
+        toggleSortDirection();
+      else
+        promptRebuildIndex();
     });
   } else if (isRecentSort(sortOrder)) {
     showRecentBookOptions(selectedEntry());
@@ -288,9 +294,12 @@ void LibraryListActivity::runXuesuQuickAction() {
     const StrId options[] = {deleting ? StrId::STR_DELETE : StrId::STR_XUESU_COLLAPSE_GROUPS,
                              StrId::STR_LIBRARY_REBUILD};
     optionPopup.show(StrId::STR_XUESU_LIBRARY_ACTIONS, options, std::size(options), 0, [this, deleting](int choice) {
-      if (choice == 1) promptRebuildIndex();
-      else if (deleting) promptDeleteBook(selectedEntry());
-      else collapseGroups(selectedEntry());
+      if (choice == 1)
+        promptRebuildIndex();
+      else if (deleting)
+        promptDeleteBook(selectedEntry());
+      else
+        collapseGroups(selectedEntry());
     });
   }
   requestUpdate();
@@ -1062,21 +1071,23 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
 // consume band height), so a page total grows and shrinks as you scroll. The
 // book position is stable by construction, and it answers the question the
 // reader actually has: how far in am I, and how much is left.
-void LibraryListActivity::drawPositionReadout() const {
+int LibraryListActivity::drawPositionReadout() const {
+  // Bottom-right of the viewable area, clear of the bezel and rounded corner.
+  const Rect area = UITheme::getContentArea(renderer);
+  const int right = std::max(renderer.getScreenWidth() - area.x - area.width, bottomCornerClearance());
+  const int rightEdge = renderer.getScreenWidth() - right - SIDE_PADDING;
   const int count = listCount();
-  if (count <= 0) return;
+  if (count <= 0) return rightEdge;
 
   char buf[32];
   const char* positionFormat = groupsCollapsed ? tr(STR_LIBRARY_GROUP_POSITION) : tr(STR_LIBRARY_POSITION);
   snprintf(buf, sizeof(buf), positionFormat, selectedEntry() + 1, count);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
-  // Bottom-right of the viewable area, clear of the bezel and rounded corner.
-  const Rect area = UITheme::getContentArea(renderer);
-  const int right = std::max(renderer.getScreenWidth() - area.x - area.width, bottomCornerClearance());
-  const int x = renderer.getScreenWidth() - right - width - SIDE_PADDING;
+  const int x = rightEdge - width;
   const int y = area.y + area.height - metrics.buttonHintsHeight - renderer.getLineHeight(SMALL_FONT_ID);
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
+  return x;
 }
 
 const char* LibraryListActivity::headerTitle() const {
@@ -1084,7 +1095,7 @@ const char* LibraryListActivity::headerTitle() const {
   return degraded ? tr(STR_LIBRARY_TITLE_UNSORTED) : tr(STR_LIBRARY);
 }
 
-void LibraryListActivity::drawHoldHelp() const {
+void LibraryListActivity::drawHoldHelp(const int readoutLeft) const {
   if (mappedInput.hasTouch() || groupsCollapsed) return;
   const char* help = nullptr;
 #if FREEINK_DEVICE_XUESU_300
@@ -1106,8 +1117,17 @@ void LibraryListActivity::drawHoldHelp() const {
   const Rect area = UITheme::getContentArea(renderer);
   const int left = std::max(area.x, bottomCornerClearance());
   const int y = area.y + area.height - metrics.buttonHintsHeight - lineHeight;
+#if FREEINK_DEVICE_XUESU_300
+  constexpr int GAP = 6;
+  const int x = left + SIDE_PADDING;
+  // Measure against the actual remaining width, with a gap to the count.
+  const Rect bounds{x, y, std::max(0, readoutLeft - GAP - x), lineHeight};
+  UITheme::drawCenteredWrappedText(renderer, bounds, SMALL_FONT_ID, help, 1);
+#else
+  (void)readoutLeft;
   GUI.drawHelpText(renderer,
                    Rect{left + SIDE_PADDING, y, renderer.getScreenWidth() / 2 - left - SIDE_PADDING, lineHeight}, help);
+#endif
 }
 
 // OptionPopup is a self-contained modal: it owns the whole frame (hints
@@ -1118,8 +1138,7 @@ void LibraryListActivity::render(RenderLock&& lock) {
 }
 
 void LibraryListActivity::drawFooter() {
-  drawPositionReadout();
-  drawHoldHelp();
+  drawHoldHelp(drawPositionReadout());
 
   const bool backGoesHome = tabsFocused() && !groupsCollapsed && query.empty();
   const char* backLabel = backGoesHome ? tr(STR_HOME) : tr(STR_BACK);

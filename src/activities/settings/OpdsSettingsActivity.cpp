@@ -7,6 +7,7 @@
 
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
+#include "XuesuSettingsLayout.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #if FREEINK_DEVICE_XUESU_300
@@ -294,7 +295,7 @@ void OpdsSettingsActivity::buildScreen(UiScreen& screen) {
     props.labelText.maxLines = 2;
   }
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }
 
 const char* OpdsSettingsActivity::headerTitle() const {

@@ -8,14 +8,21 @@
 
 #include "MappedInputManager.h"
 #include "SettingsActivity.h"
+#include "XuesuSettingsLayout.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
 namespace fui = freeink::ui;
 
 namespace {
-constexpr int16_t ICON_SIZE = 32;
 // Row icons, indexed by SettingsSection.
+#if FREEINK_DEVICE_XUESU_300
+constexpr int16_t COMPACT_ICON_SIZE = 24;
+constexpr const freeink::Icon* COMPACT_SECTION_ICONS[SETTINGS_SECTION_COUNT] = {
+    &icon_settings_24, &icon_smartphone_24, &icon_book_open_24, &icon_pointer_24, &icon_library_24, &icon_wifi_24,
+};
+#endif
+constexpr int16_t ICON_SIZE = 32;
 constexpr const freeink::Icon* SECTION_ICONS[SETTINGS_SECTION_COUNT] = {
     &icon_settings_32, &icon_smartphone_32, &icon_book_open_32, &icon_pointer_32, &icon_library_32, &icon_wifi_32,
 };
@@ -48,21 +55,31 @@ void SettingsListActivity::loop() {
 // Rebuilds row labels; call when entering and after a section returns (the
 // UI language may have changed).
 void SettingsListActivity::rebuildRows() {
+  const auto& icons =
+#if FREEINK_DEVICE_XUESU_300
+      XuesuSettingsLayout::enabled() ? COMPACT_SECTION_ICONS :
+#endif
+                                     SECTION_ICONS;
   for (size_t i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
     auto& item = rowItems_[i];
     item.label = I18N.get(SETTINGS_SECTION_TITLES[i]);
-    item.icon = fui::bitmapFromIcon(*SECTION_ICONS[i]);
+    item.icon = fui::bitmapFromIcon(*icons[i]);
     item.actionValue = static_cast<int16_t>(i);
   }
 }
 
 void SettingsListActivity::buildScreen(UiScreen& screen) {
-  const auto& metrics = UITheme::getInstance().getMetrics();
+#if FREEINK_DEVICE_XUESU_300
+  const bool compact = XuesuSettingsLayout::enabled();
+  const Rect content = compact ? XuesuSettingsLayout::content(renderer) : pageContentRect();
+#else
+  constexpr bool compact = false;
   const Rect content = pageContentRect();
+#endif
   screen.setContentMarginFromScreen(fui::Insets{
       static_cast<int16_t>(content.y), static_cast<int16_t>(renderer.getScreenWidth() - content.x - content.width),
       static_cast<int16_t>(renderer.getScreenHeight() - content.y - content.height), static_cast<int16_t>(content.x)});
-  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (!compact) screen.spacer(static_cast<int16_t>(UITheme::getInstance().getMetrics().verticalSpacing));
 
   fui::ListProps props;
   props.items = rowItems_.data();
@@ -75,12 +92,20 @@ void SettingsListActivity::buildScreen(UiScreen& screen) {
   const int16_t paddingY = mappedInput.hasTouch() ? theme.listTouchRowPaddingY : theme.listRowPaddingY;
   props.rowHeight = static_cast<int16_t>(std::max<int16_t>(textHeight, ICON_SIZE) + 2 * paddingY);
 #if FREEINK_DEVICE_XUESU_300
-  props.rowGap = 0;
-  props.rowHeight = std::max<int16_t>(props.rowHeight, screen.contentRect().height / listCount());
+  const auto viewport = screen.contentRect();
+  if (compact) {
+    XuesuSettingsLayout::fitRows(screen.target(), theme, props);
+    const int stretchedHeight = (viewport.height - (listCount() - 1) * props.rowGap) / listCount();
+    const int iconHeight = COMPACT_ICON_SIZE + 2 * props.rowPaddingY;
+    props.rowHeight = static_cast<int16_t>(std::max({static_cast<int>(props.rowHeight), stretchedHeight, iconHeight}));
+  } else {
+    props.rowGap = 0;
+    props.rowHeight = std::max<int16_t>(props.rowHeight, viewport.height / listCount());
+  }
 #endif
   syncListViewport(screen, props);
   if (!showMainTabContentSelection()) props.selectedIndex = -1;
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }
 
 void SettingsListActivity::selectMainTabContentEdge(const MainTabContentEdge edge) {
@@ -113,6 +138,13 @@ void SettingsListActivity::openSection(const SettingsSection section) {
 void SettingsListActivity::onBackButton() { onGoHome(); }
 
 void SettingsListActivity::drawChrome() {
+#if FREEINK_DEVICE_XUESU_300
+  if (XuesuSettingsLayout::enabled()) {
+    // General → About has the full build version. Give the title the available width.
+    drawPageHeader(XuesuSettingsLayout::header(renderer), tr(STR_SETTINGS_TITLE));
+    return;
+  }
+#endif
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Version rides in the header's trailing label slot: the footer position
   // conflicts with button hints on non-touch devices.

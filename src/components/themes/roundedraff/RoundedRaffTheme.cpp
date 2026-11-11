@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "RecentBooksStore.h"
+#include "components/CompactHomeLayout.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
@@ -44,43 +45,52 @@ void drawScrollBar(const GfxRenderer& renderer, Rect rect, int itemCount, int pa
 }
 
 }  // namespace
-int coverWidth = 0;
+#if !FREEINK_DEVICE_XUESU_300
+static int legacyCoverWidth = 0;
+#endif
 
 void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
                                   const bool backButton) const {
   // Home screen header is custom-rendered in drawRecentBookCover.
-  if (title == nullptr) {
+  if (!FREEINK_DEVICE_XUESU_300 && title == nullptr) {
     return;
   }
   BaseTheme::drawHeader(renderer, rect, title, subtitle, backButton);
 }
 
+int RoundedRaffTheme::homeCoverThumbHeight(const GfxRenderer&, Rect slot) const {
+  return FREEINK_DEVICE_XUESU_300 ? compact_home::singleBookPreview(slot).cover.height
+                                  : RoundedRaffMetrics::values.homeCoverHeight;
+}
+
 void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                            bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
+#if FREEINK_DEVICE_XUESU_300
+  drawCompactBookPreview(renderer, rect, recentBooks, selectorIndex == 0, coverRendered, coverBufferStored,
+                         bufferRestored, storeCoverBuffer, CompactHomeStyle::RoundedRaff);
+#else
   const int tileWidth = rect.width - 2 * RoundedRaffMetrics::values.contentSidePadding;
   const int tileHeight = rect.height;
   const int tileY = rect.y;
   const bool hasContinueReading = !recentBooks.empty();
+  const int coverHeight = homeCoverThumbHeight(renderer, rect);
+  int& coverWidth = legacyCoverWidth;
   if (coverWidth == 0) {
-    coverWidth = RoundedRaffMetrics::values.homeCoverHeight * 0.6;
+    coverWidth = coverHeight * 3 / 5;
   }
-  const int imgY = tileY + (tileHeight - RoundedRaffMetrics::values.homeCoverHeight) / 2;
+  const int imgY = tileY + (tileHeight - coverHeight) / 2;
   const int tileX = rect.x + RoundedRaffMetrics::values.contentSidePadding;
 
   // Draw book card regardless, fill with message based on `hasContinueReading`
   // Draw cover image as background if available (inside the box)
   // Only load from SD on first render, then use stored buffer
   if (hasContinueReading) {
-    RecentBook book = recentBooks[0];
+    const RecentBook& book = recentBooks[0];
     if (!coverRendered) {
-      std::string coverPath = book.coverBmpPath;
-      bool hasCover = true;
-      if (coverPath.empty()) {
-        hasCover = false;
-      } else {
-        const std::string coverBmpPath =
-            UITheme::getCoverThumbPath(coverPath, RoundedRaffMetrics::values.homeCoverHeight);
+      bool hasCover = false;
+      if (!book.coverBmpPath.empty()) {
+        const std::string coverBmpPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
 
         // First time: load cover from SD and render
         HalFile file;
@@ -90,31 +100,25 @@ void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
             coverWidth = bitmap.getWidth();
             // Narrow covers come out taller than the slot; fill 1:1 and crop
             // vertically instead of rescaling the dither.
-            drawCoverThumbFill(renderer, bitmap,
-                               Rect{tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                                    RoundedRaffMetrics::values.homeCoverHeight});
-            renderer.maskRoundedRectOutsideCorners(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                                                   RoundedRaffMetrics::values.homeCoverHeight, kCoverRadius,
-                                                   Color::LightGray);
-          } else {
-            hasCover = false;
+            hasCover = drawCoverThumbFill(renderer, bitmap,
+                                          Rect{tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth, coverHeight});
+            renderer.maskRoundedRectOutsideCorners(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth, coverHeight,
+                                                   kCoverRadius, Color::LightGray);
           }
-          file.close();
         }
       }
 
       // Draw either way
-      renderer.drawRoundedRect(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                               RoundedRaffMetrics::values.homeCoverHeight, 1, kCoverRadius, true);
+      renderer.drawRoundedRect(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth, coverHeight, 1, kCoverRadius,
+                               true);
 
       if (!hasCover) {
         // Render empty cover
-        renderer.fillRect(tileX + (tileWidth - coverWidth) / 2, imgY + (RoundedRaffMetrics::values.homeCoverHeight / 3),
-                          coverWidth, 2 * RoundedRaffMetrics::values.homeCoverHeight / 3, true);
+        renderer.fillRect(tileX + (tileWidth - coverWidth) / 2, imgY + (coverHeight / 3), coverWidth,
+                          2 * coverHeight / 3, true);
         renderer.drawIcon(CoverIcon, tileX + (tileWidth - coverWidth) / 2 + 24, imgY + 24, 32);
-        renderer.maskRoundedRectOutsideCorners(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth,
-                                               RoundedRaffMetrics::values.homeCoverHeight, kCoverRadius,
-                                               Color::LightGray);
+        renderer.maskRoundedRectOutsideCorners(tileX + (tileWidth - coverWidth) / 2, imgY, coverWidth, coverHeight,
+                                               kCoverRadius, Color::LightGray);
       }
 
       coverBufferStored = storeCoverBuffer();
@@ -123,19 +127,26 @@ void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
 
     renderer.fillRoundedRect(tileX, tileY, tileWidth, imgY - tileY, kRowRadius, true, true, false, false,
                              Color::LightGray);
-    renderer.fillRectDither(tileX, imgY, (tileWidth - coverWidth) / 2, RoundedRaffMetrics::values.homeCoverHeight,
+    renderer.fillRectDither(tileX, imgY, (tileWidth - coverWidth) / 2, coverHeight, Color::LightGray);
+    renderer.fillRectDither(tileX + (tileWidth + coverWidth) / 2, imgY, (tileWidth - coverWidth) / 2, coverHeight,
                             Color::LightGray);
-    renderer.fillRectDither(tileX + (tileWidth + coverWidth) / 2, imgY, (tileWidth - coverWidth) / 2,
-                            RoundedRaffMetrics::values.homeCoverHeight, Color::LightGray);
-    renderer.fillRoundedRect(tileX, imgY + RoundedRaffMetrics::values.homeCoverHeight, tileWidth,
-                             tileHeight - (imgY - tileY + RoundedRaffMetrics::values.homeCoverHeight), kRowRadius,
-                             false, false, true, true, Color::LightGray);
+    renderer.fillRoundedRect(tileX, imgY + coverHeight, tileWidth, tileHeight - (imgY - tileY + coverHeight),
+                             kRowRadius, false, false, true, true, Color::LightGray);
   } else {
     renderer.fillRoundedRect(tileX, tileY, tileWidth, tileHeight, kRowRadius, Color::LightGray);
     renderer.drawCenteredText(kTitleFontId, rect.y + rect.height / 2 - renderer.getLineHeight(kTitleFontId) / 2,
                               tr(STR_NO_OPEN_BOOK));
   }
+#endif
 }
+
+#if FREEINK_DEVICE_XUESU_300
+void RoundedRaffTheme::drawHomeMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
+                                    const std::function<std::string(int)>& buttonLabel,
+                                    const std::function<UIIcon(int)>& rowIcon) const {
+  drawCompactHomeMenu(renderer, rect, buttonCount, selectedIndex, buttonLabel, rowIcon, CompactHomeStyle::RoundedRaff);
+}
+#endif
 
 void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                       const std::function<std::string(int index)>& buttonLabel,

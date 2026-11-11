@@ -125,8 +125,8 @@ class LibraryListActivity final : public UiTabListActivity {
   void buildRows(UiScreen& screen);
   static void formatInitialHeading(uint32_t initial, std::string& out);
   void formatAuthorHeading(const std::string& author, std::string& out) const;
-  void drawPositionReadout() const;
-  void drawHoldHelp() const;
+  int drawPositionReadout() const;  // Left edge available to the adjacent help.
+  void drawHoldHelp(int readoutLeft) const;
   const char* headerTitle() const override;
 
   // Ring 0 is the strip; the selected BOOK is ring - 1, with the strip keeping

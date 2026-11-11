@@ -5,6 +5,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "XuesuSettingsLayout.h"
 #include "components/UITheme.h"
 #include "util/Timezones.h"
 
@@ -57,5 +58,5 @@ void TimezonePickerActivity::buildScreen(UiScreen& screen) {
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 1;
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }

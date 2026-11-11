@@ -11,6 +11,7 @@
 #include "CrossPointSettings.h"
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
+#include "XuesuSettingsLayout.h"
 #include "components/UITheme.h"
 #include "util/Timezones.h"
 
@@ -150,5 +151,5 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
     props.labelText.maxLines = 2;
   }
   syncListViewport(screen, props);
-  screen.list(props);
+  XuesuSettingsLayout::drawRows(screen, props);
 }

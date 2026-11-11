@@ -17,6 +17,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "clippings/SelectionGeometry.h"
+#include "components/CompactHomeLayout.h"
 #include "components/HeaderBackTapTarget.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
@@ -491,7 +492,7 @@ void BaseTheme::drawSideScrollBar(const GfxRenderer& renderer, Rect rect, const 
   const int barY =
       rect.y + static_cast<int>((static_cast<int64_t>(rect.height - barHeight) * currentPage) / (totalPages - 1));
   const int barX = rect.x + rect.width - metrics.scrollBarRightOffset;
-  renderer.drawLine(barX, rect.y, barX, rect.y + rect.height, true);
+  renderer.drawLine(barX, rect.y, barX, rect.y + rect.height - 1, true);
   renderer.fillRect(barX - metrics.scrollBarWidth, barY, metrics.scrollBarWidth, barHeight, true);
 }
 
@@ -575,7 +576,8 @@ int BaseTheme::headerStatusInset(bool upstreamStyle) { return uiThemeMetrics(ups
 
 int BaseTheme::headerStatusHeight() { return HeaderStatusMetrics::stripHeight + BoardConfig::ACTIVE.headerOffsetY; }
 
-void BaseTheme::drawHeaderStatus(const GfxRenderer& renderer, const Rect rect, const char* date, const bool forceClock) {
+void BaseTheme::drawHeaderStatus(const GfxRenderer& renderer, const Rect rect, const char* date,
+                                 const bool forceClock) {
   if (rect.width <= 0 || rect.height <= 0) return;
   namespace fui = freeink::ui;
   fui::GfxRendererFrame<1> ui(renderer, SMALL_FONT_ID, SMALL_FONT_ID, SMALL_FONT_ID);
@@ -584,9 +586,8 @@ void BaseTheme::drawHeaderStatus(const GfxRenderer& renderer, const Rect rect, c
   applyHeaderStatus(renderer, props, true);
   char clockText[10];
   if (forceClock && !props.status.clockText) {
-    props.status.clockText = TimeUtils::formatCurrentTime(clockText, sizeof(clockText), SETTINGS.clockFormat == 1)
-                                 ? clockText
-                                 : "--:--";
+    props.status.clockText =
+        TimeUtils::formatCurrentTime(clockText, sizeof(clockText), SETTINGS.clockFormat == 1) ? clockText : "--:--";
   }
   props.styles.explicitlySet = true;  // Transparent overlay; keep INX's existing fill and separator.
   // headerBand owns board insets. Start at full width, then intersect the caller's safe area.
@@ -848,24 +849,172 @@ int BaseTheme::recentBookIndexAt(int, int) const {
   return 0;
 }
 
+int BaseTheme::homeCoverThumbHeight(const GfxRenderer&, Rect slot) const {
+  return FREEINK_DEVICE_XUESU_300 ? compact_home::singleBookPreview(slot).cover.height : 0;
+}
+
+#if FREEINK_DEVICE_XUESU_300
+void BaseTheme::drawCompactHomeText(const GfxRenderer& renderer, Rect bounds, int fontId, const char* text,
+                                    int maxLines, bool bold, bool centered, bool black) {
+  const int lineHeight = renderer.getLineHeight(fontId);
+  if (lineHeight <= 0 || bounds.height < lineHeight || bounds.width <= 0) return;
+
+  namespace fui = freeink::ui;
+  fui::GfxRendererTarget target(renderer);
+  target.setFont(fui::GfxRendererTarget::FONT_BODY, fontId);
+  fui::TextStyle style;
+  style.font = fui::GfxRendererTarget::FONT_BODY;
+  style.bold = bold;
+  style.align = centered ? fui::TextAlign::Center : fui::TextAlign::Left;
+  style.maxLines = static_cast<uint8_t>(std::min(maxLines, bounds.height / lineHeight));
+  const fui::Rect textRect{static_cast<int16_t>(bounds.x), static_cast<int16_t>(bounds.y),
+                           static_cast<int16_t>(bounds.width), static_cast<int16_t>(bounds.height)};
+  const GfxRenderer::ClipScope clip(renderer, bounds.x, bounds.y, bounds.width, bounds.height);
+  fui::layoutText(target, textRect, text, style, [&](const char* line, const fui::Rect lineRect) {
+    renderer.drawText(fontId, lineRect.x, lineRect.y, line, black, bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+  });
+}
+
+void BaseTheme::drawCompactBookPreview(GfxRenderer& renderer, Rect area, const std::vector<RecentBook>& books,
+                                       bool selected, bool& coverRendered, bool& coverBufferStored, bool bufferRestored,
+                                       const std::function<bool()>& storeCoverBuffer, CompactHomeStyle style) {
+  const auto [card, cover, details] = compact_home::singleBookPreview(area);
+  const bool classic = style == CompactHomeStyle::Classic;
+  const int radius = style == CompactHomeStyle::RoundedRaff ? 16 : 6;
+  const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int smallHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  if (books.empty()) {
+    if (classic) {
+      renderer.drawRect(card.x, card.y, card.width, card.height);
+    } else {
+      renderer.fillRoundedRect(card.x, card.y, card.width, card.height, radius, Color::LightGray);
+    }
+    constexpr int padding = 2 * compact_home::CARD_PADDING;
+    const int blockHeight = titleHeight + compact_home::GAP + smallHeight;
+    const int y = card.y + (card.height - blockHeight) / 2;
+    drawCompactHomeText(renderer, Rect{card.x + padding, y, card.width - 2 * padding, titleHeight}, UI_12_FONT_ID,
+                        tr(STR_NO_OPEN_BOOK), 1, true, true);
+    drawCompactHomeText(
+        renderer, Rect{card.x + padding, y + titleHeight + compact_home::GAP, card.width - 2 * padding, smallHeight},
+        UI_10_FONT_ID, tr(STR_START_READING), 1, false, true);
+    return;
+  }
+
+  const auto& book = books.front();
+  if (!bufferRestored) {
+    bool drawn = false;
+    if (!book.coverBmpPath.empty()) {
+      HalFile file;
+      const auto path = UITheme::getCoverThumbPath(book.coverBmpPath, cover.height);
+      if (Storage.openFileForRead("HOME", path, file)) {
+        Bitmap bitmap(file);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) drawn = drawCoverThumbFill(renderer, bitmap, cover);
+      }
+    }
+    if (!drawn) drawCoverPlaceholder(renderer, cover);
+    if (classic) {
+      renderer.drawRect(cover.x, cover.y, cover.width, cover.height);
+    } else {
+      renderer.maskRoundedRectOutsideCorners(cover.x, cover.y, cover.width, cover.height, radius / 2, Color::White);
+      renderer.drawRoundedRect(cover.x, cover.y, cover.width, cover.height, 1, radius / 2, true);
+    }
+    // Selection and book details are redrawn over the cached cover on every key press.
+    coverBufferStored = storeCoverBuffer();
+    coverRendered = coverBufferStored;
+  }
+
+  if (classic) {
+    renderer.drawRect(card.x, card.y, card.width, card.height);
+    if (selected) renderer.drawRect(card.x + 1, card.y + 1, card.width - 2, card.height - 2);
+  } else {
+    renderer.drawRoundedRect(card.x, card.y, card.width, card.height, selected ? 2 : 1, radius, true);
+  }
+
+  const int supportingLineHeight = smallHeight + compact_home::GAP;
+  const bool showAuthor = !book.author.empty() && details.height >= titleHeight + supportingLineHeight;
+  const bool showResume = classic && details.height >= 2 * titleHeight + 2 * supportingLineHeight;
+  const int supportingHeight = supportingLineHeight * (showAuthor + showResume);
+  const bool titleFits = renderer.getTextWidth(UI_12_FONT_ID, book.title.c_str(), EpdFontFamily::BOLD) <= details.width;
+  const int titleLines = titleFits ? 1 : std::clamp((details.height - supportingHeight) / titleHeight, 1, 2);
+  const int titleBlockHeight = titleLines * titleHeight;
+  int y = details.y + (details.height - titleBlockHeight - supportingHeight) / 2;
+  drawCompactHomeText(renderer, Rect{details.x, y, details.width, titleBlockHeight}, UI_12_FONT_ID, book.title.c_str(),
+                      titleLines, true);
+  y += titleBlockHeight + compact_home::GAP;
+  if (showAuthor) {
+    drawCompactHomeText(renderer, Rect{details.x, y, details.width, smallHeight}, UI_10_FONT_ID, book.author.c_str());
+    y += supportingLineHeight;
+  }
+  if (showResume) {
+    drawCompactHomeText(renderer, Rect{details.x, y, details.width, smallHeight}, UI_10_FONT_ID,
+                        tr(STR_CONTINUE_READING));
+  }
+}
+
+void BaseTheme::drawCompactHomeMenu(GfxRenderer& renderer, Rect area, int count, int selection,
+                                    const std::function<std::string(int)>& labelFor,
+                                    const std::function<UIIcon(int)>& iconFor, CompactHomeStyle style,
+                                    const uint8_t* (*iconBitmap)(UIIcon, int)) {
+  const int rowHeight = compact_home::menuRowHeight(renderer.getLineHeight(UI_12_FONT_ID));
+  const bool classic = style == CompactHomeStyle::Classic;
+  const bool raff = style == CompactHomeStyle::RoundedRaff;
+  const int fontId = classic ? UI_10_FONT_ID : UI_12_FONT_ID;
+  for (int i = 0; i < count; ++i) {
+    const auto label = labelFor(i);
+    Rect row = compact_home::menuRow(area, i, rowHeight);
+    const bool selected = i == selection;
+    if (classic) {
+      if (selected) {
+        renderer.fillRect(row.x, row.y, row.width, row.height);
+      } else {
+        renderer.drawRect(row.x, row.y, row.width, row.height);
+      }
+    } else if (raff) {
+      row.width = std::min(row.width, renderer.getTextWidth(fontId, label.c_str(), EpdFontFamily::BOLD) +
+                                          4 * compact_home::CARD_PADDING);
+      if (selected) renderer.fillRoundedRect(row.x, row.y, row.width, row.height, row.height / 2, Color::Black);
+    } else if (selected) {
+      renderer.fillRoundedRect(row.x, row.y, row.width, row.height, 6, Color::LightGray);
+    }
+
+    const int padding = raff ? 2 * compact_home::CARD_PADDING : compact_home::CARD_PADDING;
+    Rect labelRect{row.x + padding, row.y, row.width - 2 * padding, row.height};
+    if (iconBitmap && iconFor) {
+      if (const auto* bits = iconBitmap(iconFor(i), compact_home::MENU_ICON_SIZE)) {
+        renderer.drawIcon(bits, labelRect.x, row.y + (row.height - compact_home::MENU_ICON_SIZE) / 2,
+                          compact_home::MENU_ICON_SIZE);
+        const int space = compact_home::MENU_ICON_SIZE + compact_home::GAP;
+        labelRect.x += space;
+        labelRect.width -= space;
+      }
+    }
+    drawCompactHomeText(renderer, labelRect, fontId, label.c_str(), 1, raff, classic, !selected || (!classic && !raff));
+  }
+}
+#endif
+
 void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                     const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                     bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
+#if FREEINK_DEVICE_XUESU_300
+  drawCompactBookPreview(renderer, rect, recentBooks, selectorIndex == 0, coverRendered, coverBufferStored,
+                         bufferRestored, storeCoverBuffer, CompactHomeStyle::Classic);
+#else
   const bool hasContinueReading = !recentBooks.empty();
   const bool bookSelected = hasContinueReading && selectorIndex == 0;
 
   // --- Top "book" card for the current title (selectorIndex == 0) ---
   // When there's no cover image, use fixed size (half screen)
-  // When there's cover image, adapt width to image aspect ratio, keep height fixed at 400px
-  const int baseHeight = rect.height;  // Fixed height (400px)
+  // When there's a cover image, adapt the width to the image aspect ratio.
+  const int baseHeight = rect.height;
+  constexpr int thumbHeight = BaseMetrics::values.homeCoverHeight;
 
   int bookWidth, bookX;
   bool hasCoverImage = false;
 
   if (hasContinueReading && !recentBooks[0].coverBmpPath.empty()) {
     // Try to get actual image dimensions from BMP header
-    const std::string coverBmpPath =
-        UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+    const std::string coverBmpPath = UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, thumbHeight);
 
     HalFile file;
     if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
@@ -896,7 +1045,6 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     // No cover: use half screen size
     bookWidth = rect.width / 2;
   }
-
   bookX = rect.x + (rect.width - bookWidth) / 2;
   const int bookY = rect.y;
   const int bookHeight = baseHeight;
@@ -913,8 +1061,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     // Only load from SD on first render, then use stored buffer
 
     if (hasContinueReading && !recentBooks[0].coverBmpPath.empty() && !coverRendered) {
-      const std::string coverBmpPath =
-          UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+      const std::string coverBmpPath = UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, thumbHeight);
 
       // First time: load cover from SD and render
       HalFile file;
@@ -997,20 +1144,20 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     // - With cover: selected = white text on black box, unselected = black text on white box
     // - Without cover: selected = white text on black card, unselected = black text on white card
 
+    const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    const int smallHeight = renderer.getLineHeight(UI_10_FONT_ID);
+    const int authorHeight = lastBookAuthor.empty() ? 0 : smallHeight * 3 / 2;
+    const bool showAuthor = !lastBookAuthor.empty();
     auto lines = renderer.wrappedText(UI_12_FONT_ID, lastBookTitle.c_str(), bookWidth - 40, 3);
 
     // Book title text
-    int totalTextHeight = renderer.getLineHeight(UI_12_FONT_ID) * static_cast<int>(lines.size());
-    if (!lastBookAuthor.empty()) {
-      totalTextHeight += renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2;
-    }
+    const int totalTextHeight = titleHeight * static_cast<int>(lines.size()) + (showAuthor ? authorHeight : 0);
 
     // Vertically center the title block within the card
     int titleYStart = bookY + (bookHeight - totalTextHeight) / 2;
 
-    const auto truncatedAuthor = lastBookAuthor.empty()
-                                     ? std::string{}
-                                     : renderer.truncatedText(UI_10_FONT_ID, lastBookAuthor.c_str(), bookWidth - 40);
+    const auto truncatedAuthor =
+        !showAuthor ? std::string{} : renderer.truncatedText(UI_10_FONT_ID, lastBookAuthor.c_str(), bookWidth - 40);
 
     // If cover image was rendered, draw box behind title and author
     if (coverRendered) {
@@ -1075,45 +1222,73 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     renderer.drawCenteredText(UI_12_FONT_ID, y, tr(STR_NO_OPEN_BOOK));
     renderer.drawCenteredText(UI_10_FONT_ID, y + renderer.getLineHeight(UI_12_FONT_ID), tr(STR_START_READING));
   }
+#endif
 }
 
 int BaseTheme::getMenuRowHeight(const GfxRenderer&) const { return UITheme::getInstance().getMetrics().menuRowHeight; }
 
-BaseTheme::MenuRowGeometry BaseTheme::getMenuRowGeometry(const GfxRenderer&, const Rect& rect, const int,
+BaseTheme::MenuRowGeometry BaseTheme::buttonMenuRows(const Rect& rect, const ThemeMetrics& metrics, const int leading,
+                                                     const int spacing, const int selectedIndex, const int rowCount) {
+  MenuRowGeometry rows{rect.y + leading,
+                       metrics.menuRowHeight + spacing,
+                       metrics.menuRowHeight,
+                       0,
+                       rowCount,
+                       rect.x + metrics.contentSidePadding,
+                       rect.x + rect.width - metrics.contentSidePadding};
+  if (!FREEINK_DEVICE_XUESU_300) return rows;
+
+  const int height = rect.height - leading;
+  // Fit whole rows; the trailing inter-row gap can fall outside the menu.
+  if (rowCount <= 0 || height < rows.rowHeight) {
+    rows.pageCount = 0;
+    return rows;
+  }
+  rows.pageCapacity = 1 + (height - rows.rowHeight) / rows.rowStep;
+  const int selection = std::clamp(selectedIndex, 0, rowCount - 1);
+  rows.pageStart = selection / rows.pageCapacity * rows.pageCapacity;
+  rows.pageCount = std::min(rows.pageCapacity, rowCount - rows.pageStart);
+  return rows;
+}
+
+BaseTheme::MenuRowGeometry BaseTheme::getMenuRowGeometry(const GfxRenderer&, const Rect& rect, const int selectedIndex,
                                                          const int rowCount) const {
-  // Mirror of drawButtonMenu: rows start below the rect at the vertical
-  // spacing offset and step by row height + spacing, spanning the content
-  // width between the side paddings.
-  const auto& m = BaseMetrics::values;
-  return {rect.y + m.verticalSpacing,    m.menuRowHeight + m.menuSpacing,           m.menuRowHeight, 0, rowCount,
-          rect.x + m.contentSidePadding, rect.x + rect.width - m.contentSidePadding};
+  const auto& metrics = BaseMetrics::values;
+  return buttonMenuRows(rect, metrics, metrics.verticalSpacing, metrics.menuSpacing, selectedIndex, rowCount);
 }
 
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, const int buttonCount, const int selectedIndex,
-                               const std::function<std::string(int)>& buttonLabel,
-                               const std::function<UIIcon(int)>& rowIcon, const int rowSpacing) const {
-  const int spacing = rowSpacing < 0 ? BaseMetrics::values.menuSpacing : rowSpacing;
-  for (int i = 0; i < buttonCount; ++i) {
-    const int tileY = BaseMetrics::values.verticalSpacing + rect.y +
-                      static_cast<int>(i) * (BaseMetrics::values.menuRowHeight + spacing);
-    const bool selected = selectedIndex == i;
-    const Rect tile{rect.x + BaseMetrics::values.contentSidePadding, tileY,
-                    rect.width - BaseMetrics::values.contentSidePadding * 2, BaseMetrics::values.menuRowHeight};
+                               const std::function<std::string(int)>& buttonLabel, const std::function<UIIcon(int)>&,
+                               const int rowSpacing) const {
+  const auto& metrics = BaseMetrics::values;
+  const int spacing = rowSpacing < 0 ? metrics.menuSpacing : rowSpacing;
+  const auto rows = buttonMenuRows(rect, metrics, metrics.verticalSpacing, spacing, selectedIndex, buttonCount);
+  for (int slot = 0; slot < rows.pageCount; ++slot) {
+    const int index = rows.pageStart + slot;
+    const bool selected = selectedIndex == index;
+    const Rect tile{rows.xStart, rows.firstRowY + slot * rows.rowStep, rows.xEnd - rows.xStart, rows.rowHeight};
     if (selected)
       renderer.fillRect(tile.x, tile.y, tile.width, tile.height);
     else
       renderer.drawRect(tile.x, tile.y, tile.width, tile.height);
-    const std::string label = buttonLabel(i);
+    auto label = buttonLabel(index);
+    if (FREEINK_DEVICE_XUESU_300 && renderer.getTextWidth(UI_10_FONT_ID, label.c_str()) > tile.width - 12)
+      label = renderer.truncatedText(UI_10_FONT_ID, label.c_str(), tile.width - 12);
     const int textX = rect.x + (rect.width - renderer.getTextWidth(UI_10_FONT_ID, label.c_str())) / 2;
-    const int textY = tileY + (tile.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+    const int textY = tile.y + (tile.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
     renderer.drawText(UI_10_FONT_ID, textX, textY, label.c_str(), !selected);
   }
+  if (FREEINK_DEVICE_XUESU_300) drawSideScrollBar(renderer, rect, buttonCount, rows.pageStart, rows.pageCapacity);
 }
 
 void BaseTheme::drawHomeMenu(GfxRenderer& renderer, Rect rect, const int buttonCount, const int selectedIndex,
                              const std::function<std::string(int)>& buttonLabel,
                              const std::function<UIIcon(int)>& rowIcon) const {
+#if FREEINK_DEVICE_XUESU_300
+  drawCompactHomeMenu(renderer, rect, buttonCount, selectedIndex, buttonLabel, rowIcon, CompactHomeStyle::Classic);
+#else
   drawButtonMenu(renderer, rect, buttonCount, selectedIndex, buttonLabel, rowIcon);
+#endif
 }
 
 Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {

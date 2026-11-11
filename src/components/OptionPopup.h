@@ -12,6 +12,9 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#if FREEINK_DEVICE_XUESU_300
+#include "components/XuesuOptionLayout.h"
+#endif
 
 // Modal option picker drawn over the current screen (no clear) via
 // fui::optionDialog. Touch hit-testing is the SDK's InteractionBuffer: each
@@ -240,7 +243,12 @@ class OptionPopup {
     const fui::ThemeTokens& theme = refreshSharedUiThemeTokens(target, upstreamStyle);
     // Frame stores a const DeviceContext&; keep it in a local that outlives
     // the frame (a deviceContext() temporary would dangle).
-    const fui::DeviceContext device = target.deviceContext();
+    fui::DeviceContext device = target.deviceContext();
+#if FREEINK_DEVICE_XUESU_300
+    // The three keys move focus between the visible rows. Touch target
+    // inflation would make the published boxes overlap on compact menus.
+    if (!device.hasTouch) device.minTouchSize = 0;
+#endif
     // Routing happens on the loop task against the member buffer; the frame
     // itself never dispatches, so it gets an empty snapshot.
     const fui::InputSnapshot noInput{};
@@ -251,12 +259,13 @@ class OptionPopup {
     // InteractionBuffer::beginPublishCycle().
     interactions.beginPublishCycle();
     fui::Frame<INTERACTION_CAPACITY> frame(target, device, noInput, interactions);
+    const int selected = selectedIndex.load();
 
     if (!upstreamStyle && UITheme::getInstance().hasMainTabs() && headline.empty() && message.empty()) {
       const int optionCount = static_cast<int>(ownedStrings.size());
       auto layout = InxOptionGeometry::layout(UITheme::getInstance().getScreenSafeArea(renderer, true, false),
-                                              optionCount, selectedIndex);
-      layout.first = windowStart(layout.rows);
+                                              optionCount, selected);
+      layout.first = windowStart(layout.rows, selected);
       visibleOptionRows = layout.rows;
       const auto& panel = layout.panel;
       frame.hit(fui::Rect{static_cast<int16_t>(panel.x), static_cast<int16_t>(panel.y),
@@ -268,7 +277,7 @@ class OptionPopup {
                             static_cast<int16_t>(row.height)},
                   ACTION_OPTION, static_cast<int16_t>(layout.first + slot), fui::InputTouch);
       }
-      GUI.drawOptionPopup(renderer, title.c_str(), ownedStrings, selectedIndex, layout.first);
+      GUI.drawOptionPopup(renderer, title.c_str(), ownedStrings, selected, layout.first);
       interactions.publish();
       uiReady = true;
       return;
@@ -324,25 +333,40 @@ class OptionPopup {
     props.buttonHeight =
         fui::clampI16(target.lineHeight(fui::GfxRendererTarget::FONT_BODY) + metrics.optionPopupSelectionVPadding * 2);
 
-    // Fixed fraction of the screen, clamped by the theme's side margins; the
-    // old max-text-width sizing is gone, long labels wrap inside the buttons.
     const fui::Rect screen = device.screen();
     const auto safe = device.safeRect();
-    const int16_t width =
+    int16_t width =
         fui::clampI16(std::min({screen.width * 3 / 4, screen.width - metrics.optionPopupDialogSideMargin * 2,
                                 static_cast<int>(safe.width)}),
                       0, safe.width);
-    const int textHeight = fui::optionDialogHeight(target, props, width);
-    const int availableHeight = std::max(0, static_cast<int>(safe.height) - textHeight - props.gap);
-    const int count = std::min(
-        {totalOptions, MAX_OPTIONS, std::max(1, (availableHeight + props.gap) / (props.buttonHeight + props.gap))});
-    const int first = windowStart(count);
+    int count;
+#if FREEINK_DEVICE_XUESU_300
+    // Keep the standard INX overlays unless their text would cover the options.
+    const bool compact = !UITheme::getInstance().hasMainTabs() ||
+                         fui::optionDialogHeight(target, props, width) + props.gap + props.buttonHeight > safe.height;
+    if (compact) {
+      width = static_cast<int16_t>(safe.width - 2 * XuesuOptionLayout::SIDE_MARGIN);
+      count = XuesuOptionLayout::fit(target, props, ownedStrings, width,
+                                     safe.height - 2 * XuesuOptionLayout::VERTICAL_MARGIN, MAX_OPTIONS);
+      if (theme.listSelectionStyle == fui::SelectionStyle::InvertFill && theme.listRowRadius == 0) {
+        props.buttonStyles = fui::defaultButtonStyles();
+        props.buttonStyles.focused = props.buttonStyles.selected;
+      }
+    } else
+#endif
+    {
+      const int textHeight = fui::optionDialogHeight(target, props, width);
+      const int availableHeight = std::max(0, static_cast<int>(safe.height) - textHeight - props.gap);
+      count = std::min(
+          {totalOptions, MAX_OPTIONS, std::max(1, (availableHeight + props.gap) / (props.buttonHeight + props.gap))});
+    }
+    const int first = windowStart(count, selected);
     visibleOptionRows = count;
     for (int i = 0; i < count; ++i) {
       options[i].label = ownedStrings[first + i].c_str();
       options[i].action = ACTION_OPTION;
       options[i].value = static_cast<int16_t>(first + i);
-      options[i].state = first + i == selectedIndex ? fui::StateFocused : fui::StateNormal;
+      options[i].state = first + i == selected ? fui::StateFocused : fui::StateNormal;
     }
     props.optionCount = static_cast<uint8_t>(count);
     const int16_t height = fui::clampI16(fui::optionDialogHeight(target, props, width), 0, safe.height);
@@ -357,6 +381,14 @@ class OptionPopup {
     // option buttons win inside the dialog and the guard absorbs the rest.
     frame.hit(dialogRect, ACTION_CHROME, 0, fui::InputTouch);
     fui::optionDialog(frame, dialogRect, props);
+#if FREEINK_DEVICE_XUESU_300
+    if (compact && count < totalOptions) {
+      const int16_t rowsHeight = static_cast<int16_t>(count * props.buttonHeight + (count - 1) * props.gap);
+      const int16_t rowsY = static_cast<int16_t>(dialogRect.bottom() - props.padding.bottom - rowsHeight);
+      fui::drawListScrollIndicator(target, fui::Rect{dialogRect.x, rowsY, dialogRect.width, rowsHeight}, totalOptions,
+                                   count, first, XuesuOptionLayout::SCROLL_WIDTH, 0, XuesuOptionLayout::SCROLL_INSET);
+    }
+#endif
     // Atomically make this generation the one handleInput() reads, now that
     // every hit() call for this frame is done.
     interactions.publish();
@@ -405,11 +437,11 @@ class OptionPopup {
   static constexpr freeink::ui::ActionId ACTION_OPTION = 1;
   static constexpr freeink::ui::ActionId ACTION_CHROME = 2;
 
-  int windowStart(const int rows) const {
+  int windowStart(const int rows, const int selected) const {
     const int maximum = std::max(0, static_cast<int>(ownedStrings.size()) - rows);
     int first = firstOption.load();
-    if (first < 0 || selectedIndex < first || selectedIndex >= first + rows) {
-      first = std::clamp(selectedIndex - rows / 2, 0, maximum);
+    if (first < 0 || selected < first || selected >= first + rows) {
+      first = std::clamp(selected - rows / 2, 0, maximum);
     } else {
       first = std::clamp(first, 0, maximum);
     }
@@ -422,7 +454,7 @@ class OptionPopup {
   std::string headline;
   std::string message;
   std::vector<std::string> ownedStrings;
-  int selectedIndex = 0;
+  std::atomic<int> selectedIndex{0};
   std::function<void(int)> onSelectCallback;
   bool ignoreInitialConfirmRelease = false;
   // Set by finishShow() and cleared by the first input pass that reaches the

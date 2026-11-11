@@ -53,14 +53,23 @@ bool HomeCoverCache::paint(fui::Rect rect, size_t index, const std::string& path
       // The art nudges a few px right of center; the spine below hugs its
       // left edge either way.
       constexpr int ART_SHIFT = 3;
-      drawn = GUI.drawCoverThumbFill(renderer, coverBitmap, Rect{rect.x, rect.y, rect.width, rect.height}, ART_SHIFT);
+      const bool scaleToSlot =
+          FREEINK_DEVICE_XUESU_300 && (coverBitmap.getWidth() < rect.width || coverBitmap.getHeight() < rect.height ||
+                                       coverBitmap.getHeight() > rect.height + 12);
+      if (scaleToSlot) {
+        drawn = renderer.drawBitmapCropToFill(coverBitmap, rect.x, rect.y, rect.width, rect.height);
+      } else {
+        drawn = GUI.drawCoverThumbFill(renderer, coverBitmap, Rect{rect.x, rect.y, rect.width, rect.height}, ART_SHIFT);
+      }
       if (drawn) {
         renderer.drawRect(rect.x, rect.y, rect.width, rect.height);
         // False spine glued to the art's left edge (centered art means that
         // edge moves with each cover's fit margin): a dark band with a
         // dithered crease makes every cover read as a bound book. Drawn here
         // so the PSRAM snapshot below captures it.
-        const int artLeft = std::max<int>(rect.x, rect.x + (rect.width - coverBitmap.getWidth()) / 2 + ART_SHIFT);
+        const int artLeft = scaleToSlot
+                                ? rect.x
+                                : std::max<int>(rect.x, rect.x + (rect.width - coverBitmap.getWidth()) / 2 + ART_SHIFT);
         renderer.fillRect(artLeft, rect.y, 3, rect.height);
         renderer.fillRectDither(artLeft + 3, rect.y, 2, rect.height, Color::LightGray);
       }

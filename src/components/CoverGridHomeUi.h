@@ -28,6 +28,12 @@ class CoverGridHomeUi final : public UiAppHost {
   // image aliases badly.
   int thumbHeightFor() const;
   bool takeThumbHeightChanged();
+#if FREEINK_DEVICE_XUESU_300
+  // Canonical size is independent of page, book count and orientation.
+  static constexpr int COMPACT_THUMB_HEIGHT = 136;
+  size_t takeMissingVisibleCover();
+  void setLoadedCover(size_t index, std::string path);
+#endif
 
  private:
   static void screenFn(UiScreen& screen, void* user);
@@ -35,10 +41,15 @@ class CoverGridHomeUi final : public UiAppHost {
   void draw(UiScreen& screen);
   void drawHeaderBand();
   void drawEmpty(UiScreen& screen);
-  void drawCurrent(UiScreen& screen, freeink::ui::Rect rect, int coverRowHeight);
   void drawGrid(UiScreen& screen);
-  freeink::ui::Rect layoutGrid(freeink::ui::Rect rect);
+  freeink::ui::Rect layoutGrid(freeink::ui::Rect rect, int rows);
   void drawTabs(UiScreen& screen, freeink::ui::Rect rect);
+#if FREEINK_DEVICE_XUESU_300
+  void drawCompactBooks(UiScreen& screen);
+  void drawCompactCurrent(UiScreen& screen, freeink::ui::Rect rect, bool stackMetadata);
+#else
+  void drawCurrent(UiScreen& screen, freeink::ui::Rect rect, int coverRowHeight);
+#endif
   bool paintFramedCover(freeink::ui::DrawTarget& target, freeink::ui::Rect rect, size_t index);
   void refreshCoverPath(size_t index);
   void noteThumbHeight(int slotHeight);
@@ -55,6 +66,10 @@ class CoverGridHomeUi final : public UiAppHost {
   bool hasOpds = false;
   bool hasContinueReading = false;
   char progressText[12]{};
+#if FREEINK_DEVICE_XUESU_300
+  std::array<bool, MAX_BOOKS> coverPathChecked{};
+  std::array<bool, MAX_BOOKS> coverAttempted{};
+#endif
   // Component styles and interaction tables stay off the render task's stack.
   freeink::ui::BookCardProps card;
   freeink::ui::CoverGridProps grid;

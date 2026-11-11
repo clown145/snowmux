@@ -423,6 +423,7 @@ class BaseTheme {
     int pageCount = 0;  // visible rows on this page; the full count otherwise
     int xStart = 0;     // horizontal tap bounds of the row
     int xEnd = INT32_MAX;
+    int pageCapacity = 0;
   };
   virtual MenuRowGeometry getMenuRowGeometry(const GfxRenderer& renderer, const Rect& rect, int selectedIndex,
                                              int rowCount) const;
@@ -446,11 +447,27 @@ class BaseTheme {
   virtual bool showsFileIcons() const { return false; }
   // Thumb generation height for home covers; 0 means use metrics.homeCoverHeight.
   // Themes with slots wider than 0.6 aspect override this so covers still fill.
-  virtual int homeCoverThumbHeight(const GfxRenderer&) const { return 0; }
+  virtual int homeCoverThumbHeight(const GfxRenderer&, Rect slot) const;
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;
   static void drawDitherMask(const GfxRenderer& renderer, int x, int y, int width, int height);
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
+
+ protected:
+#if FREEINK_DEVICE_XUESU_300
+  enum class CompactHomeStyle { Classic, Lyra, RoundedRaff };
+  static void drawCompactHomeText(const GfxRenderer& renderer, Rect bounds, int fontId, const char* text,
+                                  int maxLines = 1, bool bold = false, bool centered = false, bool black = true);
+  static void drawCompactBookPreview(GfxRenderer& renderer, Rect area, const std::vector<RecentBook>& books,
+                                     bool selected, bool& coverRendered, bool& coverBufferStored, bool bufferRestored,
+                                     const std::function<bool()>& storeCoverBuffer, CompactHomeStyle style);
+  static void drawCompactHomeMenu(GfxRenderer& renderer, Rect area, int count, int selection,
+                                  const std::function<std::string(int)>& labelFor,
+                                  const std::function<UIIcon(int)>& iconFor, CompactHomeStyle style,
+                                  const uint8_t* (*iconBitmap)(UIIcon, int) = nullptr);
+#endif
+  static MenuRowGeometry buttonMenuRows(const Rect& rect, const ThemeMetrics& metrics, int leading, int spacing,
+                                        int selectedIndex, int rowCount);
 };
