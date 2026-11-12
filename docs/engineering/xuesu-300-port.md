@@ -76,6 +76,9 @@ PYTHONUTF8=1 pio run -e xuesu_300
 | `board`, `target_partition` | 板型 `xuesu-300-std`，从 OTA0 启动时的目标槽 `ota_1`。网页根据设备的启动槽决定写入位置。 |
 | `tag_name`, `release_tag`, `commit` | 社区版本号（如 `0.1.0`）、GitHub 标签（如 `xuesu-v0.1.0`）和源码提交。 |
 | `assets[0]` | 逻辑文件名 `firmware.bin`、字节数 `size`、HTTPS 下载地址 `browser_download_url` 和 `sha256:` 前缀的 `digest`。网页串口读回使用该条目的 `md5`。 |
+| `release_notes` | 可选的更新说明列表，由部署时对应标签的 GitHub Release 正文生成。每条最多 96 个 UTF-8 字节，保留前 8 条，少于 2 条时省略此字段。 |
+
+Release 正文可以照常用 Markdown 列出改动。部署时会略过标题、代码块和独占一行的链接，清理格式并拆分过长的条目。修改当前 Release 的正文后，可从默认分支手动运行发版工作流更新清单。验收时打开线上 `latest.json` 核对 `release_notes`，再用低于该版本的雪酥固件进入「检查更新」，检查「更新说明」是否显示对应条目。
 
 ### 设备内更新
 

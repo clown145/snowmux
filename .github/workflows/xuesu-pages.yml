@@ -106,6 +106,16 @@ jobs:
           (cd "$assets" && printf '%s  %s\n' "$digest" "$firmware" | sha256sum --check)
           cp "$assets/$firmware" "flasher/dist/firmware/$digest.bin"
           cp "$assets/LICENSE.txt" flasher/dist/firmware/LICENSE.txt
+      - name: Add GitHub Release notes to the OTA manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest=flasher/dist/api/v1/firmware/latest.json
+          tag=$(jq -er '.release_tag' "$manifest")
+          body="$RUNNER_TEMP/xuesu-release-body.md"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' > "$body"
+          python3 scripts/add_xuesu_release_notes.py "$manifest" "$body"
       - name: Upload GitHub Pages site
         uses: actions/upload-pages-artifact@v4
         with:
