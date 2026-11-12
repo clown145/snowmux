@@ -115,6 +115,7 @@ class CrossPointWebServer {
  } udp;
  static void wsEventCallback() {}
  void abortWsUpload(const char*) { assert(false); }
+ void discardFontUpload() {}
  bool begin();
  void stop();
 ''' + declarations + '\n};\n' + begin + '\n' + stop + r'''
@@ -181,6 +182,165 @@ int main() {
  assert(makeWebBuffer(4096) && memory::internalCalls == 1);
  memory::internalAvailable = false;
  assert(!makeWebBuffer(1400) && memory::internalCalls == 2);
+}
+''')
+
+    def test_font_upload_reuses_buffer_and_publishes_only_completed_files(self):
+        source = (ROOT / 'src/network/CrossPointWebServer.cpp').read_text(encoding='utf-8')
+        header = (ROOT / 'src/network/CrossPointWebServer.h').read_text(encoding='utf-8')
+        installer = (ROOT / 'src/FontInstaller.cpp').read_text(encoding='utf-8')
+        state = re.search(r'struct FontUploadState \{.*?\} fontUpload;', header, re.S).group()
+        upload = '\n'.join(method(source, 'void CrossPointWebServer::' + name + '(') for name in [
+            'discardFontUpload', 'handleFontUploadData', 'handleFontUpload'])
+        names = '\n'.join(method(installer, name) for name in [
+            'bool isFontNameCharacter(', 'bool FontInstaller::isValidFamilyName(',
+            'static bool isValidFontFilenameWithExt(', 'bool FontInstaller::isValidCpfontFilename(',
+            'bool FontInstaller::isValidVectorFontFilename('])
+        run_cpp(r'''
+#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <string>
+template<class... T> void logMessage(T&&...) {}
+#define LOG_DBG(...) logMessage(__VA_ARGS__)
+#define LOG_ERR(...) logMessage(__VA_ARGS__)
+constexpr bool CROSSPOINT_VECTOR_FONTS = true;
+struct String : std::string {
+  using std::string::string;
+  void replace(char from, char to) { std::replace(begin(), end(), from, to); }
+};
+struct { char sdFontFamilyName[32]; } SETTINGS;
+struct { bool psram = true; } memoryState;
+struct HalMemory {
+  struct Heap { size_t totalBytes; };
+  static Heap getPsramHeap() { return {memoryState.psram ? 8192u : 0u}; }
+};
+namespace memory { using ByteBuffer = std::unique_ptr<uint8_t[]>; }
+struct HalFile {
+  std::string* data = nullptr;
+  bool isOpen() const { return data != nullptr; }
+  bool close() { data = nullptr; return true; }
+  size_t write(const uint8_t* bytes, size_t size) {
+    data->append(reinterpret_cast<const char*>(bytes), size);
+    return size;
+  }
+};
+struct {
+  std::map<std::string, std::string> files;
+  bool openFileForWrite(const char*, const char* path, HalFile& file) {
+    file.data = &files[path]; file.data->clear(); return true;
+  }
+  bool exists(const char* path) { return files.contains(path); }
+  void remove(const char* path) { files.erase(path); }
+  bool replaceFile(const char* part, const char* path) {
+    files[path] = std::move(files.at(part)); files.erase(part); return true;
+  }
+} Storage;
+struct {
+  int installs = 0;
+  int registry() { return 0; }
+  void markRegistryDirty() { installs++; }
+} sdFontSystem;
+struct FontInstaller {
+  explicit FontInstaller(int) {}
+  bool ensureFamilyDir(const char*) { return true; }
+  static void buildFontPath(const char* family, const char* name, char* out, size_t size) {
+    std::snprintf(out, size, "/.fonts/%s/%s", family, name);
+  }
+  static bool isValidFamilyName(const char*);
+  static bool isValidCpfontFilename(const char*);
+  static bool isValidVectorFontFilename(const char*);
+};
+enum Status { UPLOAD_FILE_START, UPLOAD_FILE_WRITE, UPLOAD_FILE_END, UPLOAD_FILE_ABORTED };
+struct HTTPUpload {
+  Status status;
+  String filename = "Bookerly_14.cpfont";
+  const uint8_t* buf = nullptr;
+  size_t currentSize = 0, totalSize = 0;
+};
+struct Server {
+  HTTPUpload incoming;
+  String family = "Bookerly";
+  int result = 0;
+  HTTPUpload& upload() { return incoming; }
+  String arg(const char*) { return family; }
+  void send(int status, const char*, const char*) { result = status; }
+};
+void resetTaskWatchdogIfSubscribed() {}
+struct CrossPointWebServer {
+  Server* server;
+  bool dropUploadIfCancelled() const { return false; }
+  void discardFontUpload();
+  void handleFontUploadData();
+  void handleFontUpload();
+''' + state + '\n};\n' + names + '\n' + upload + r'''
+int main() {
+  Server server;
+  CrossPointWebServer web{};
+  web.server = &server;
+  auto& request = server.incoming;
+  web.fontUpload.buffer = std::make_unique<uint8_t[]>(web.fontUpload.BUFFER_SIZE);
+  const auto* buffer = web.fontUpload.buffer.get();
+  const auto step = [&](Status status) { request.status = status; web.handleFontUploadData(); };
+  const auto write = [&](const char* bytes, size_t size) {
+    request.buf = reinterpret_cast<const uint8_t*>(bytes);
+    request.currentSize = size;
+    step(UPLOAD_FILE_WRITE);
+  };
+  const auto finish = [&](size_t size) {
+    request.totalSize = size; step(UPLOAD_FILE_END); web.handleFontUpload();
+  };
+  const char* path = "/.fonts/Bookerly/Bookerly_14.cpfont";
+  const char* part = "/.fonts/Bookerly/Bookerly_14.cpfont.part";
+  const std::string original = "original";
+  Storage.files[path] = original;
+  step(UPLOAD_FILE_START);
+  write("CPFONT", 6);
+  write("\0", 1);
+  finish(7);
+  assert(server.result == 400 && Storage.files.at(path) == original && !Storage.exists(part));
+  step(UPLOAD_FILE_START);
+  write("INVALID!", 8);
+  finish(8);
+  assert(server.result == 400 && Storage.files.at(path) == original && !Storage.exists(part));
+  step(UPLOAD_FILE_START);
+  write("CPFONT\0\0", 8);
+  web.handleFontUpload();
+  assert(server.result == 400 && Storage.files.at(path) == original && !Storage.exists(part));
+  step(UPLOAD_FILE_START);
+  write("CPF", 3);
+  write("ONT\0\0", 5);
+  std::string payload(4700, 'f');
+  write(payload.data(), payload.size());
+  assert(Storage.files.at(path) == original);
+  finish(8 + payload.size());
+  assert(server.result == 200 && Storage.files.at(path) == std::string("CPFONT\0\0", 8) + payload);
+  assert(!Storage.exists(part) && web.fontUpload.buffer.get() == buffer && sdFontSystem.installs == 1);
+  step(UPLOAD_FILE_START);
+  write("CPFONT\0\0", 8);
+  step(UPLOAD_FILE_ABORTED);
+  web.handleFontUpload();
+  assert(server.result == 400 && !Storage.exists(part) && sdFontSystem.installs == 1);
+  request.filename = "Family.ttc";
+  memoryState.psram = false;
+  step(UPLOAD_FILE_START);
+  write("ttcf1234", 8);
+  finish(8);
+  assert(server.result == 400);
+  memoryState.psram = true;
+  server.family = "\xE6\xA5\xB7\xE4\xBD\x93";
+  request.filename = "\xE6\xA5\xB7\xE4\xBD\x93.ttc";
+  step(UPLOAD_FILE_START);
+  write("ttcf1234", 8);
+  finish(8);
+  assert(server.result == 200 && Storage.exists("/.fonts/\xE6\xA5\xB7\xE4\xBD\x93/\xE6\xA5\xB7\xE4\xBD\x93.ttc"));
+  web.handleFontUpload();
+  assert(server.result == 400 && web.fontUpload.buffer.get() == buffer);
 }
 ''')
 

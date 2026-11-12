@@ -124,20 +124,19 @@ not returned by the API.
 
 ### Fonts
 
-The Fonts page lists installed SD-card font families and lets you upload
-`.cpfont` files, plus `.ttf` and `.otf` files on devices with external RAM.
-Choose the folder that contains one font family; the picker selects folders,
-not single files. The server validates the font family name, filename, and
-font magic bytes before accepting the upload.
+In the file manager, click **Upload Fonts** to open the font uploader. Choose
+individual files or use **Choose Folder** to select a font family folder.
+The uploader groups files by name. For example, `Bookerly-Regular.ttf` and
+`Bookerly-Bold.ttf` go in the `Bookerly` family folder. The reader creates that
+folder in its SD-card font directory.
 
-Installed fonts appear in **Settings > Reader > Font Family** after the font
-registry refreshes.
+All devices accept `.cpfont` files named like `Bookerly_14.cpfont`. Devices with
+external RAM and vector font support also accept `.ttf`, `.otf`, and `.ttc`.
+The server checks the names and file headers before installing the uploads.
 
-On devices with external RAM enabled in CrossPoint, you can use TTF/OTF/TTC
-fonts directly.
-Copy them into `/fonts/` or `/.fonts/` on the SD card. The Fonts page and
-`/api/fonts/upload` accept `.ttf` and `.otf` files but not `.ttc`. See the
-[SD card font guide](./sd-card-fonts.md) for the direct font folder layout.
+Select an installed font in **Settings > Reader > Text Settings > Font**.
+You can also copy fonts into `/fonts/` or `/.fonts/` on the SD card. See the
+[SD card font guide](./sd-card-fonts.md) for the folder layout.
 To remove a loose direct font, delete its file from the SD card. The Fonts page
 can delete a family stored in a subfolder.
 

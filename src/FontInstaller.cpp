@@ -8,6 +8,12 @@
 
 #include "CrossPointSettings.h"
 
+namespace {
+// SdFat supports UTF-8 long names. Keep non-ASCII bytes and restrict the ASCII
+// characters to those that are safe in a single FAT path component.
+bool isFontNameCharacter(const unsigned char c) { return c >= 0x80 || std::isalnum(c) || c == '-' || c == '_'; }
+}  // namespace
+
 FontInstaller::FontInstaller(SdCardFontRegistry& registry) : registry_(registry) {}
 
 bool FontInstaller::isValidFamilyName(const char* name) {
@@ -19,8 +25,7 @@ bool FontInstaller::isValidFamilyName(const char* name) {
   if (strchr(name, '\\') != nullptr) return false;
 
   for (const char* p = name; *p != '\0'; ++p) {
-    char c = *p;
-    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') {
+    if (!isFontNameCharacter(static_cast<unsigned char>(*p))) {
       return false;
     }
   }
@@ -28,10 +33,8 @@ bool FontInstaller::isValidFamilyName(const char* name) {
 }
 
 // Shared filename validation: rejects path separators / traversal, requires
-// the given extension (case-insensitive), and restricts the basename to
-// alphanumeric + hyphen + underscore. No additional dots — keeps stray
-// "Foo.cpfont.tmp"-style names out. Anything that could escape the family
-// directory or refer to a different one is a hard reject.
+// the given extension (case-insensitive), and keeps ASCII punctuation in the
+// basename limited to hyphens and underscores. Non-ASCII names use UTF-8.
 static bool isValidFontFilenameWithExt(const char* name, const char* ext) {
   if (name == nullptr || name[0] == '\0') return false;
 
@@ -46,8 +49,7 @@ static bool isValidFontFilenameWithExt(const char* name, const char* ext) {
 
   const size_t baseLen = nameLen - extLen;
   for (size_t i = 0; i < baseLen; ++i) {
-    char c = name[i];
-    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') {
+    if (!isFontNameCharacter(static_cast<unsigned char>(name[i]))) {
       return false;
     }
   }
@@ -57,7 +59,8 @@ static bool isValidFontFilenameWithExt(const char* name, const char* ext) {
 bool FontInstaller::isValidCpfontFilename(const char* name) { return isValidFontFilenameWithExt(name, ".cpfont"); }
 
 bool FontInstaller::isValidVectorFontFilename(const char* name) {
-  return isValidFontFilenameWithExt(name, ".ttf") || isValidFontFilenameWithExt(name, ".otf");
+  return isValidFontFilenameWithExt(name, ".ttf") || isValidFontFilenameWithExt(name, ".otf") ||
+         isValidFontFilenameWithExt(name, ".ttc");
 }
 
 bool FontInstaller::ensureFamilyDir(const char* familyName) {

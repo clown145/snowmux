@@ -56,18 +56,21 @@
     <!--#include file="../shared/Header.zh-CN.html.inc" -->
 <main class="page-content">
 
-    <div class="card">
-      <h2>已安装字体</h2>
-      <div id="families"><p class="empty">正在读取…</p></div>
+    <div class="card" id="upload-fonts">
+      <h2>上传字体</h2>
+      <p class="family-meta">选择字体文件或文件夹，设备会按字体名自动创建家族目录。</p>
+      <form class="upload-form" id="uploadForm">
+        <input type="file" id="fontFiles" aria-label="上传字体" accept=".cpfont" multiple />
+        <input type="file" id="fontFolder" webkitdirectory multiple hidden />
+        <button type="button" id="pickFontFolder" class="btn">选择文件夹</button>
+        <button type="submit" id="uploadFonts" class="btn btn-primary" disabled>上传</button>
+      </form>
+      <p id="pickedInfo" class="family-meta" aria-live="polite" style="margin: 8px 0 0;"></p>
     </div>
 
     <div class="card">
-      <h2>上传字体</h2>
-      <form class="upload-form" id="uploadForm">
-        <input type="file" id="fontFiles" webkitdirectory directory multiple required />
-        <button type="submit" class="btn btn-primary">上传</button>
-      </form>
-      <p id="pickedInfo" class="family-meta" style="margin: 8px 0 0;"></p>
+      <h2>已安装字体</h2>
+      <div id="families"><p class="empty">正在读取…</p></div>
     </div>
 
   </main>
@@ -79,15 +82,15 @@
       return bytes + ' B';
     }
 
-    // PSRAM boards also accept vector (.ttf/.otf) uploads; set from /api/fonts.
+    // PSRAM boards also accept vector (.ttf/.otf/.ttc) uploads; set from /api/fonts.
     let allowVector = false;
 
     function fontExtRe() {
-      return allowVector ? /\.(cpfont|ttf|otf)$/i : /\.cpfont$/i;
+      return allowVector ? /\.(cpfont|ttf|otf|ttc)$/i : /\.cpfont$/i;
     }
 
     function supportedExts() {
-      return allowVector ? '.cpfont、.ttf 或 .otf' : '.cpfont';
+      return allowVector ? '.cpfont、.ttf、.otf 或 .ttc' : '.cpfont';
     }
 
     async function loadFonts() {
@@ -96,6 +99,8 @@
         const res = await fetch('/api/fonts');
         const data = await res.json();
         allowVector = !!data.vectorFonts;
+        fontFiles.accept = allowVector ? '.cpfont,.ttf,.otf,.ttc' : '.cpfont';
+        if (!fontFiles.disabled && (fontFiles.files.length || fontFolder.files.length)) updateFontSelection();
         // Build rows with DOM APIs and textContent so on-device family names
         // (which can contain arbitrary characters) cannot break markup or
         // execute script via innerHTML / inline onclick interpolation.
@@ -163,77 +168,84 @@
       await loadFonts();
     }
 
-    // Derive family name from a .cpfont filename: take everything before the
-    // last '-' or '_' (that separator precedes the size suffix, e.g. Bookerly_12.cpfont).
-    function familyFromFilename(name) {
-      const stem = name.replace(/\.(cpfont|ttf|otf)$/i, '');
-      const cut = Math.max(stem.lastIndexOf('-'), stem.lastIndexOf('_'));
-      return cut > 0 ? stem.slice(0, cut) : stem;
-    }
+    <!--#include file="../shared/FontUploadNames.js.inc" -->
 
-    // Sanitize to match firmware's [A-Za-z0-9_-]+ pattern.
-    function sanitizeFamily(raw) {
-      return raw.replace(/[^A-Za-z0-9_-]/g, '_');
-    }
+    const fontFiles = document.getElementById('fontFiles');
+    const fontFolder = document.getElementById('fontFolder');
+    const pickFontFolder = document.getElementById('pickFontFolder');
+    const uploadFonts = document.getElementById('uploadFonts');
+    const pickedInfo = document.getElementById('pickedInfo');
 
-    function supportedFontFilesOnly(fileList) {
-      return Array.from(fileList).filter(f => fontExtRe().test(f.name));
-    }
-
-    document.getElementById('fontFiles').addEventListener('change', function() {
-      const info = document.getElementById('pickedInfo');
-      const files = supportedFontFilesOnly(this.files);
+    function selectedFonts() {
+      const files = Array.from(fontFolder.files.length ? fontFolder.files : fontFiles.files)
+        .filter(file => fontExtRe().test(file.name))
+        .map(file => ({file, names: fontUploadNames(file.name)}));
       if (files.length === 0) {
-        info.textContent = '所选文件夹中没有 ' + supportedExts() + ' 文件。';
-        return;
+        return {error: '尚未选择受支持的字体。支持的格式：' + supportedExts()};
       }
-      const family = sanitizeFamily(familyFromFilename(files[0].name));
-      info.textContent = files.length + ' 个文件 → 字体家族“' + family + '”';
+      const encoder = new TextEncoder();
+      if (files.some(({names}) => !names || encoder.encode(names.family).length > 31 ||
+                                    encoder.encode(names.filename).length > 127)) {
+        return {error: '请检查文件名。点阵字体请用「字体名_字号.cpfont」，家族名最长为 31 个 UTF-8 字节。'};
+      }
+      const family = files[0].names.family;
+      if (files.some(({names}) => names.family !== family)) {
+        return {error: '请只选择同一个字体家族的文件。'};
+      }
+      return {files, family};
+    }
+
+    function updateFontSelection() {
+      const {files, family, error} = selectedFonts();
+      pickedInfo.textContent = error || files.length + ' 个文件 → ' + family;
+      uploadFonts.disabled = !!error;
+    }
+
+    pickFontFolder.addEventListener('click', () => fontFolder.click());
+    fontFiles.addEventListener('change', () => {
+      fontFolder.value = '';
+      updateFontSelection();
+    });
+    fontFolder.addEventListener('change', () => {
+      fontFiles.value = '';
+      updateFontSelection();
     });
 
     document.getElementById('uploadForm').addEventListener('submit', async function(e) {
       e.preventDefault();
-      const files = supportedFontFilesOnly(document.getElementById('fontFiles').files);
-      if (files.length === 0) {
-        showWebToast('尚未选择 ' + supportedExts() + ' 文件。', true);
+      if (uploadFonts.disabled) return;
+      const {files, family, error} = selectedFonts();
+      if (error) {
+        showWebToast(error, true);
         return;
       }
 
-      // A directory picker may include files from multiple family subfolders.
-      // Reject that up front — otherwise files[0]'s family is silently reused
-      // for every upload, corrupting the install layout.
-      const families = [...new Set(files.map(f => sanitizeFamily(familyFromFilename(f.name))))];
-      if (families.length !== 1) {
-        showWebToast('请只选择同一个字体家族的文件。', true);
-        return;
-      }
-      const family = families[0];
-
-
+      fontFiles.disabled = fontFolder.disabled = pickFontFolder.disabled = uploadFonts.disabled = true;
       let uploaded = 0;
-      for (const file of files) {
-        showWebToast('正在上传 ' + (uploaded + 1) + '/' + files.length + '：' + file.name, false);
-        const formData = new FormData();
-        formData.append('family', family);
-        formData.append('file', file, file.name);
-        try {
-          const res = await fetch('/api/fonts/upload', { method: 'POST', body: formData });
-          const data = await res.json();
-          if (!data.ok) {
-            showWebToast(file.name + ' 上传失败：' + (data.error || '未知错误'), true);
-            await loadFonts();
+      try {
+        for (const {file, names} of files) {
+          showWebToast('正在上传 ' + (uploaded + 1) + '/' + files.length + '：' + file.name, false);
+          const formData = new FormData();
+          formData.append('family', family);
+          formData.append('file', file, names.filename);
+          try {
+            const res = await fetch('/api/fonts/upload', {method: 'POST', body: formData});
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error('字体无效或写入 SD 卡失败');
+          } catch (err) {
+            showWebToast(file.name + ' 上传失败：' + err.message, true);
             return;
           }
-        } catch (err) {
-          showWebToast(file.name + ' 上传出错：' + err.message, true);
-          await loadFonts();
-          return;
+          uploaded++;
         }
-        uploaded++;
-      }
 
-      showWebToast('已将 ' + uploaded + ' 个文件上传到字体家族“' + family + '”。', false);
-      await loadFonts();
+        fontFiles.value = fontFolder.value = pickedInfo.textContent = '';
+        showWebToast('已将 ' + uploaded + ' 个文件上传到字体家族「' + family + '」。', false);
+      } finally {
+        fontFiles.disabled = fontFolder.disabled = pickFontFolder.disabled = false;
+        uploadFonts.disabled = !(fontFiles.files.length || fontFolder.files.length);
+        await loadFonts();
+      }
     });
 
     loadFonts();

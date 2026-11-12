@@ -13,8 +13,8 @@ The source notices are in [licenses/fonts.txt](../licenses/fonts.txt).
 
 ## Installing Fonts
 
-There are three ways to install `.cpfont` fonts. Direct TTF/OTF/TTC loading uses
-the manual SD card copy method below.
+There are three ways to install `.cpfont` fonts. On supported devices, install
+TTF/OTF/TTC fonts through the web browser or by copying them to the SD card.
 
 ### Option 1: Download from device (recommended)
 
@@ -35,8 +35,9 @@ the manual SD card copy method below.
 
 1. Start **File Transfer** and connect through **Join Network** or **Create Hotspot**
 2. Open the web interface URL shown on the reader
-3. Navigate to the **Fonts** tab
-4. Upload `.cpfont` files using the upload form
+3. Select **Upload Fonts** in the file manager, or open the **Fonts** tab
+4. Choose font files or one font family folder and click **Upload**. The
+   uploader derives the family from the filename and creates its SD-card folder.
 
 ### Option 3: Manual SD card copy
 
@@ -91,10 +92,9 @@ file in the same family folder takes priority over TTF/OTF/TTC files, so keep
 the two formats in separate folders. If both font roots contain the same family
 name, the copy in `/.fonts/` takes priority.
 
-Direct fonts use the standard reader sizes: 12, 14, 16, and 18 pt. The **Fonts**
-tab in File Transfer accepts `.cpfont` files only. Copy direct fonts to the SD
-card instead. To remove a loose font file, delete that file from the SD card.
-The Fonts page can delete families stored in subfolders.
+Direct fonts offer whole point sizes from 8 to 22. To remove a loose font file,
+delete it from the SD card. The Fonts page can delete families stored in
+subfolders.
 
 ## Non-Latin Scripts Fallback in the User Interface
 

@@ -372,8 +372,8 @@ Response:
 
 ### `POST /api/fonts/upload`
 
-Uploads one font file into a family folder: `.cpfont`, or `.ttf`/`.otf` on devices
-with external RAM (`vectorFonts: true` in `GET /api/fonts`).
+Uploads one font file into a family folder. It accepts `.cpfont` on all devices
+and `.ttf`, `.otf`, or `.ttc` when `GET /api/fonts` reports `vectorFonts: true`.
 
 ```bash
 curl -X POST \
@@ -382,9 +382,9 @@ curl -X POST \
   http://crosspoint.local/api/fonts/upload
 ```
 
-The handler validates the family name, filename extension, and magic bytes
-(`CPFONT`, or a TrueType/OpenType header for `.ttf`/`.otf`) before accepting the
-file.
+Send the `family` field before the file part. The handler checks the family name,
+filename extension, and file header before installing the uploaded file.
+Family names fit in 31 UTF-8 bytes and filenames in 127 UTF-8 bytes.
 
 Successful response:
 

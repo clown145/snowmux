@@ -269,6 +269,70 @@ const reply = (bytes, length = bytes.length) => resolve({ok: true,
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ''')
 
+    def test_font_upload_accepts_files_and_groups_styles_by_name(self):
+        names = (HTML / "shared/FontUploadNames.js.inc").read_text(encoding="utf-8")
+        for locale in ["en", "zh-CN"]:
+            with self.subTest(locale=locale):
+                source = (HTML / locale / "FontsPage.html").read_text(encoding="utf-8")
+                file_manager = (HTML / locale / "FilesPage.html").read_text(encoding="utf-8")
+                self.assertIn('href="/fonts#upload-fonts"', file_manager)
+                self.assertIn('id="upload-fonts"', source)
+                self.assertNotIn("webkitdirectory", re.search(r'<input[^>]+id="fontFiles"[^>]+>', source).group())
+                self.assertIn("webkitdirectory", re.search(r'<input[^>]+id="fontFolder"[^>]+>', source).group())
+                upload = source[source.index("    const fontFiles ="):source.rindex("    loadFonts();")]
+                run_node(r'''
+const assert = require('node:assert/strict');
+const elements = Object.create(null);
+const document = {getElementById: id => elements[id] ||= {
+  events: {}, files: [], disabled: false, textContent: '',
+  addEventListener(event, fn) { this.events[event] = fn; },
+  set value(value) { if (!value) this.files = []; },
+}};
+const requests = [], toasts = [];
+class FormData {
+  data = {};
+  append(key, value, name) { this.data[key] = name ?? value; }
+}
+let allowVector = true, success = false, refreshes = 0;
+const fetch = async (url, options) => {
+  requests.push([url, options.body.data]);
+  return {ok: success, json: async () => ({ok: success})};
+};
+const showWebToast = (message, error) => toasts.push({message, error});
+const loadFonts = async () => { refreshes++; };
+''' + function(source, "function fontExtRe(") + "\n" +
+                         function(source, "function supportedExts(") + "\n" + names + upload + r'''
+(async () => {
+  assert.deepEqual(fontUploadNames('My-Reading-Font.ttf'),
+    {family: 'My-Reading-Font', filename: 'My-Reading-Font.ttf'});
+  assert.deepEqual(fontUploadNames('Bookerly-BoldItalic.TTF'),
+    {family: 'Bookerly', filename: 'Bookerly-BoldItalic.ttf'});
+  assert.deepEqual(fontUploadNames('\u9605\u8bfb 14.CPFONT'),
+    {family: '\u9605\u8bfb', filename: '\u9605\u8bfb_14.cpfont'});
+  assert.equal(fontUploadNames('Broken.cpfont'), null);
+  const submit = () => elements.uploadForm.events.submit({preventDefault() {}});
+  fontFiles.files = [{name:'\u6977\u4f53.ttc'}];
+  fontFiles.events.change();
+  assert.equal(uploadFonts.disabled, false);
+  await submit();
+  assert.equal(toasts.at(-1).error, true);
+  assert.equal(uploadFonts.disabled, false);
+  success = true;
+  await submit();
+  assert.deepEqual(requests[1], ['/api/fonts/upload', {family:'\u6977\u4f53', file:'\u6977\u4f53.ttc'}]);
+  assert.equal(uploadFonts.disabled, true);
+  fontFolder.files = [{name:'Bookerly-Regular.ttf'}, {name:'Bookerly-Bold.ttf'}, {name:'LICENSE'}];
+  fontFolder.events.change();
+  await submit();
+  assert.deepEqual(requests.slice(2).map(([, body]) => body.family), ['Bookerly', 'Bookerly']);
+  assert.equal(refreshes, 3);
+  allowVector = false;
+  fontFiles.files = [{name:'Bookerly.ttf'}];
+  fontFiles.events.change();
+  assert.equal(uploadFonts.disabled, true);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+''')
+
     def test_build_assets_include_localized_helpers_and_valid_scripts(self):
         with tempfile.TemporaryDirectory(prefix="web-source-parity-") as directory:
             temp=Path(directory)
@@ -285,6 +349,9 @@ const reply = (bytes, length = bytes.length) => resolve({ok: true,
                     self.assertIn("function showWebConfirm(",raw)
                     if name == "FilesPage":
                         self.assertIn("function xmpicPreviewUrl(",raw)
+                        self.assertIn('href="/fonts#upload-fonts"', raw)
+                    if name == "FontsPage":
+                        self.assertIn("function fontUploadNames(", raw)
                     if locale=="zh-CN":
                         self.assertIn("确认操作",raw)
                         self.assertNotIn("'Confirm action'",raw)
