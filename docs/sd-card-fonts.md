@@ -36,8 +36,9 @@ TTF/OTF/TTC fonts through the web browser or by copying them to the SD card.
 1. Start **File Transfer** and connect through **Join Network** or **Create Hotspot**
 2. Open the web interface URL shown on the reader
 3. Select **Upload Fonts** in the file manager, or open the **Fonts** tab
-4. Choose font files or one font family folder and click **Upload**. The
-   uploader derives the family from the filename and creates its SD-card folder.
+4. Select one or more files from a single font family and click **Upload**.
+   The uploader derives the family from the filenames and creates its SD-card
+   folder. The progress bar reaches 100% after the files are saved.
 
 ### Option 3: Manual SD card copy
 

@@ -125,7 +125,8 @@ not returned by the API.
 ### Fonts
 
 In the file manager, click **Upload Fonts** to open the font uploader. Choose
-individual files or use **Choose Folder** to select a font family folder.
+one or more files from a single font family. The progress bar tracks the whole
+batch and reaches 100% after the device confirms the files are saved.
 The uploader groups files by name. For example, `Bookerly-Regular.ttf` and
 `Bookerly-Bold.ttf` go in the `Bookerly` family folder. The reader creates that
 folder in its SD-card font directory.

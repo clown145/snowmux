@@ -269,8 +269,9 @@ const reply = (bytes, length = bytes.length) => resolve({ok: true,
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ''')
 
-    def test_font_upload_accepts_files_and_groups_styles_by_name(self):
+    def test_font_upload_groups_styles_and_reports_confirmed_progress(self):
         names = (HTML / "shared/FontUploadNames.js.inc").read_text(encoding="utf-8")
+        request = (HTML / "shared/FontUploadRequest.js.inc").read_text(encoding="utf-8")
         for locale in ["en", "zh-CN"]:
             with self.subTest(locale=locale):
                 source = (HTML / locale / "FontsPage.html").read_text(encoding="utf-8")
@@ -278,30 +279,35 @@ const reply = (bytes, length = bytes.length) => resolve({ok: true,
                 self.assertIn('href="/fonts#upload-fonts"', file_manager)
                 self.assertIn('id="upload-fonts"', source)
                 self.assertNotIn("webkitdirectory", re.search(r'<input[^>]+id="fontFiles"[^>]+>', source).group())
-                self.assertIn("webkitdirectory", re.search(r'<input[^>]+id="fontFolder"[^>]+>', source).group())
+                self.assertNotIn('id="fontFolder"', source)
+                self.assertIn('<progress id="fontUploadBar" max="100"', source)
                 upload = source[source.index("    const fontFiles ="):source.rindex("    loadFonts();")]
                 run_node(r'''
 const assert = require('node:assert/strict');
 const elements = Object.create(null);
 const document = {getElementById: id => elements[id] ||= {
-  events: {}, files: [], disabled: false, textContent: '',
+  events: {}, files: [], disabled: false, textContent: '', dataset: {},
   addEventListener(event, fn) { this.events[event] = fn; },
-  set value(value) { if (!value) this.files = []; },
+  get value() { return this.currentValue; },
+  set value(value) { this.currentValue = value; if (value === '') this.files = []; },
 }};
-const requests = [], toasts = [];
+const requests = [];
 class FormData {
   data = {};
   append(key, value, name) { this.data[key] = name ?? value; }
 }
-let allowVector = true, success = false, refreshes = 0;
-const fetch = async (url, options) => {
-  requests.push([url, options.body.data]);
-  return {ok: success, json: async () => ({ok: success})};
-};
-const showWebToast = (message, error) => toasts.push({message, error});
+class XMLHttpRequest {
+  upload = {};
+  open(method, url) { this.method = method; this.url = url; }
+  send(body) { this.data = body.data; requests.push(this); }
+  progress(loaded, total) { this.upload.onprogress({loaded, total, lengthComputable: true}); }
+  reply(status, ok) { this.status = status; this.response = {ok}; this.onload(); }
+}
+let allowVector = true, refreshes = 0;
+const showWebToast = () => {};
 const loadFonts = async () => { refreshes++; };
 ''' + function(source, "function fontExtRe(") + "\n" +
-                         function(source, "function supportedExts(") + "\n" + names + upload + r'''
+                         function(source, "function supportedExts(") + "\n" + names + request + upload + r'''
 (async () => {
   assert.deepEqual(fontUploadNames('My-Reading-Font.ttf'),
     {family: 'My-Reading-Font', filename: 'My-Reading-Font.ttf'});
@@ -311,20 +317,56 @@ const loadFonts = async () => { refreshes++; };
     {family: '\u9605\u8bfb', filename: '\u9605\u8bfb_14.cpfont'});
   assert.equal(fontUploadNames('Broken.cpfont'), null);
   const submit = () => elements.uploadForm.events.submit({preventDefault() {}});
-  fontFiles.files = [{name:'\u6977\u4f53.ttc'}];
+  fontFiles.files = [{name:'\u6977\u4f53.ttc', size: 100}];
   fontFiles.events.change();
   assert.equal(uploadFonts.disabled, false);
-  await submit();
-  assert.equal(toasts.at(-1).error, true);
+  const rejected = submit();
+  assert.equal(fontUploadProgress.hidden, false);
+  assert.equal(fontUploadBar.value, 0);
+  assert.equal(fontFiles.disabled, true);
+  requests[0].progress(25, 100);
+  assert.equal(fontUploadPercent.textContent, '25%');
+  const sending = fontUploadStatus.textContent;
+  requests[0].upload.onload();
+  assert.equal(fontUploadBar.value, 99);
+  assert.notEqual(fontUploadStatus.textContent, sending);
+  requests[0].reply(400, false);
+  await rejected;
+  assert.equal(fontUploadProgress.dataset.failed, 'true');
+  assert.equal(fontUploadBar.value, 99);
   assert.equal(uploadFonts.disabled, false);
-  success = true;
-  await submit();
-  assert.deepEqual(requests[1], ['/api/fonts/upload', {family:'\u6977\u4f53', file:'\u6977\u4f53.ttc'}]);
+
+  const retry = submit();
+  assert.equal(fontUploadBar.value, 0);
+  assert.equal(fontUploadProgress.dataset.failed, 'false');
+  assert.equal(requests[1].method, 'POST');
+  assert.equal(requests[1].url, '/api/fonts/upload');
+  assert.deepEqual(requests[1].data, {family:'\u6977\u4f53', file:'\u6977\u4f53.ttc'});
+  requests[1].upload.onload();
+  assert.equal(fontUploadBar.value, 99);
+  requests[1].reply(200, true);
+  await retry;
+  assert.equal(fontUploadBar.value, 100);
   assert.equal(uploadFonts.disabled, true);
-  fontFolder.files = [{name:'Bookerly-Regular.ttf'}, {name:'Bookerly-Bold.ttf'}, {name:'LICENSE'}];
-  fontFolder.events.change();
-  await submit();
-  assert.deepEqual(requests.slice(2).map(([, body]) => body.family), ['Bookerly', 'Bookerly']);
+
+  fontFiles.files = [{name:'Bookerly-Regular.ttf', size: 100}, {name:'Bookerly-Bold.ttf', size: 300}];
+  fontFiles.events.change();
+  assert.equal(fontUploadProgress.hidden, true);
+  const batch = submit();
+  requests[2].progress(50, 100);
+  assert.equal(fontUploadBar.value, 12);
+  requests[2].upload.onload();
+  assert.equal(fontUploadBar.value, 25);
+  requests[2].reply(200, true);
+  await new Promise(setImmediate);
+  requests[3].progress(50, 100);
+  assert.equal(fontUploadBar.value, 62);
+  requests[3].upload.onload();
+  assert.equal(fontUploadBar.value, 99);
+  requests[3].reply(200, true);
+  await batch;
+  assert.equal(fontUploadBar.value, 100);
+  assert.deepEqual(requests.slice(2).map(({data}) => data.family), ['Bookerly', 'Bookerly']);
   assert.equal(refreshes, 3);
   allowVector = false;
   fontFiles.files = [{name:'Bookerly.ttf'}];
@@ -352,6 +394,7 @@ const loadFonts = async () => { refreshes++; };
                         self.assertIn('href="/fonts#upload-fonts"', raw)
                     if name == "FontsPage":
                         self.assertIn("function fontUploadNames(", raw)
+                        self.assertIn("xhr.upload.onprogress", raw)
                     if locale=="zh-CN":
                         self.assertIn("确认操作",raw)
                         self.assertNotIn("'Confirm action'",raw)

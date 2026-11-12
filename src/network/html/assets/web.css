@@ -356,6 +356,22 @@ body.web-ui  {
   text-decoration: none;
 }
 
+.font-upload-progress { margin-top: 12px; }
+.font-upload-progress .progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.font-upload-progress progress {
+  display: block;
+  width: 100%;
+  height: 12px;
+  margin-top: 6px;
+  accent-color: var(--accent-color);
+}
+.font-upload-progress[data-failed="true"] .progress-label { color: var(--danger-color); }
+
 .web-ui .action-btn:hover,
 .web-ui .save-btn:hover,
 .web-ui .btn-primary:hover,
