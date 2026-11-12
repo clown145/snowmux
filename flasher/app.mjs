@@ -1,7 +1,9 @@
 import { ESPLoader, Transport } from 'esptool-js';
 import {
   backupFlash,
-  firmwarePath,
+  downloadFirmware,
+  firmwareProxyUrl,
+  firmwareReleaseUrl,
   inspectDevice,
   installFirmware,
   RELEASE_MANIFEST,
@@ -174,9 +176,7 @@ installButton.addEventListener('click', () => {
   operation(async () => {
     message('正在下载并校验固件…');
     progress('下载固件', 0);
-    const response = await fetch(firmwarePath(release));
-    if (!response.ok) throw new Error(`固件下载失败（HTTP ${response.status}）。`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await downloadFirmware(release);
     if (session !== current) throw new Error('USB 连接已断开，请重新连接设备。');
     message('正在刷机，请勿拔出 USB 数据线。');
     await installFirmware(current.loader, bytes, release, current.bootPlan, progress);
@@ -228,9 +228,11 @@ async function loadRelease() {
       new Date(release.publishedAt),
     );
     const download = byId('download');
-    download.href = firmwarePath(release);
-    download.download = `${release.releaseTag}-ota1.bin`;
+    download.href = firmwareProxyUrl(release);
     download.hidden = false;
+    const directDownload = byId('download-direct');
+    directDownload.href = firmwareReleaseUrl(release);
+    directDownload.hidden = false;
     const source = byId('source');
     source.href = `https://github.com/${release.repository}`;
     source.hidden = false;

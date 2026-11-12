@@ -139,6 +139,7 @@ struct ReleaseJsonParser {
 '''
         program += method(updater, 'OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(')
         program += method(updater, 'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(')
+        program += method(updater, 'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource(')
         program += 'namespace firmware_flash {\n' + constants + '\n'
         program += method(flasher, 'Result flashFromSdPath(') + r'''
 }
@@ -166,13 +167,16 @@ int main() {
 #include <cassert>
 #include <charconv>
 #include <memory>
+#include <optional>
 #include <string_view>
+#include <vector>
 #include "OtaUpdater.h"
 #define LOG_DBG(...) ((void)0)
 #define LOG_INF(...) ((void)0)
 #define LOG_ERR(...) ((void)0)
 #define CROSSPOINT_VERSION "0.1.0"
 constexpr int ESP_OK=0, WIFI_PS_MIN_MODEM=0, ESP_PARTITION_TYPE_APP=0;
+constexpr size_t releaseUrlCapacity=192;
 constexpr int ESP_PARTITION_SUBTYPE_APP_OTA_0=0x10, ESP_PARTITION_SUBTYPE_APP_OTA_1=0x11;
 constexpr size_t OTA_WITH_SEQUENTIAL_WRITES=0xfffffffe;
 struct esp_partition_t { size_t size; unsigned address; int subtype; int type=ESP_PARTITION_TYPE_APP; };
@@ -182,27 +186,41 @@ esp_partition_t ota0{0x730000,0x20000,ESP_PARTITION_SUBTYPE_APP_OTA_0};
 esp_partition_t ota1{0x730000,0x750000,ESP_PARTITION_SUBTYPE_APP_OTA_1};
 const esp_partition_t *running=&ota1, *selected=&ota1;
 int begins=0, aborts=0, switches=0;
+bool writeOpen=false;
 enum class Response { Complete, Interrupted, BadHash, NoBoard, Oversized, BadImage };
 Response response=Response::Complete;
+Response activeResponse=Response::Complete;
+std::optional<Response> mirrorOverride;
+std::vector<std::string> downloads;
 const esp_partition_t* esp_ota_get_running_partition() { return running; }
 const esp_partition_t* esp_ota_get_boot_partition() { return selected; }
 const esp_partition_t* esp_ota_get_next_update_partition(void*) { return running==&ota1 ? &ota0 : &ota1; }
 int esp_ota_begin(const esp_partition_t* dest,size_t mode,esp_ota_handle_t*) {
-  assert(dest!=running && selected==running && mode==OTA_WITH_SEQUENTIAL_WRITES);
+  assert(!writeOpen && dest!=running && selected==running && mode==OTA_WITH_SEQUENTIAL_WRITES);
+  writeOpen=true;
   ++begins;
   return ESP_OK;
 }
-int esp_ota_write(esp_ota_handle_t,const uint8_t*,size_t) { return ESP_OK; }
-int esp_ota_end(esp_ota_handle_t) { return response==Response::BadImage ? -1 : ESP_OK; }
-void esp_ota_abort(esp_ota_handle_t) { ++aborts; }
-int esp_ota_set_boot_partition(const esp_partition_t* dest) { selected=dest; ++switches; return ESP_OK; }
+int esp_ota_write(esp_ota_handle_t,const uint8_t*,size_t) { assert(writeOpen); return ESP_OK; }
+int esp_ota_end(esp_ota_handle_t) {
+  assert(writeOpen);
+  writeOpen=false;
+  return activeResponse==Response::BadImage ? -1 : ESP_OK;
+}
+void esp_ota_abort(esp_ota_handle_t) { assert(writeOpen); writeOpen=false; ++aborts; }
+int esp_ota_set_boot_partition(const esp_partition_t* dest) {
+  assert(!writeOpen);
+  selected=dest;
+  ++switches;
+  return ESP_OK;
+}
 void esp_wifi_set_ps(int) {}
 struct mbedtls_sha256_context {};
 void mbedtls_sha256_init(mbedtls_sha256_context*) {}
 int mbedtls_sha256_starts(mbedtls_sha256_context*,int) { return 0; }
 int mbedtls_sha256_update(mbedtls_sha256_context*,const uint8_t*,size_t) { return 0; }
 int mbedtls_sha256_finish(mbedtls_sha256_context*,uint8_t* hash) {
-  std::fill_n(hash,32,response==Response::BadHash ? 0xbb : 0xaa);
+  std::fill_n(hash,32,activeResponse==Response::BadHash ? 0xbb : 0xaa);
   return 0;
 }
 void mbedtls_sha256_free(mbedtls_sha256_context*) {}
@@ -212,7 +230,7 @@ namespace board_tag {
 struct Scanner {
   void feed(const uint8_t*,size_t) {}
   bool mismatch() const { return false; }
-  bool matched() const { return response!=Response::NoBoard; }
+  bool matched() const { return activeResponse!=Response::NoBoard; }
   const char* foundName() const { return ""; }
 };
 }
@@ -225,7 +243,7 @@ std::string officialModel="xuesu-300-std";
 std::string officialUrl="/XueSu_300OTA/firmware10049.bin";
 std::string officialVersion="1.4.9";
 namespace HttpDownloader {
-template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink) {
+template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink,int timeout=0) {
   if (std::string_view(url)==xuesuManifestUrl) {
     const std::string json="{\"tag_name\":\""+manifestVersion+"\",\"assets\":[{\"name\":\"firmware.bin\","
       "\"size\":64,\"browser_download_url\":\""+assetUrl+"\"}]}";
@@ -237,12 +255,17 @@ template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink) {
       +officialUrl+"\"}}}";
     return sink(reinterpret_cast<const uint8_t*>(json.data()),json.size());
   }
-  assert(url==assetUrl || url==std::string(xuesuFactoryOrigin)+officialUrl);
+  const std::string mirror="https://gh-proxy.com/https://github.com/clown145/snowmux/releases/download/"
+                           "xuesu-v"+manifestVersion+"/xuesu-v"+manifestVersion+"-ota1.bin";
+  assert(url==mirror || url==assetUrl || url==std::string(xuesuFactoryOrigin)+officialUrl);
+  assert(timeout==(url==mirror ? 10000 : 0));
+  downloads.emplace_back(url);
+  activeResponse=url==mirror ? mirrorOverride.value_or(response) : response;
   std::array<uint8_t,65> image{};
   image[0]=0xe9;
   image[12]=9;
-  if (response==Response::Interrupted) { sink(image.data(),16); return false; }
-  return sink(image.data(),response==Response::Oversized ? 65 : 64);
+  if (activeResponse==Response::Interrupted) { sink(image.data(),16); return false; }
+  return sink(image.data(),activeResponse==Response::Oversized ? 65 : 64);
 }
 }
 '''
@@ -252,6 +275,7 @@ template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink) {
             'bool OtaUpdater::isUpdateNewer(',
             'const std::string& OtaUpdater::getLatestVersion(',
             'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(',
+            'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource(',
         ))
         program += r'''
 int main() {
@@ -260,15 +284,33 @@ int main() {
   assert(update.isUpdateNewer());
   for (auto mode : {Response::Interrupted, Response::BadHash, Response::NoBoard, Response::Oversized}) {
     response=mode;
+    downloads.clear();
     assert(update.installUpdate()!=OtaUpdater::OK);
     assert(selected==running && switches==0);
+    assert(downloads.size()==2 && downloads[0].starts_with("https://gh-proxy.com/") && downloads[1]==assetUrl);
   }
-  assert(aborts==4);
+  assert(aborts==8);
   response=Response::Complete;
-  assert(update.installUpdate()==OtaUpdater::OK && selected==&ota0 && switches==1);
-  assert(update.installUpdate()!=OtaUpdater::OK && begins==5);
+  mirrorOverride=Response::BadImage;
+  downloads.clear();
+  assert(update.installUpdate()==OtaUpdater::INTERNAL_UPDATE_ERROR && selected==running);
+  assert(downloads.size()==1 && downloads[0].starts_with("https://gh-proxy.com/"));
+  mirrorOverride=Response::Interrupted;
+  downloads.clear();
+  struct { OtaUpdater& updater; std::vector<size_t> bytes; } progress{update, {}};
+  const auto reportProgress=[](void* context) {
+    auto& state=*static_cast<decltype(progress)*>(context);
+    state.bytes.push_back(state.updater.getProcessedSize());
+  };
+  assert(update.installUpdate(reportProgress,&progress)==OtaUpdater::OK && selected==&ota0 && switches==1);
+  assert(downloads.size()==2 && downloads[1]==assetUrl && aborts==9);
+  assert((progress.bytes==std::vector<size_t>{16,0,64}));
+  assert(update.installUpdate()!=OtaUpdater::OK && begins==11);
   running=&ota0;
+  mirrorOverride.reset();
+  downloads.clear();
   assert(update.installUpdate()==OtaUpdater::OK && selected==&ota1 && switches==2);
+  assert(downloads.size()==1 && downloads[0].starts_with("https://gh-proxy.com/"));
   manifestVersion="0.1.0";
   assert(update.checkForUpdate(OtaUpdater::Channel::Stable)==OtaUpdater::OK && !update.isUpdateNewer());
   assetUrl="https://github.com/firmware.bin";
@@ -280,7 +322,9 @@ int main() {
   response=Response::BadImage;
   assert(update.installUpdate()!=OtaUpdater::OK && selected==running && switches==2);
   response=Response::NoBoard;
+  downloads.clear();
   assert(update.installUpdate()==OtaUpdater::OK && selected==&ota0 && switches==3);
+  assert(downloads.size()==1 && downloads[0]==std::string(xuesuFactoryOrigin)+officialUrl);
   officialVersion="1.5.0";
   officialUrl="/XueSu_300OTA/firmware10050.bin";
   assert(update.checkForUpdate(OtaUpdater::Channel::Factory)==OtaUpdater::OK);
@@ -314,6 +358,7 @@ int main() {
             method(sd, 'void SdFirmwareUpdateActivity::onConfirmationResult('),
             method(sd, 'void SdFirmwareUpdateActivity::performUpdate('),
             method(updater, 'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate('),
+            method(updater, 'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource('),
             'namespace firmware_flash {\n' + method(flasher, 'Result flashFromSdPath(') + '\n}',
         ))
         keys = sorted(set(re.findall(r'\bSTR_[A-Z_]+\b', production)))
@@ -582,6 +627,7 @@ struct OtaUpdater {
   size_t getTotalSize() const { assert(!inRender); return totalSize; }
   const std::string& getLatestVersion() const { static std::string version="next"; return version; }
   OtaUpdaterError installUpdate(ProgressCallback,void*);
+  OtaUpdaterError installUpdateFromSource(const char*,ProgressCallback,void*);
   OtaUpdaterError checkForUpdate(Channel);
 };
 struct OtaUpdateActivity : Activity {

@@ -68,6 +68,9 @@ static_assert(releaseUrlCapacity < 256);
 #if FREEINK_DEVICE_XUESU_300
 constexpr char xuesuManifestUrl[] = "https://clown145.github.io/snowmux/api/v1/firmware/latest.json";
 constexpr std::string_view xuesuImageBase = "https://clown145.github.io/snowmux/firmware/";
+constexpr char xuesuMirrorFormat[] =
+    "https://gh-proxy.com/https://github.com/clown145/snowmux/releases/download/xuesu-v%s/xuesu-v%s-ota1.bin";
+constexpr int xuesuMirrorTimeoutMs = 10'000;
 constexpr size_t xuesuSlotSize = 0x730000;
 constexpr size_t xuesuManifestLimit = 4096;
 using ImageHash = std::array<uint8_t, 32>;
@@ -327,6 +330,31 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return UPDATE_OLDER_ERROR;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  if (channel == Channel::Stable) {
+    char mirrorUrl[releaseUrlCapacity];
+    const int length =
+        snprintf(mirrorUrl, sizeof(mirrorUrl), xuesuMirrorFormat, latestVersion.c_str(), latestVersion.c_str());
+    if (length > 0 && static_cast<size_t>(length) < sizeof(mirrorUrl)) {
+      const auto result = installUpdateFromSource(mirrorUrl, onProgress, ctx);
+      if (result == OK) {
+        LOG_INF("OTA", "Xuesu update verified from gh-proxy.com");
+        return OK;
+      }
+      if (result != HTTP_ERROR && result != VERIFICATION_ERROR && result != WRONG_DEVICE_ERROR) return result;
+
+      // The mirror attempt has been aborted. Start a fresh write from the canonical Pages URL.
+      LOG_INF("OTA", "Xuesu mirror failed (%d), retrying from Pages", static_cast<int>(result));
+      processedSize = 0;
+      if (onProgress) onProgress(ctx);
+    }
+  }
+#endif
+  return installUpdateFromSource(nullptr, onProgress, ctx);
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource([[maybe_unused]] const char* mirrorUrl,
+                                                                ProgressCallback onProgress, void* ctx) {
   // esp_https_ota is hardwired to esp-tls/mbedTLS, whose precompiled build on this
   // package can't negotiate TLS 1.3 (see SecureClient.h). Drive the OTA partition
   // ourselves and stream the firmware through HttpDownloader, which runs over
@@ -434,7 +462,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return true;
   };
 #if FREEINK_DEVICE_XUESU_300
-  const bool fetchOk = verificationOk && HttpDownloader::fetchVerifiedHttps(otaUrl.c_str(), writeChunk);
+  const bool fetchOk =
+      verificationOk && HttpDownloader::fetchVerifiedHttps(mirrorUrl ? mirrorUrl : otaUrl.c_str(), writeChunk,
+                                                           mirrorUrl ? xuesuMirrorTimeoutMs : 0);
   ImageHash actualHash{};
   if (fetchOk) {
     verificationOk =

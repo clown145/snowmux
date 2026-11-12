@@ -4,6 +4,10 @@ import test from 'node:test';
 import { crc32 } from 'node:zlib';
 import {
   backupFlash,
+  downloadFirmware,
+  firmwarePath,
+  firmwareProxyUrl,
+  firmwareReleaseUrl,
   FLASH_SIZE,
   inspectDevice,
   installFirmware,
@@ -82,6 +86,28 @@ const manifest = {
   ],
 };
 const release = validateRelease(manifest);
+
+test('web flashing downloads the same versioned Release file offered by the proxy link', async () => {
+  assert.equal(firmwareReleaseUrl(release), 'https://github.com/test/snowmux/releases/download/xuesu-v0.1.0/xuesu-v0.1.0-ota1.bin');
+  const bytes = await downloadFirmware(release, async (url, { signal }) => {
+    assert.equal(url, `https://gh-proxy.com/${firmwareReleaseUrl(release)}`);
+    assert.ok(signal instanceof AbortSignal);
+    return new Response(image);
+  });
+  assert.deepEqual(Buffer.from(bytes), image);
+});
+
+test('web flashing retries from Pages if the proxy serves a corrupt image', async () => {
+  const corrupt = Buffer.from(image);
+  corrupt[35] ^= 0xff;
+  const urls = [];
+  const bytes = await downloadFirmware(release, async (url) => {
+    urls.push(url);
+    return new Response(url === firmwareProxyUrl(release) ? corrupt : image);
+  });
+  assert.deepEqual(urls, [firmwareProxyUrl(release), firmwarePath(release)]);
+  assert.deepEqual(Buffer.from(bytes), image);
+});
 
 function mockLoader({ bootData = selectors(), ota0App = 'stock', ota1App, failReadback = false } = {}) {
   const writes = [];

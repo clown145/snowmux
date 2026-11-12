@@ -64,6 +64,30 @@ export function firmwarePath(release) {
   return `./firmware/${release.sha256}.bin`;
 }
 
+export function firmwareReleaseUrl(release) {
+  return `https://github.com/${release.repository}/releases/download/${release.releaseTag}/${release.releaseTag}-ota1.bin`;
+}
+
+export function firmwareProxyUrl(release) {
+  return `https://gh-proxy.com/${firmwareReleaseUrl(release)}`;
+}
+
+export async function downloadFirmware(release, request = fetch) {
+  const download = async (url, options) => {
+    const response = await request(url, options);
+    if (!response.ok) throw new Error(`固件下载失败（HTTP ${response.status}）。`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    await validateFirmware(bytes, release);
+    return bytes;
+  };
+
+  try {
+    return await download(firmwareProxyUrl(release), { signal: AbortSignal.timeout(20_000) });
+  } catch {
+    return download(firmwarePath(release));
+  }
+}
+
 export async function validateFirmware(bytes, release) {
   const chip = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (

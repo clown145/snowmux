@@ -1,8 +1,6 @@
-name: Build Xuesu firmware and flasher
+name: Build Xuesu firmware
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -35,6 +33,7 @@ jobs:
         with:
           python-version: '3.14'
       - uses: actions/setup-node@v4
+        if: github.event_name != 'release'
         with:
           node-version: '24'
           cache: npm
@@ -61,6 +60,7 @@ jobs:
           restore-keys: |
             xuesu-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.PIOARDUINO_VERSION }}-${{ hashFiles('platformio.ini', 'scripts/patch_pioarduino_cache.py') }}-
       - name: Build and test the Web Serial flasher
+        if: github.event_name != 'release'
         working-directory: flasher
         run: |
           npm ci --no-audit --no-fund
@@ -86,22 +86,23 @@ jobs:
         run: |
           python -m unittest discover -v -s scripts/tests -p 'test_xuesu_*.py'
           python -m unittest -v test_xtc_reader test_airpage_display_retry test_web_source_parity \
-            test_builtin_font_shrink test_pioarduino_cache test_reading_ui_regressions test_ui_surface_sync
-      - name: Package the site, OTA1 app, and update manifest
+            test_builtin_font_shrink test_pioarduino_cache test_reading_ui_regressions test_ui_surface_sync \
+            test_firmware_update_refresh
+      - name: Package the OTA1 app and update manifest
         env:
           RELEASE_TAG: ${{ inputs.release_tag || 'xuesu-v0.0.0' }}
           PUBLISHED_AT: ${{ inputs.published_at }}
         run: |
-          python scripts/package_xuesu_pages.py --output flasher/dist \
+          python scripts/package_xuesu_pages.py --output firmware-artifact \
             --version "$RELEASE_TAG" --published-at "${PUBLISHED_AT:-$(date -u +%FT%TZ)}" \
             --commit "$(git rev-parse HEAD)" --repository "$GITHUB_REPOSITORY"
           python scripts/build_release_license.py --env xuesu_300 --repository "$GITHUB_REPOSITORY" \
-            --output flasher/dist/firmware/LICENSE.txt
-      - name: Upload the built site and firmware
+            --output firmware-artifact/firmware/LICENSE.txt
+      - name: Upload the verified firmware
         uses: actions/upload-artifact@v4
         with:
-          name: xuesu-site
-          path: flasher/dist
+          name: xuesu-firmware
+          path: firmware-artifact
           if-no-files-found: error
           overwrite: true
       - name: Save the Xuesu compilation cache from main

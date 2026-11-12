@@ -66,8 +66,8 @@ class HttpDownloader {
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
                        const std::string& password = "", const std::vector<Header>& headers = {});
 
-  // Stream a firmware response over verified HTTPS with redirects disabled.
-  static bool fetchVerifiedHttps(const char* url, const DataCallback& onData);
+  // Stream a firmware response over verified HTTPS with redirects disabled. Zero uses the standard timeout.
+  static bool fetchVerifiedHttps(const char* url, const DataCallback& onData, int timeoutMs = 0);
 
   /**
    * Authentication and response inspection options for fetchUrl/postForm.

@@ -18,7 +18,7 @@ PYTHONUTF8=1 pio run -e xuesu_300
 
 生成器校验原厂镜像的 SHA-256，并在 `.pio/xuesu-local-include/` 生成波形头文件。官网 1.3.3 镜像和参考设备的 OTA0 备份生成的头文件逐字节相同。原厂镜像、波形头文件、实机备份和编译产物都留在构建机的 `.pio/` 下。SDK 修改通过项目补丁随源码分发。
 
-雪酥 GitHub Actions 构建会跑刷机网页、雪酥主机、XTC/XTCH、AirPage、网页文件页、字库、阅读界面（含微信读书）和 SDK 缓存回归。PlatformIO 平台、工具和 `xuesu_300` 库依赖单独缓存。成功的 `main` 构建保存 `.cache/xuesu_300` 的编译对象，同工具链配置的后续构建和发版可以恢复。核对命中时同时看 Actions 的恢复日志和 `pio run` 的对象复用日志。
+雪酥 GitHub Actions 构建会跑刷机网页、雪酥主机、XTC/XTCH、AirPage、网页文件页、字库、阅读界面（含微信读书）和 SDK 缓存回归。PlatformIO 平台、工具和 `xuesu_300` 库依赖单独缓存。手动在 `main` 构建固件后，会保存 `.cache/xuesu_300` 的编译对象，同工具链配置的后续构建和发版可以恢复。核对命中时同时看 Actions 的恢复日志和 `pio run` 的对象复用日志。
 
 独立检出使用官网镜像和固定版本的 SDK 构建成功，应用镜像为 6,550,272 字节。esptool 校验了 ESP32-S3 镜像的校验和与哈希。该次构建复用了已安装的 PlatformIO 工具链，项目依赖重新安装。
 
@@ -45,8 +45,10 @@ PYTHONUTF8=1 pio run -e xuesu_300
 刷机站地址为 [clown145.github.io/snowmux](https://clown145.github.io/snowmux/)，使用 [GitHub Pages 的 GitHub Actions 发布来源](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)。其他项目仓库使用 `https://<owner>.github.io/<repo>/`，账号或组织站点仓库 `<owner>.github.io` 部署在同域名的根路径。
 
 1. 新仓库在 **Settings → Pages → Source** 选 **GitHub Actions**。如果 `github-pages` 环境限制部署来源，在该环境的部署规则中允许标签 `xuesu-v*`。
-2. [构建工作流](../../.github/workflows/xuesu-build.yml)在推送 `main` 或针对 `main` 提交 PR 时运行，也可手动运行。构建通过后可下载 `xuesu-site` 工件预览网页和固件。
-3. 在 **Releases** 发布形如 `xuesu-v0.1.1` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)复用构建流程，把社区版本号编入固件并校验芯片、板型标记、分区和镜像摘要，将应用镜像、SHA-256 校验文件与许可附到 Release，并同步部署网页和更新清单。[波形数据的许可说明](../../licenses/README.md#third-party-material)
+2. [固件构建工作流](../../.github/workflows/xuesu-build.yml)在针对 `main` 提交 PR 时运行，也可手动运行。通过后可下载 `xuesu-firmware` 工件。若要预览刷机页，先在 `flasher/` 构建网页，再将工件解压到 `flasher/dist/`。
+3. 在 **Releases** 发布形如 `xuesu-v0.1.1` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)只构建一次带版本号的固件，把校验过的镜像、SHA-256 文件和许可附到 Release，再用同一工件部署网页和更新清单。只改刷机页时，可从默认分支手动运行发版工作流。它从当前更新清单对应的 Release 下载镜像，校验 SHA-256 后重新部署网页。[波形数据的许可说明](../../licenses/README.md#third-party-material)
+
+刷机页提供 GitHub Release 附件的代理下载和直连入口。网页刷机先通过 `gh-proxy.com` 读取同一附件并核对 SHA-256，超时、下载失败或校验不符时改从 Pages 下载。
 
 电脑上的 Chrome 或 Edge 使用 Web Serial。安卓 Chrome 使用 WebUSB，通过 `web-serial-polyfill` 连接雪酥的 CDC 串口（`303A:1001`），无需依赖 Android 17 的有线 Web Serial。手机需要支持 USB 主机模式和数据传输。用安卓 Chrome 打开 HTTPS 刷机页，连接并唤醒雪酥，点「连接设备」并允许 USB 访问。若选择备份，等读取完成后点「下载 Flash 备份」，在下载列表确认文件已保存。iPhone 和 iPad 可下载固件。
 
@@ -77,7 +79,7 @@ PYTHONUTF8=1 pio run -e xuesu_300
 
 ### 设备内更新
 
-没有「检查更新」入口的旧版须先通过 USB 刷入支持设备内更新的版本。此后从「设置 → 系统 → 检查更新」连接 Wi-Fi，设备比较社区版本并直接从 SnowMux 刷机站下载。设备验证站点 TLS 证书，按 URL 中的 SHA-256 校验镜像，同时检查大小、ESP32-S3 芯片 ID 和雪酥板型标记。
+没有「检查更新」入口的旧版须先通过 USB 刷入支持设备内更新的版本。此后从「设置 → 系统 → 检查更新」连接 Wi-Fi，设备从 SnowMux 刷机站读取更新清单。支持加速的固件会直接通过 HTTPS 请求 `gh-proxy.com` 上的 GitHub Release 附件，无需为设备设置代理。连接、传输或校验失败时，设备从清单中的 Pages 地址重新开始写入。两条路径均验证 TLS 证书，并用清单 URL 中的 SHA-256、镜像大小、ESP32-S3 芯片 ID 和雪酥板型标记验证镜像。已有固件仍可用同一清单和 Pages 地址升级。
 
 更新器只写两个应用槽中空闲的一个，并在完整验证后切换启动槽。第一次从 OTA1 更新会覆盖 OTA0 中的原厂固件，确认框会标明写入目标。后续更新交替使用 OTA0 和 OTA1。下载中断时设备仍从当前槽启动，再试会重新下载。网页可识别两个槽中的雪酥版 SnowMux，连接后会显示本次写入的槽。
 

@@ -627,7 +627,8 @@ void OtaUpdateActivity::runUpdateInstall() {
                         static_cast<uint64_t>(std::min(self->progressBytes, self->progressTotalBytes)) * 100 /
                         self->progressTotalBytes)
                   : 0;
-          if (percent >= self->lastProgressRefreshPercent + PROGRESS_REFRESH_STEP_PERCENT ||
+          if (percent < self->lastProgressRefreshPercent ||
+              percent >= self->lastProgressRefreshPercent + PROGRESS_REFRESH_STEP_PERCENT ||
               (percent == 100 && self->lastProgressRefreshPercent != 100)) {
             self->lastProgressRefreshPercent = percent;
             refresh = true;

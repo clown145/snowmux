@@ -79,8 +79,11 @@ class OtaUpdater {
   OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr);
 #if FREEINK_DEVICE_XUESU_300
   bool targetsOta0() const;
+#endif
 
  private:
+  OtaUpdaterError installUpdateFromSource(const char* mirrorUrl, ProgressCallback onProgress, void* ctx);
+#if FREEINK_DEVICE_XUESU_300
   OtaUpdaterError checkFactoryRelease();
 #endif
 };

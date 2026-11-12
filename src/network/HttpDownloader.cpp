@@ -153,7 +153,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
 }
 
 #if FREEINK_DEVICE_XUESU_300
-bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onData) {
+bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onData, const int timeoutMs) {
   if (!std::string_view(url).starts_with("https://") || !hasMemoryForTls()) return false;
 
   // Reuse a single 1 KiB buffer for the transfer without growing the activity stack.
@@ -167,7 +167,7 @@ bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onD
   WifiPowerSaveGuard psGuard;
   esp_http_client_config_t config{};
   config.url = url;
-  config.timeout_ms = HTTP_TIMEOUT_MS;
+  config.timeout_ms = timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS;
   config.disable_auto_redirect = true;
   config.crt_bundle_attach = esp_crt_bundle_attach;
   config.buffer_size = bufferSize;
