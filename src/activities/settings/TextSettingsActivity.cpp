@@ -39,6 +39,14 @@ namespace {
 // Tab labels for Font | Size | Layout | Style.
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
+#if FREEINK_DEVICE_XUESU_300
+constexpr auto READER_TEXT_AA = &CrossPointSettings::grayReadingText;
+constexpr auto READER_TEXT_AA_LABEL = StrId::STR_GRAY_READING_TEXT;
+#else
+constexpr auto READER_TEXT_AA = &CrossPointSettings::textAntiAliasing;
+constexpr auto READER_TEXT_AA_LABEL = StrId::STR_TEXT_AA_NO_PREVIEW;
+#endif
+
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
     StrId::STR_LINE_SPACING,  StrId::STR_WORD_SPACING,      StrId::STR_CHARACTER_SPACING,
     StrId::STR_EXTRA_SPACING, StrId::STR_FIRST_LINE_INDENT, StrId::STR_PARAGRAPH_INDENTATION,
@@ -50,7 +58,7 @@ constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING,
                                         StrId::STR_HYPHENATION_NO_PREVIEW,
                                         StrId::STR_EMBEDDED_STYLE_NO_PREVIEW,
                                         StrId::STR_FAKE_BOLD,
-                                        StrId::STR_TEXT_AA_NO_PREVIEW};
+                                        READER_TEXT_AA_LABEL};
 
 constexpr StrId FIRST_LINE_INDENT_IDS[] = {StrId::STR_FIRST_LINE_INDENT_AUTO, StrId::STR_FIRST_LINE_INDENT_INDENT,
                                            StrId::STR_FIRST_LINE_INDENT_NO_INDENT};
@@ -409,7 +417,7 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
           GUI.setCheckboxRow(rowItems_[i], SETTINGS.embeddedStyle);
           break;
         case StyleRow::AntiAliasing:
-          GUI.setCheckboxRow(rowItems_[i], SETTINGS.textAntiAliasing);
+          GUI.setCheckboxRow(rowItems_[i], SETTINGS.*READER_TEXT_AA);
           break;
         default:
           break;
@@ -793,7 +801,7 @@ void TextSettingsActivity::confirmStyleRow(int row) {
       requestUpdate();
       return;
     case StyleRow::AntiAliasing:
-      SETTINGS.textAntiAliasing = !SETTINGS.textAntiAliasing;
+      SETTINGS.*READER_TEXT_AA = !(SETTINGS.*READER_TEXT_AA);
       break;
 
     default:
@@ -825,7 +833,7 @@ std::string TextSettingsActivity::styleValueText(int row) const {
       return value < std::size(SYNTHETIC_BOLD_IDS) ? I18N.get(SYNTHETIC_BOLD_IDS[value]) : tr(STR_STATE_OFF);
     }
     case StyleRow::AntiAliasing:
-      return SETTINGS.textAntiAliasing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+      return (SETTINGS.*READER_TEXT_AA) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
 
     default:
       return "";
@@ -1083,7 +1091,5 @@ TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(int visibleIndex
 }
 
 int TextSettingsActivity::styleRowCount() const {
-  // Anti-aliasing is the last style row and requires a grayscale panel path.
-  const int supportedCount = static_cast<int>(StyleRow::Count) - FREEINK_DEVICE_XUESU_300;
-  return supportedCount - (SETTINGS.readingGuideLineEnabled ? 0 : HIDDEN_GUIDE_ROW_COUNT);
+  return static_cast<int>(StyleRow::Count) - (SETTINGS.readingGuideLineEnabled ? 0 : HIDDEN_GUIDE_ROW_COUNT);
 }

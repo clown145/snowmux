@@ -2959,9 +2959,10 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback, Display
 }
 
 bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback,
-                                       AbsoluteGrayText text) const {
+                                       AbsoluteGrayText text, DisplayRefreshContext context) const {
   absoluteGrayPlanes = false;
-  if (!display.displayGrayscaleBase(mode, nextRefreshOverridePending ? nextRefreshOverride : fallback, fadingFix))
+  if (!display.displayGrayscaleBase(mode, nextRefreshOverridePending ? nextRefreshOverride : fallback, fadingFix,
+                                    context))
     return false;
   nextRefreshOverridePending = false;
   absoluteGrayPlanes = mode != HalDisplay::GrayscaleMode::Overlay;

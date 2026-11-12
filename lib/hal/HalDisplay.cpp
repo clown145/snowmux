@@ -159,9 +159,23 @@ uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisp
 
 void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); }
 
-bool HalDisplay::displayGrayscaleBase(GrayscaleMode mode, RefreshMode fallback, bool turnOffScreen) {
+#if FREEINK_DEVICE_XUESU_300
+namespace freeink {
+void useXuesu300DifferentialGray();
+}
+#endif
+
+bool HalDisplay::displayGrayscaleBase(GrayscaleMode mode, RefreshMode fallback, bool turnOffScreen,
+                                      DisplayRefreshContext context) {
   if (gpio.deviceIsX3() && fallback == HALF_REFRESH) einkDisplay.requestResync();
-  return einkDisplay.displayGrayscaleBase(mode, static_cast<EInkDisplay::RefreshMode>(fallback), turnOffScreen);
+  const bool started = einkDisplay.displayGrayscaleBase(mode, convertRefreshMode(fallback), turnOffScreen,
+                                                        convertRefreshContext(context));
+#if FREEINK_DEVICE_XUESU_300
+  if (started && mode == GrayscaleMode::Absolute && context == DisplayRefreshContext::TextOnlyAntiAliasing) {
+    freeink::useXuesu300DifferentialGray();
+  }
+#endif
+  return started;
 }
 
 void HalDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {

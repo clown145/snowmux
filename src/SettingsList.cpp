@@ -170,7 +170,11 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
   emit(SettingInfo::Value(StrId::STR_PARAGRAPH_INDENTATION, &CrossPointSettings::paragraphIndentSpaces, {0, 5, 1},
                           "paragraphIndentSpaces", StrId::STR_CAT_READER)
            .withTextSettings());
-#if !FREEINK_DEVICE_XUESU_300
+#if FREEINK_DEVICE_XUESU_300
+  emit(SettingInfo::Toggle(StrId::STR_GRAY_READING_TEXT, &CrossPointSettings::grayReadingText, "grayReadingText",
+                           StrId::STR_CAT_READER)
+           .withTextSettings());
+#else
   emit(SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
                            StrId::STR_CAT_READER)
            .withTextSettings());

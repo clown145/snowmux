@@ -2987,16 +2987,26 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool absoluteSupported =
       !renderer.isInverted() && renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
   const bool absoluteOnly = absoluteSupported && !overlayGrayscale;
+#if FREEINK_DEVICE_XUESU_300
+  const bool absoluteTextGrayscale = absoluteOnly && SETTINGS.grayReadingText;
+#else
+  constexpr bool absoluteTextGrayscale = false;
+#endif
   const bool absoluteImageGrayscale =
       pageHasImages && absoluteSupported &&
       ((absoluteOnly && !SETTINGS.readingBackgroundEnabled) ||
        (overlayGrayscale && !gpio.deviceIsX3() && display.getController() == HalDisplay::Controller::UC8279));
+  const bool absoluteGrayscale = absoluteTextGrayscale || absoluteImageGrayscale;
   // Keep a dithered B/W proxy on absolute-only panels for menus and failed uploads.
   struct DitherScope {
     GfxRenderer& renderer;
     bool previous;
-    ~DitherScope() { renderer.setDitherImagesInBw(previous); }
-  } ditherScope{renderer, renderer.imagesDitheredInBw()};
+    bool previousGray;
+    ~DitherScope() {
+      renderer.setDitherImagesInBw(previous);
+      renderer.setDitherImagesInGray(previousGray);
+    }
+  } ditherScope{renderer, renderer.imagesDitheredInBw(), renderer.imagesDitheredInGray()};
   renderer.setDitherImagesInBw(!imageGrayscale || !overlayGrayscale);
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   if (pageHasImagesNeedingDecode) {
@@ -3070,10 +3080,10 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool use16LevelText = needsTextGrayscale && !pageHasImages && renderer.getGrayscaleLevels() == 16 &&
                               sdFontSystem.readerFaceIsFourBit() && !SETTINGS.readingBackgroundEnabled &&
                               SETTINGS.fakeBold == 0;
-  const bool needsAnyGrayscale = absoluteImageGrayscale || needsTextGrayscale ||
+  const bool needsAnyGrayscale = absoluteGrayscale || needsTextGrayscale ||
                                  (overlayGrayscale && pageHasImages && !renderer.grayscaleReplacesFrame());
-  const auto grayscale = renderer.grayscaleCapabilities(absoluteImageGrayscale ? HalDisplay::GrayscaleMode::Absolute
-                                                                               : HalDisplay::GrayscaleMode::Overlay);
+  const auto grayscale = renderer.grayscaleCapabilities(absoluteGrayscale ? HalDisplay::GrayscaleMode::Absolute
+                                                                          : HalDisplay::GrayscaleMode::Overlay);
   const bool tiledGrayscale = needsAnyGrayscale && grayscale.stripUploads;
   // Combined text AA: defer the B/W base activation so
   // the gray planes join it in a single waveform. Displaying the base
@@ -3107,13 +3117,13 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   };
   auto renderGrayscalePass = [&]() {
     // A4 gray planes replace the full page, including its clipping highlights.
-    if (absoluteImageGrayscale || needsTextGrayscale) {
+    if (absoluteGrayscale || needsTextGrayscale) {
       renderPageWithGuideLines();
     } else {
       drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
       page->renderImages(renderer, fontId, orientedMarginLeft, orientedMarginTop);
     }
-    if (absoluteImageGrayscale || renderer.grayscaleReplacesFrame()) renderStatusBar();
+    if (absoluteGrayscale || renderer.grayscaleReplacesFrame()) renderStatusBar();
   };
 
   if (SETTINGS.readingBackgroundEnabled && !readingBackground::load(renderer)) renderer.clearScreen();
@@ -3151,16 +3161,25 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     return finish();
   }
 
-  if (absoluteImageGrayscale) {
-    const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
-    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, baseMode)) {
-      LOG_ERR("ERS", "Could not start absolute image page; displaying B/W");
+  if (absoluteGrayscale) {
+    if (absoluteTextGrayscale && manualRefreshPending) pagesUntilFullRefresh = 1;
+    const auto baseMode = absoluteTextGrayscale
+                              ? ReaderUtils::consumeRefreshMode(pagesUntilFullRefresh)
+                              : (cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+    const auto text =
+        absoluteTextGrayscale ? GfxRenderer::AbsoluteGrayText::Antialiased : GfxRenderer::AbsoluteGrayText::Monochrome;
+    const auto context =
+        absoluteTextGrayscale ? DisplayRefreshContext::TextOnlyAntiAliasing : DisplayRefreshContext::Normal;
+    if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, baseMode, text, context)) {
+      LOG_ERR("ERS", "Could not start absolute grayscale page; displaying B/W");
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
       renderer.restoreBwBuffer(false);
       return finish();
     }
-    LOG_DBG("ERS", "Image page: absolute grayscale waveform");
-    pagesUntilFullRefresh = 1;
+    if (!absoluteTextGrayscale) {
+      LOG_DBG("ERS", "Image page: absolute grayscale waveform");
+      pagesUntilFullRefresh = 1;
+    }
   } else if (use16LevelText) {
     // 16 级文字：下面那一趟 commitGrayscale16() 自己把整帧推给面板，所以这里**不**推底图。
     // 多推一次会变成两次面板驱动（更闪、更慢），而 16 级用的本身就是整屏波形，残影照清。
@@ -3373,6 +3392,7 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       }
     }
   } else if (needsAnyGrayscale) {
+    renderer.setDitherImagesInGray(absoluteTextGrayscale && !imageGrayscale);
     const bool displayed = renderWholePlaneGrayscale([&](const bool lsb) {
 #if FREEINK_DEVICE_READPICO
       if (pageCacheHit) {
@@ -3384,9 +3404,10 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       (void)lsb;
 #endif
       renderer.clearScreen(renderer.grayPlanesAreAbsolute() ? 0xFF : 0x00);
+      if (absoluteTextGrayscale && SETTINGS.readingBackgroundEnabled) readingBackground::load(renderer);
       renderGrayscalePass();
     });
-    if (!displayed && absoluteOnly && absoluteImageGrayscale && !activityManager.isSwitchPending()) {
+    if (!displayed && absoluteOnly && absoluteGrayscale && !activityManager.isSwitchPending()) {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       return finish();
     }

@@ -19,6 +19,12 @@ constexpr uint16_t kHeight = xuesu300::panelHeight;
 constexpr size_t kPlaneBytes = kWidthBytes * kHeight;
 using Waveform = uint8_t[5][42];
 enum class GrayPass { Main, DarkAdjustment };
+enum class GrayUpdate { Absolute, Differential };
+
+uint8_t changedGrayPixels(const uint8_t* previous, size_t index, uint8_t low, uint8_t high) {
+  if (!previous) return ~(low & high);  // Compare against the white page established by the clean refresh.
+  return (low ^ previous[index]) | (high ^ previous[kPlaneBytes + index]);
+}
 
 uint8_t reverseBits(uint8_t value) {
   value = ((value & 0x55) << 1) | ((value & 0xaa) >> 1);
@@ -93,7 +99,7 @@ class Xuesu300PanelDriver final : public PanelDriver {
   BusyPolarity busyPolarity() const override { return BusyPolarity::UcIdleHigh; }
   PanelGeometry geometry() const override { return {xuesu300::panelWidth, kHeight, kWidthBytes, kPlaneBytes}; }
   void begin(EpdBus&) override {
-    grayPlanes.reset();
+    clearGrayHistory();
     optical = OpticalState::Unknown;
     committed = false;
   }
@@ -103,13 +109,14 @@ class Xuesu300PanelDriver final : public PanelDriver {
   OpticalState opticalState() const override { return optical; }
 
   void seedBaseline(const uint8_t* framebuffer) {
+    clearGrayHistory();
     std::memcpy(previous.data(), framebuffer, previous.size());
     optical = OpticalState::Bw;
     committed = true;
   }
 
   void display(EpdBus& bus, const uint8_t* framebuffer, const uint8_t*, RefreshMode mode, bool) override {
-    grayPlanes.reset();
+    clearGrayHistory();
     refreshBw(bus, framebuffer, mode);
   }
 
@@ -120,11 +127,12 @@ class Xuesu300PanelDriver final : public PanelDriver {
 
   void beginGrayscale(EpdBus& bus, const uint8_t* framebuffer, GrayscaleMode mode, RefreshMode fallback,
                       bool) override {
-    grayPlanes.reset();
+    grayUpdate = GrayUpdate::Absolute;
     committed = false;
     lsbReady = msbReady = false;
     cleanBeforeGray = fallback != RefreshMode::Fast;
     if (mode != GrayscaleMode::Absolute) return;
+    if (grayPlanes) return;
     // The two selector planes are reused for both stock passes. Only 50 bytes
     // at a time are sent to SPI, so the full staging buffer can live in PSRAM.
     if (memory::psramHasHeadroom(2 * kPlaneBytes, 2 * kPlaneBytes, 0)) {
@@ -132,10 +140,13 @@ class Xuesu300PanelDriver final : public PanelDriver {
     }
     if (!grayPlanes) {
       LOG_ERR("UC8276C", "OOM: grayscale selectors (%zu bytes)", 2 * kPlaneBytes);
+      previousGray.reset();
       // The B/W proxy is still intact here. Later uploads reuse that buffer.
       if (framebuffer) refreshBw(bus, framebuffer, fallback);
     }
   }
+
+  void useDifferentialGray() { grayUpdate = GrayUpdate::Differential; }
 
   void copyGrayscaleLsb(EpdBus&, const uint8_t* lsb) override {
     if (!grayPlanes || !lsb) return;
@@ -150,31 +161,82 @@ class Xuesu300PanelDriver final : public PanelDriver {
   }
 
   void displayGray(EpdBus& bus, const uint8_t*, bool, const uint8_t*, bool) override {
-    auto planes = std::move(grayPlanes);
-    if (!planes || !lsbReady || !msbReady) return;
+    if (!grayPlanes || !lsbReady || !msbReady) return;
+    if (grayUpdate == GrayUpdate::Differential) {
+      displayDifferentialGray(bus);
+      return;
+    }
+    previousGray.reset();
+    const auto planes = std::move(grayPlanes);
 
     // The stock first pass can leave unchanged white pixels alone. Start
     // from known white so that is also correct after a gray page or a menu.
-    const bool alreadyWhite = optical == OpticalState::Bw &&
-                              std::all_of(previous.begin(), previous.end(), [](uint8_t byte) { return byte == 0xff; });
-    if ((cleanBeforeGray || !alreadyWhite) && !refreshBw(bus, nullptr, RefreshMode::Full)) return;
+    if (!establishWhite(bus)) return;
 
     committed = false;
     optical = OpticalState::Unknown;
     const auto* lsb = planes.get();
     const auto* msb = lsb + kPlaneBytes;
-    if (!refreshGray(bus, lsb, msb, GrayPass::Main)) return;
+    if (!refreshGray(bus, lsb, msb, GrayPass::Main, GrayUpdate::Absolute, nullptr)) return;
     const bool needsDarkPass =
         !std::equal(lsb, lsb + kPlaneBytes, msb, [](uint8_t low, uint8_t high) { return (low & ~high) == 0; });
-    if (needsDarkPass && !refreshGray(bus, lsb, msb, GrayPass::DarkAdjustment)) return;
+    if (needsDarkPass && !refreshGray(bus, lsb, msb, GrayPass::DarkAdjustment, GrayUpdate::Absolute, nullptr)) return;
 
     optical = OpticalState::Gray;
     committed = true;
   }
 
-  void cleanupGrayscaleBuffers(EpdBus&, const uint8_t*) override { grayPlanes.reset(); }
+  void cleanupGrayscaleBuffers(EpdBus&, const uint8_t* bw) override {
+    lsbReady = msbReady = false;
+    if (!bw || optical != OpticalState::Gray || !previousGray) clearGrayHistory();
+  }
 
  private:
+  void clearGrayHistory() {
+    grayPlanes.reset();
+    previousGray.reset();
+    lsbReady = msbReady = false;
+  }
+
+  bool establishWhite(EpdBus& bus) {
+    const bool alreadyWhite = optical == OpticalState::Bw &&
+                              std::all_of(previous.begin(), previous.end(), [](uint8_t byte) { return byte == 0xff; });
+    return (!cleanBeforeGray && alreadyWhite) || refreshBw(bus, nullptr, RefreshMode::Full);
+  }
+
+  void displayDifferentialGray(EpdBus& bus) {
+    const uint8_t* baseline = nullptr;
+    if (!cleanBeforeGray && optical == OpticalState::Gray && previousGray) {
+      baseline = previousGray.get();
+    } else if (!establishWhite(bus)) {
+      return;
+    }
+
+    const auto* lsb = grayPlanes.get();
+    const auto* msb = lsb + kPlaneBytes;
+    bool changed = false;
+    bool needsDarkPass = false;
+    for (size_t index = 0; index < kPlaneBytes; ++index) {
+      const uint8_t delta = changedGrayPixels(baseline, index, lsb[index], msb[index]);
+      changed |= delta != 0;
+      needsDarkPass |= (delta & lsb[index] & ~msb[index]) != 0;
+    }
+
+    if (changed) {
+      committed = false;
+      optical = OpticalState::Unknown;
+      if (!refreshGray(bus, lsb, msb, GrayPass::Main, GrayUpdate::Differential, baseline)) return;
+      if (needsDarkPass && !refreshGray(bus, lsb, msb, GrayPass::DarkAdjustment, GrayUpdate::Differential, baseline)) {
+        return;
+      }
+    }
+
+    // Rotate the staged and committed 30 KB PSRAM buffers to reuse both across page turns.
+    previousGray.swap(grayPlanes);
+    optical = OpticalState::Gray;
+    committed = true;
+  }
+
   bool refreshBw(EpdBus& bus, const uint8_t* framebuffer, RefreshMode mode) {
     const bool previousKnown = optical == OpticalState::Bw;
     // A gray image is not an eligible differential baseline.
@@ -207,7 +269,8 @@ class Xuesu300PanelDriver final : public PanelDriver {
     return true;
   }
 
-  static bool refreshGray(EpdBus& bus, const uint8_t* lsb, const uint8_t* msb, GrayPass pass) {
+  static bool refreshGray(EpdBus& bus, const uint8_t* lsb, const uint8_t* msb, GrayPass pass, GrayUpdate update,
+                          const uint8_t* baseline) {
     const bool darkPass = pass == GrayPass::DarkAdjustment;
     if (!preparePanel(bus, darkPass ? stockGraySecondLut : stockGrayFirstLut)) return false;
     for (const uint8_t command : {0x10, 0x13}) {
@@ -219,13 +282,24 @@ class Xuesu300PanelDriver final : public PanelDriver {
           const size_t index = offset - 1 - i;
           const uint8_t low = lsb[index];
           const uint8_t high = msb[index];
-          // Stock selector encoder at 0x4215C91C, starting from white.
-          // Main: white=11, light=00, dark/black=10. Follow-up: dark=00, rest=11.
-          const uint8_t bits = darkPass ? ~(low & ~high) : (command == 0x10 ? low | ~high : low & high);
+          uint8_t bits;
+          if (update == GrayUpdate::Differential) {
+            // Stock 1.3.3 displayGrayDiff encoder at 0x4215A2FC. Main writes
+            // white=01, light=00, black=10, and leaves dark/unchanged at 11.
+            // The second pass selects only changed pixels that end at dark.
+            const uint8_t changed = changedGrayPixels(baseline, index, low, high);
+            bits = darkPass ? ~(changed & low & ~high) : ~(changed & (command == 0x10 ? high : ~low));
+          } else {
+            // The absolute encoder starts from white and primes dark pixels in the main pass.
+            bits = darkPass ? ~(low & ~high) : (command == 0x10 ? low | ~high : low & high);
+          }
           row[i] = reverseBits(bits);
         }
         transaction.writeBytes(row.data(), row.size());
       }
+    }
+    if (update == GrayUpdate::Differential) {
+      return activatePanel(bus, darkPass ? "gray differential dark" : "gray differential");
     }
     return activatePanel(bus, darkPass ? "gray dark adjustment" : "gray main");
   }
@@ -233,7 +307,9 @@ class Xuesu300PanelDriver final : public PanelDriver {
   // Single-buffer mode needs a retained OLD plane across the panel's hardware reset.
   std::array<uint8_t, kPlaneBytes> previous;
   memory::ByteBuffer grayPlanes;
+  memory::ByteBuffer previousGray;
   OpticalState optical = OpticalState::Unknown;
+  GrayUpdate grayUpdate = GrayUpdate::Absolute;
   bool committed = false;
   bool lsbReady = false;
   bool msbReady = false;
@@ -248,6 +324,8 @@ Xuesu300PanelDriver& driverInstance() {
 }  // namespace
 
 PanelDriver& xuesu300PanelDriver() { return driverInstance(); }
+
+void useXuesu300DifferentialGray() { driverInstance().useDifferentialGray(); }
 
 void seedXuesu300PanelBaseline(const uint8_t* framebuffer) { driverInstance().seedBaseline(framebuffer); }
 

@@ -454,6 +454,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t characterSpacing = CHARACTER_SPACING_OFFSET;
   int8_t getCharacterSpacing() const { return static_cast<int8_t>(characterSpacing - CHARACTER_SPACING_OFFSET); }
   uint8_t textAntiAliasing = 1;
+#if FREEINK_DEVICE_XUESU_300
+  uint8_t grayReadingText = 0;
+#endif
   uint8_t fakeBold = SYNTHETIC_BOLD_STANDARD;
   uint8_t readingBackgroundEnabled = 0;
   uint8_t readingGuideLineEnabled = 0;

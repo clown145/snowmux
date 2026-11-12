@@ -82,6 +82,7 @@ class GfxRenderer {
   mutable bool absoluteGrayPlanes = false;
   mutable AbsoluteGrayText absoluteGrayText = AbsoluteGrayText::Monochrome;
   bool ditherImagesInBw = false;
+  bool ditherImagesInGray = false;
   Orientation orientation;
   // The loop updates this flag while the render task reads refresh policy.
   std::atomic<bool> fadingFix;
@@ -495,7 +496,8 @@ class GfxRenderer {
   void displayGrayscaleBase(HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH,
                             DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
   bool displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH,
-                            AbsoluteGrayText text = AbsoluteGrayText::Monochrome) const;
+                            AbsoluteGrayText text = AbsoluteGrayText::Monochrome,
+                            DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
@@ -509,6 +511,9 @@ class GfxRenderer {
   // because overlay gray planes expect every gray pixel black in the base.
   void setDitherImagesInBw(bool enabled) { ditherImagesInBw = enabled; }
   bool imagesDitheredInBw() const { return ditherImagesInBw; }
+  // Preserve the reader's B/W image preference while drawing absolute text planes.
+  void setDitherImagesInGray(bool enabled) { ditherImagesInGray = enabled; }
+  bool imagesDitheredInGray() const { return ditherImagesInGray; }
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

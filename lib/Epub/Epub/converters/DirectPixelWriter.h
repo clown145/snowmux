@@ -20,6 +20,7 @@ struct DirectPixelWriter {
   GfxRenderer::RenderMode mode;
   bool absolute = false;
   bool ditherBw = false;       // Dither in B/W and omit images from text-only grayscale overlays.
+  bool ditherGray = false;     // Write monochrome images to both absolute planes.
   uint16_t displayWidthBytes;  // Runtime framebuffer stride (X4: 100, X3: 99)
   // Active write target: for tiled grayscale, fb is the band scratch, originY is
   // the band's top physical row, and clipRows is the band height. Off-band
@@ -46,6 +47,7 @@ struct DirectPixelWriter {
     mode = renderer.getRenderMode();
     absolute = renderer.grayPlanesAreAbsolute();
     ditherBw = renderer.imagesDitheredInBw();
+    ditherGray = absolute && renderer.imagesDitheredInGray();
     displayWidthBytes = renderer.getDisplayWidthBytes();
 
     const int phyW = renderer.getDisplayWidth();
@@ -154,7 +156,9 @@ struct DirectPixelWriter {
   inline void writePixel(int logicalX, uint8_t pixelValue, bool writeWhiteInBw = false) const {
     auto pixel = GfxRenderer::mapTwoBitPixel(mode, pixelValue, absolute);
     // An absolute pass carries the full image even when its B/W fallback is dithered.
-    if (ditherBw && !absolute) {
+    if (ditherGray) {
+      pixel = {true, GfxRenderer::ditherTwoBitPixel(pixelValue, logicalX, rowLogicalY)};
+    } else if (ditherBw && !absolute) {
       if (mode != GfxRenderer::BW) return;
       const bool black = GfxRenderer::ditherTwoBitPixel(pixelValue, logicalX, rowLogicalY);
       pixel = {writeWhiteInBw || black, black};

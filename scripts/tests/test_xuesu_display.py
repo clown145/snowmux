@@ -85,7 +85,10 @@ inline constexpr uint8_t stockGraySecondLut[5][42]{{44}};
 #include <cassert>
 #include <vector>
 
-namespace freeink { PanelDriver& xuesu300PanelDriver(); }
+namespace freeink {
+PanelDriver& xuesu300PanelDriver();
+void useXuesu300DifferentialGray();
+}
 using namespace freeink;
 
 struct Command { uint8_t code; std::vector<uint8_t> bytes; };
@@ -203,6 +206,79 @@ int main() {
   white[0] = 0xfe;
   driver.display(bus, white.data(), nullptr, RefreshMode::Fast, false);
   assert(driver.displayCommitted() && payloads(0x20)[0][0] == 22);
+
+  const auto differential = [&](RefreshMode fallback = RefreshMode::Fast) {
+    driver.beginGrayscale(bus, white.data(), GrayscaleMode::Absolute, fallback, false);
+    useXuesu300DifferentialGray();
+    driver.copyGrayscaleLsb(bus, lsb.data());
+    driver.copyGrayscaleMsb(bus, msb.data());
+    driver.displayGray(bus, white.data(), false, nullptr, true);
+    driver.cleanupGrayscaleBuffers(bus, white.data());
+  };
+  const auto setLevels = [&](bool previousPage) {
+    lsb.fill(0xff);
+    msb.fill(0xff);
+    for (int pixel = 0; pixel < 16; ++pixel) {
+      const int level = previousPage ? pixel / 4 : pixel % 4;
+      const auto index = lsb.size() - 1 - pixel / 8;
+      const auto bit = static_cast<uint8_t>(1u << (pixel % 8));
+      if (!(level & 1)) lsb[index] &= ~bit;
+      if (!(level & 2)) msb[index] &= ~bit;
+    }
+  };
+
+  trace.clear();
+  setLevels(true);
+  differential();
+  assert(driver.displayCommitted() && payloads(0x20).size() == 3 && payloads(0x20)[0][0] == 11);
+  trace.clear();
+  differential();
+  assert(driver.displayCommitted() && trace.empty());
+
+  // Check all sixteen old-to-new pixel transitions in wire order.
+  setLevels(false);
+  differential();
+  assert(driver.displayCommitted());
+  const auto diffLuts = payloads(0x20);
+  const auto diffOld = payloads(0x10);
+  const auto diffNext = payloads(0x13);
+  assert(diffLuts.size() == 2 && diffLuts[0][0] == 33 && diffLuts[1][0] == 44);
+  for (int pixel = 0; pixel < 16; ++pixel) {
+    const int from = pixel / 4, to = pixel % 4;
+    constexpr int mainCodes[] = {2, 3, 0, 1};
+    const int mainCode = from == to ? 3 : mainCodes[to];
+    const int darkCode = from != to && to == 1 ? 0 : 3;
+    const int shift = 7 - pixel % 8;
+    const int byte = pixel / 8;
+    assert(((diffOld[0][byte] >> shift) & 1) == (mainCode >> 1));
+    assert(((diffNext[0][byte] >> shift) & 1) == (mainCode & 1));
+    assert(((diffOld[1][byte] >> shift) & 1) == (darkCode >> 1));
+    assert(((diffNext[1][byte] >> shift) & 1) == (darkCode & 1));
+  }
+  assert(diffOld[0][2] == 0xff && diffNext[1].back() == 0xff);
+
+  trace.clear();
+  differential(RefreshMode::Half);
+  assert(driver.displayCommitted() && payloads(0x20).size() == 3 && payloads(0x20)[0][0] == 11);
+
+  trace.clear();
+  lsb.fill(0xff);
+  msb.fill(0xff);
+  differential();
+  assert(driver.displayCommitted() && payloads(0x20).size() == 1 && payloads(0x20)[0][0] == 33);
+
+  trace.clear();
+  setLevels(true);
+  holdBusyAt = activations + 2;
+  differential();
+  assert(!driver.displayCommitted() && driver.opticalState() == OpticalState::Unknown);
+  trace.clear();
+  differential();
+  assert(driver.displayCommitted() && payloads(0x20).size() == 3 && payloads(0x20)[0][0] == 11);
+
+  trace.clear();
+  driver.display(bus, white.data(), nullptr, RefreshMode::Fast, false);
+  assert(driver.opticalState() == OpticalState::Bw && payloads(0x20)[0][0] == 11);
 }
 ''', include_dirs=(fake, ROOT / 'include', ROOT / 'lib/Memory'),
                     system_include_dirs=(display / 'include', display / 'src/driver'),
