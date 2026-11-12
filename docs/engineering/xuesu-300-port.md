@@ -55,6 +55,8 @@ PYTHONUTF8=1 pio run -e xuesu_300
 
 用模拟 WebUSB 接口桥接 COM12，验证了安卓路径的机型检查、完整 16 MiB Flash 读取和重启。该轮未写入 Flash。模拟页面另验证了首次安装的备份下载步骤，以及下载固件时拔线会阻止写入。安卓 Chrome 的授权和 USB 传输仍需手机实测。
 
+雪酥启动时若无法读取 SD 卡，会显示插卡提示。插好卡后，长按确认键至少 3 秒并松开，设备会重启并重新挂载 SD 卡。验收时先无卡启动，检查短按不会重启，再插卡并长按，确认进入首页。开机时已经按住的确认键须先松开，再重新长按。
+
 本地预览从 `flasher/` 运行 `npm ci`、`npm test`、`npm run build` 和 `python -m http.server 8765 --directory dist`，然后打开 `http://localhost:8765/`。需要打包固件时，用 `XUESU_RELEASE_TAG=xuesu-v0.1.1 pio run -e xuesu_300` 构建测试版本，再以相同标签运行 `python scripts/package_xuesu_pages.py`，具体参数见 `--help`。
 
 ### 更新查询接口

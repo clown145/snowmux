@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstring>
+#include <optional>
 
 #include "AchievementsStore.h"
 #include "BleInput.h"
@@ -116,6 +117,31 @@ static_assert(HalGPIO::BTN_BACK == SoundFeedback::BUTTON_BACK &&
 // A wake hold must never become an in-app power-button action.  Boot may continue
 // while the button is held; swallow the one release that ends that wake gesture.
 static bool wakePowerReleasePending = false;
+#if FREEINK_DEVICE_XUESU_300
+static bool xuesuSdBootFailed = false;
+
+static bool handleXuesuSdRecoveryKey() {
+  constexpr unsigned long restartHoldMs = 3000;
+  static bool releasedSinceError = false;
+  static std::optional<unsigned long> pressedAt;
+  const auto now = millis();
+
+  // The shared physical key becomes logical Back when held. Only the boot
+  // error handler owns the physical gesture, and any inherited hold is ignored.
+  if (gpio.isXuesuConfirmHeld()) {
+    if (releasedSinceError && !pressedAt) pressedAt = now;
+    return true;
+  }
+  const bool consumedRelease = pressedAt.has_value();
+  if (pressedAt && now - *pressedAt >= restartHoldMs) {
+    LOG_INF("MAIN", "Restarting after SD card boot error");
+    ESP.restart();
+  }
+  pressedAt.reset();
+  releasedSinceError = true;
+  return consumedRelease;
+}
+#endif
 
 // Fonts
 // All legacy built-in reader IDs share one 12pt offline fallback. Complete
@@ -1043,7 +1069,12 @@ void setup() {
   if (!Storage.begin()) {
     LOG_ERR("MAIN", "SD card initialization failed");
     const bool fontsReady = setupDisplayAndFonts(isSilentReboot);
+#if FREEINK_DEVICE_XUESU_300
+    activityManager.goToFullScreenMessage(tr(STR_XUESU_SD_RESTART_HINT), EpdFontFamily::BOLD);
+    xuesuSdBootFailed = true;
+#else
     activityManager.goToFullScreenMessage(tr(STR_SD_CARD_ERROR), EpdFontFamily::BOLD);
+#endif
     activityManager.requestUpdateAndWait();
     if (otaPendingAtBoot && fontsReady) {
       if (HalOtaSlot::confirmRunningImage()) {
@@ -1302,6 +1333,12 @@ void setup() {
 }
 
 void loop() {
+#if FREEINK_DEVICE_XUESU_300
+  if (xuesuSdBootFailed && handleXuesuSdRecoveryKey()) {
+    delay(10);
+    return;
+  }
+#endif
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
