@@ -146,10 +146,10 @@ int main() {
 }
 ''')
 
-    def test_high_dpi_vector_ui_keeps_builtin_backup(self):
+    def test_vector_ui_keeps_builtin_backup(self):
         system = (ROOT / 'src/SdCardFontSystem.cpp').read_text()
         table = system[system.index('struct UiFontSize'):system.index('}  // namespace', system.index('struct UiFontSize'))]
-        run_cpp(r'''
+        program = r'''
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -161,7 +161,7 @@ int main() {
 #define LOG_DBG(...) ((void)0)
 #define LOG_ERR(...) ((void)0)
 constexpr int SMALL_FONT_ID=1,UI_10_FONT_ID=2,UI_12_FONT_ID=3;
-constexpr int CJK_UI_12_FONT_ID=12,CJK_UI_14_FONT_ID=14,CJK_UI_16_FONT_ID=16;
+constexpr int CJK_UI_8_FONT_ID=8,CJK_UI_10_FONT_ID=10,CJK_UI_12_FONT_ID=12,CJK_UI_14_FONT_ID=14,CJK_UI_16_FONT_ID=16;
 constexpr int READER_STATUS_FONT_ID=7,READER_ESTIMATE_FONT_ID=8;
 constexpr int MALLOC_CAP_SPIRAM=1,MALLOC_CAP_INTERNAL=2,MALLOC_CAP_8BIT=4;
 size_t heap_caps_get_largest_free_block(int) { return 1024*1024; }
@@ -191,11 +191,17 @@ struct SdCardFontSystem {
 };
 ''' + table + method(system, 'void SdCardFontSystem::setupTtfUiFallbacks(') + r'''
 int main() {
-  for(int fail : {0,16}) {
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+  constexpr int titleSize=16;
+#else
+  constexpr int titleSize=12;
+#endif
+  for(int fail : {0,titleSize}) {
     TtfEpdFont::failSize=fail;
     SdCardFontSystem system; GfxRenderer r;
-    r.fallback[UI_12_FONT_ID]={16,0};
+    r.fallback[UI_12_FONT_ID]={titleSize,0};
     system.setupTtfUiFallbacks(r);
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
     assert((r.fallback[SMALL_FONT_ID]==std::array<int,2>{12,112}));
     assert((r.fallback[UI_10_FONT_ID]==std::array<int,2>{14,114}));
     assert((r.fallback[UI_12_FONT_ID]==std::array<int,2>{16,fail?0:116}));
@@ -203,11 +209,19 @@ int main() {
     assert((r.fallback[READER_ESTIMATE_FONT_ID]==std::array<int,2>{14,114}));
     assert(system.ttfUi_.size()==(fail?2U:3U));
     assert(system.ttfUi_.capacity()>=5 && system.ttfUiIds_.capacity()>=5);
+#else
+    assert((r.fallback[SMALL_FONT_ID]==std::array<int,2>{108,8}));
+    assert((r.fallback[UI_10_FONT_ID]==std::array<int,2>{110,10}));
+    const auto expectedTitle=fail?std::array<int,2>{12,0}:std::array<int,2>{112,12};
+    assert(r.fallback[UI_12_FONT_ID]==expectedTitle);
+#endif
   }
 }
-''', defines=('CROSSMUX_UI_PROFILE_HIGH_DPI','FREEINK_DEVICE_READPICO=1'))
+'''
+        run_cpp(program)
+        run_cpp(program, defines=('CROSSMUX_UI_PROFILE_HIGH_DPI','FREEINK_DEVICE_READPICO=1'))
 
-    def test_high_dpi_vector_unload_preserves_fixed_ui(self):
+    def test_vector_unload_preserves_fixed_ui(self):
         system = (ROOT / 'src/SdCardFontSystem.cpp').read_text()
         run_cpp(r'''
 #include <cassert>
@@ -243,7 +257,7 @@ int main() {
   system.unloadTtf(renderer);
   assert(renderer.removed.size()==5);
 }
-''', defines=('CROSSMUX_UI_PROFILE_HIGH_DPI',))
+''')
 
     def test_missing_outline_geometry(self):
         renderer = (ROOT / 'lib/GfxRenderer/GfxRenderer.cpp').read_text()

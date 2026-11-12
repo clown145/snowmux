@@ -109,11 +109,23 @@ int main() {
 }
 ''', include_dirs=[expat], defines=defines, extra_sources=objects)
 
-    def test_usb_drive_persists_library_marker_before_unmount(self):
+    def test_usb_drive_releases_fonts_and_persists_library_marker_before_unmount(self):
         drive = (ROOT / 'src/activities/network/UsbDriveActivity.cpp').read_text(encoding='utf-8')
         run_cpp(r'''
 #include <cassert>
 bool mounted = true, dirtyMarker = false;
+bool renderLocked = false, sdFontsLoaded = true;
+struct RenderLock {
+  RenderLock() { assert(!renderLocked); renderLocked = true; }
+  ~RenderLock() { renderLocked = false; }
+};
+struct GfxRenderer {};
+struct {
+  void releaseFontsForStorageHandoff(GfxRenderer&) {
+    assert(mounted && renderLocked);
+    sdFontsLoaded = false;
+  }
+} sdFontSystem;
 namespace bleinput {
 bool allowed = true;
 bool stop() { return allowed; }
@@ -126,7 +138,7 @@ bool markLibraryIndexDirty() {
 }
 struct {
   bool beginUsbDrive() {
-    assert(mounted && dirtyMarker);
+    assert(mounted && dirtyMarker && !sdFontsLoaded);
     mounted = false;
     return true;
   }
@@ -136,10 +148,11 @@ struct UsbDriveActivity : Activity {
   enum class State { IoError, WaitingForHost } state{};
   bool preparing = true, startFailed = false;
   int startFailureStartedAt = 0, hostWaitStartedAt = 0;
+  GfxRenderer renderer;
   struct { void setScreen(int*, UsbDriveActivity*) {} } app;
   static inline int driveScreen = 0;
   void resetUi() {}
-  void requestUpdateAndWait() {}
+  void requestUpdateAndWait() { assert(mounted && !renderLocked && !sdFontsLoaded); }
   void requestUpdate() {}
   void onEnter();
 };
@@ -152,6 +165,7 @@ int main() {
   rejected.onEnter();
   assert(rejected.startFailed && mounted && !dirtyMarker);
 
+  sdFontsLoaded = true;
   UsbDriveActivity drive;
   bleinput::allowed = true;
   drive.onEnter();

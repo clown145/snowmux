@@ -232,7 +232,6 @@ class GfxRenderer {
   void setFallbackFont(int primaryFontId, int fallbackFontId, int backupFontId = 0) {
     fallbackFontMap_[primaryFontId] = {fallbackFontId, backupFontId};
   }
-  void clearFallbackFonts() { fallbackFontMap_.clear(); }
   // Rebind which family a font id actually resolves to, leaving fontMap untouched.
   // Read Pico sets this so its whole UI renders in the selected reading family at the
   // UI's own point sizes; without it only the handful of screens that go through

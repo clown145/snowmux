@@ -54,6 +54,9 @@ class SdCardFontSystem {
   /// Release the resident SD font without changing the saved selection.
   void releaseLoadedFont(GfxRenderer& renderer);
 
+  /// Release bitmap and vector fonts before unmounting SD. Hold RenderLock.
+  void releaseFontsForStorageHandoff(GfxRenderer& renderer);
+
   /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   /// Pure lookup: never loads and never mutates residency, so

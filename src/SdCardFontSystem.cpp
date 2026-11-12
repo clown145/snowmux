@@ -262,6 +262,13 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, bool allowFlashCache)
 
 void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) { unloadCpfonts(renderer); }
 
+void SdCardFontSystem::releaseFontsForStorageHandoff(GfxRenderer& renderer) {
+  unloadCpfonts(renderer);
+#if CROSSPOINT_VECTOR_FONTS
+  unloadTtf(renderer);
+#endif
+}
+
 bool SdCardFontSystem::adoptCompleteChineseNotoSans() {
 #ifdef ENABLE_CHINESE_VERSION
   if (SETTINGS.contentProfile != CrossPointSettings::ContentProfile::China || SETTINGS.sdFontFamilyName[0] != '\0' ||
@@ -578,9 +585,6 @@ void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
   }
   ttfUiIds_.clear();
   ttfUi_.clear();
-#ifndef CROSSMUX_UI_PROFILE_HIGH_DPI
-  renderer.clearFallbackFonts();
-#endif
   // removeFont already removes references to each released TTF face; fixed UI mappings survive.
   if (ttfFontId_ != 0) {
     renderer.unregisterTtfFont(ttfFontId_);
@@ -749,7 +753,7 @@ void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
     renderer.setFallbackFont(ui.fontId, ui.builtinFallbackId, id);
 #else
-    renderer.setFallbackFont(ui.fontId, id);
+    renderer.setFallbackFont(ui.fontId, id, ui.builtinFallbackId);
 #endif
     ttfUiIds_.push_back(id);
     ttfUi_.push_back(std::move(f));

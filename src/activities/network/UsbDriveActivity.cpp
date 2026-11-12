@@ -9,6 +9,7 @@
 
 #include "BleInput.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "components/UITheme.h"
 
@@ -17,6 +18,11 @@ namespace fui = freeink::ui;
 void UsbDriveActivity::onEnter() {
   const bool bluetoothStopped = bleinput::stop();
   Activity::onEnter();
+  {
+    RenderLock lock;
+    // The USB screens must render even after the host owns the SD card.
+    sdFontSystem.releaseFontsForStorageHandoff(renderer);
+  }
   resetUi();
   app.setScreen(&UsbDriveActivity::driveScreen, this);
 
