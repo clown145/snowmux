@@ -52,19 +52,11 @@ partitionTable.set(Buffer.from([
   'ebebffffffffffffffffffffffffffffaf8aece4c2c246a0f5b19dad2448c932',
 ].join(''), 'hex'));
 
-function appImage(board = 'xuesu_300', tagOffset = 0) {
-  const segment = Buffer.alloc(tagOffset + 32);
-  segment.write(`CROSSPOINT-BOARD-V1:${board};`, tagOffset);
-  const image = Buffer.alloc(32 + segment.length);
-  image[0] = 0xe9;
-  image[1] = 1;
-  image[12] = 9;
-  image.writeUInt32LE(segment.length, 28);
-  image.set(segment, 32);
-  return image;
-}
-
-const image = appImage();
+const image = Buffer.alloc(64);
+image[0] = 0xe9;
+image[1] = 1;
+image[12] = 9;
+image.writeUInt32LE(32, 28);
 const hash = await sha256(image);
 const manifest = {
   schema: 1,
@@ -109,9 +101,9 @@ test('web flashing retries from Pages if the proxy serves a corrupt image', asyn
   assert.deepEqual(Buffer.from(bytes), image);
 });
 
-function mockLoader({ bootData = selectors(), ota0App = 'stock', ota1App, failReadback = false } = {}) {
+function mockLoader({ bootData = selectors(), failReadback = false } = {}) {
   const writes = [];
-  const apps = new Map([[OTA0, ota0App], [OTA1, ota1App]]);
+  const apps = new Map();
   const records = bootData.slice();
   return {
     writes,
@@ -123,12 +115,7 @@ function mockLoader({ bootData = selectors(), ota0App = 'stock', ota1App, failRe
         const offset = address - 0xf000;
         return records.slice(offset, offset + length);
       }
-      const slot = address >= OTA1 ? OTA1 : OTA0;
-      const app = apps.get(slot);
-      const offset = address - slot;
-      const read = new Uint8Array(length).fill(0xff);
-      if (app instanceof Uint8Array) read.set(app.subarray(offset, offset + length));
-      return read;
+      assert.fail(`Unexpected Flash read at 0x${address.toString(16)}`);
     },
     async writeFlash({ fileArray, eraseAll, flashSize }) {
       assert.equal(eraseAll, false);
@@ -136,37 +123,36 @@ function mockLoader({ bootData = selectors(), ota0App = 'stock', ota1App, failRe
       assert.equal(fileArray.length, 1);
       const { address, data } = fileArray[0];
       writes.push({ address, data });
-      if (apps.has(address)) apps.set(address, data);
+      if (address === OTA0 || address === OTA1) apps.set(address, data);
       else records.set(data, address - 0xf000);
     },
     async flashMd5sum(address, size) {
       const app = apps.get(address);
-      if (app === 'stock' && size === 2_915_888) return 'd5c277975ddeec6428857a398750a4df';
-      if (failReadback && size === image.length) return 'bad';
-      return app instanceof Uint8Array ? createHash('md5').update(app.subarray(0, size)).digest('hex') : '';
+      assert.ok(app, 'Only check the digest of an app written by this session');
+      assert.equal(size, app.length);
+      return failReadback ? 'bad' : createHash('md5').update(app).digest('hex');
     },
   };
 }
 
-test('accepts blank factory records and the legacy web installation', async () => {
-  assert.equal((await inspectDevice(mockLoader())).mode, 'install');
-  assert.equal((await inspectDevice(mockLoader({ bootData: selectors(erased, erased) }))).mode, 'install');
-  const legacy = mockLoader({ bootData: selectors(stock, ota1), ota1App: image });
-  assert.equal((await inspectDevice(legacy)).mode, 'update');
+test('plans OTA1 when both startup records are empty', async () => {
+  assert.equal((await inspectDevice(mockLoader())).target.label, 'OTA1');
+  const erasedRecords = mockLoader({ bootData: selectors(erased, erased) });
+  assert.equal((await inspectDevice(erasedRecords)).target.label, 'OTA1');
 });
 
 test('restored factory OTA0 keeps its active record while selecting OTA1', async () => {
   const bootData = selectors(restoredStock, ota1);
   const loader = mockLoader({ bootData });
   const plan = await inspectDevice(loader);
-  assert.equal(plan.mode, 'install');
+  assert.equal(plan.target.label, 'OTA1');
   await installFirmware(loader, image, release, plan, () => {});
   assert.deepEqual(loader.writes.map(({ address }) => address), [0x750000, 0x10000]);
   const newSelector = loader.writes[1].data;
   const entry = new DataView(newSelector.buffer);
   assert.equal(entry.getUint32(0, true), 4);
   assert.equal(entry.getUint32(28, true), crc32(newSelector.subarray(0, 4), 0xffffffff));
-  assert.equal((await inspectDevice(loader)).mode, 'update');
+  assert.equal((await inspectDevice(loader)).target.label, 'OTA0');
 });
 
 test('preserves the second record if it selects factory OTA0', async () => {
@@ -177,15 +163,13 @@ test('preserves the second record if it selects factory OTA0', async () => {
   });
 });
 
-test('does not trust damaged, pending, or unrelated OTA1 boot records', async () => {
+test('rejects damaged and pending startup records and skips aborted slots', async () => {
   const damaged = restoredStock.slice();
   damaged[28] ^= 1;
   await assert.rejects(inspectDevice(mockLoader({ bootData: selectors(damaged, ota1) })), /校验异常/);
   await assert.rejects(inspectDevice(mockLoader({ bootData: selectors(selector(3, 1), ota1) })), /尚未确认/);
-  const wrongBoard = mockLoader({ bootData: selectors(restoredStock, selector(4)), ota1App: appImage('x4') });
-  await assert.rejects(inspectDevice(wrongBoard), /未找到受支持/);
   const aborted = mockLoader({ bootData: selectors(restoredStock, selector(4, 4)) });
-  assert.equal((await inspectDevice(aborted)).mode, 'install');
+  assert.equal((await inspectDevice(aborted)).target.label, 'OTA1');
 });
 
 test('first installation writes the app before the verified second selector', async () => {
@@ -195,74 +179,17 @@ test('first installation writes the app before the verified second selector', as
     loader.writes.map(({ address }) => address),
     [0x750000, 0x10000],
   );
-  assert.equal((await inspectDevice(loader)).mode, 'update');
+  assert.equal((await inspectDevice(loader)).target.label, 'OTA0');
 });
 
-test('updates leave both boot selectors untouched', async () => {
-  const bootData = selectors(stock, ota1);
-  const loader = mockLoader({ bootData, ota1App: image });
-  await installFirmware(loader, image, release, await inspectDevice(loader), () => {});
-  assert.deepEqual(
-    loader.writes.map(({ address }) => address),
-    [0x750000],
-  );
-});
-
-test('retries an interrupted web write while the factory app still identifies the device', async () => {
+test('flashes the other slot without inspecting either existing app', async () => {
   const loader = mockLoader({ bootData: selectors(stock, ota1) });
-  const plan = await inspectDevice(loader);
-  assert.equal(plan.mode, 'update');
-  await installFirmware(loader, image, release, plan, () => {});
-  assert.deepEqual(loader.writes.map(({ address }) => address), [OTA1]);
-});
-
-test('recognizes both slots after alternating in-device updates', async () => {
-  const ota0Active = mockLoader({
-    bootData: selectors(selector(3, 2), ota1), ota0App: image, ota1App: image,
-  });
-  const fromOta0 = await inspectDevice(ota0Active);
-  assert.equal(fromOta0.mode, 'update');
-  assert.equal(fromOta0.target.label, 'OTA1');
-  await installFirmware(ota0Active, image, release, fromOta0, () => {});
-  assert.deepEqual(ota0Active.writes.map(({ address }) => address), [OTA1, 0x10000]);
-
-  const ota1Active = mockLoader({
-    // An ESP-IDF record has no web label. This tag spans two Flash reads.
-    bootData: selectors(selector(3, 2), selector(4, 2)),
-    ota0App: image,
-    ota1App: appImage('xuesu_300', 256 * 1024 - 10),
-  });
-  const fromOta1 = await inspectDevice(ota1Active);
-  assert.equal(fromOta1.mode, 'update');
-  assert.equal(fromOta1.target.label, 'OTA0');
-  await installFirmware(ota1Active, image, release, fromOta1, () => {});
-  assert.deepEqual(ota1Active.writes.map(({ address }) => address), [OTA0, 0xf000]);
-  assert.equal((await inspectDevice(ota1Active)).target.label, 'OTA1');
-});
-
-test('recovers an interrupted device update without overwriting the booted app', async () => {
-  const loader = mockLoader({ bootData: selectors(stock, ota1), ota0App: image.subarray(0, 24), ota1App: image });
   const plan = await inspectDevice(loader);
   assert.equal(plan.target.label, 'OTA0');
   assert.deepEqual(plan.activate, { address: 0xf000, sequence: 3 });
-});
-
-test('installs into OTA0 after factory firmware is restored to OTA1', async () => {
-  const loader = mockLoader({
-    bootData: selectors(selector(3, 2), selector(4, 2)), ota0App: image, ota1App: 'stock',
-  });
-  const plan = await inspectDevice(loader);
-  assert.equal(plan.mode, 'install');
-  assert.equal(plan.target.label, 'OTA0');
   await installFirmware(loader, image, release, plan, () => {});
   assert.deepEqual(loader.writes.map(({ address }) => address), [OTA0, 0xf000]);
-});
-
-test('ignores a board tag outside declared image segments', async () => {
-  const app = appImage();
-  app.writeUInt32LE(0x730000, 28);
-  const loader = mockLoader({ bootData: selectors(restoredStock, selector(4, 2)), ota1App: app });
-  await assert.rejects(inspectDevice(loader), /未找到受支持/);
+  assert.equal((await inspectDevice(loader)).target.label, 'OTA1');
 });
 
 test('invalid downloads and changed selectors are rejected before writing', async () => {

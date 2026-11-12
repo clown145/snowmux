@@ -38,7 +38,7 @@ function renderButtons() {
   installButton.classList.toggle('light', installButton.disabled);
   connectButton.textContent = session ? '断开设备' : '连接设备 ↗';
   const connection = byId('connection');
-  connection.textContent = session ? '已验证设备' : '未连接';
+  connection.textContent = session ? '已连接' : '未连接';
   connection.classList.toggle('connected', Boolean(session));
 }
 
@@ -131,11 +131,7 @@ connectButton.addEventListener('click', () =>
       await loader.main();
       const bootPlan = await inspectDevice(loader);
       session = { port, usbDevice, transport, loader, bootPlan };
-      message(
-        bootPlan.mode === 'install'
-          ? `已识别雪酥，将写入 ${bootPlan.target.label}。建议先保存一份 Flash 备份。`
-          : `已识别雪酥，可以更新 ${bootPlan.target.label}。`,
-      );
+      message(`将写入 ${bootPlan.target.label}。`);
     } catch (error) {
       await close(transport, usbDevice);
       throw error;
@@ -240,7 +236,7 @@ async function loadRelease() {
     notes.href = `${source.href}/releases/tag/${release.releaseTag}`;
     notes.hidden = false;
     byId('license').hidden = false;
-    message('连接设备后，浏览器会先检查型号与分区。');
+    message('请连接雪酥·3（300×400）。');
   } catch (error) {
     message(error.message, true);
   } finally {

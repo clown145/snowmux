@@ -9,14 +9,9 @@ const OTA_STATE_INVALID = 3;
 const OTA_STATE_ABORTED = 4;
 const OTA_STATE_UNDEFINED = 0xffffffff;
 const WEB_SELECTOR_LABEL = new TextEncoder().encode('SnowMux');
-const BOARD_TAG = 'CROSSPOINT-BOARD-V1:xuesu_300;';
 const SLOT_SIZE = 0x730000;
 const FLASH_READ_CHUNK = 256 * 1024;
 const PARTITION_SHA256 = '6bc034d19c972844b71b0bc45ef77401b018cc2ec08cc7440193c87fd11149ab';
-const STOCK_APPS = [
-  { bytes: 2_915_888, md5: 'd5c277975ddeec6428857a398750a4df' },
-  { bytes: 2_897_184, md5: '882c078a04fc19a13d38a39be08e8eae' },
-];
 
 export const FLASH_SIZE = 16 * 1024 * 1024;
 export const RELEASE_MANIFEST = './api/v1/firmware/latest.json';
@@ -144,52 +139,10 @@ function readSelector(sector, address) {
   }
   if (state === OTA_STATE_INVALID || state === OTA_STATE_ABORTED) return null;
 
-  const label = sector.subarray(4, 24);
-  const webLabel = equals(label.subarray(0, WEB_SELECTOR_LABEL.length), WEB_SELECTOR_LABEL) &&
-    label.subarray(WEB_SELECTOR_LABEL.length).every((byte) => byte === 0xff);
-  const legacyWebSelector = address === SECOND_SELECTOR && sequence === 2 && state === OTA_STATE_UNDEFINED &&
-    label.every((byte) => byte === 0xff);
-  return { address, sequence, state, webSelector: webLabel || legacyWebSelector };
+  return { address, sequence, state };
 }
 
-async function isKnownStock(loader, address) {
-  for (const stock of STOCK_APPS) {
-    if ((await loader.flashMd5sum(address, stock.bytes)) === stock.md5) return true;
-  }
-  return false;
-}
-
-async function hasSnowMuxBoardTag(loader, address) {
-  const header = await loader.readFlash(address, 24);
-  if (header.length !== 24 || header[0] !== 0xe9 || header[12] !== 9 || header[13] !== 0 ||
-      header[1] === 0 || header[1] > 16) return false;
-
-  const decoder = new TextDecoder('latin1');
-  let offset = header.length;
-  for (let segment = 0; segment < header[1]; segment++) {
-    if (offset + 8 > SLOT_SIZE) return false;
-    const segmentHeader = await loader.readFlash(address + offset, 8);
-    if (segmentHeader.length !== 8) return false;
-    const length = new DataView(segmentHeader.buffer, segmentHeader.byteOffset, 8).getUint32(4, true);
-    offset += 8;
-    if (length > SLOT_SIZE - offset) return false;
-
-    let tail = '';
-    for (let remaining = length; remaining > 0;) {
-      const size = Math.min(remaining, FLASH_READ_CHUNK);
-      const bytes = await loader.readFlash(address + offset, size);
-      if (bytes.length !== size) return false;
-      const text = tail + decoder.decode(bytes);
-      if (text.includes(BOARD_TAG)) return true;
-      tail = text.slice(1 - BOARD_TAG.length);
-      offset += size;
-      remaining -= size;
-    }
-  }
-  return false;
-}
-
-async function planBootSelection(loader, selectors) {
+function planBootSelection(selectors) {
   if (selectors.length !== 2 * SECTOR) throw new Error('启动记录读取不完整。');
   const first = readSelector(selectors.subarray(0, SECTOR), FIRST_SELECTOR);
   const second = readSelector(selectors.subarray(SECTOR), SECOND_SELECTOR);
@@ -199,28 +152,12 @@ async function planBootSelection(loader, selectors) {
   }
   // With two app slots, odd sequences select OTA0 and even sequences select OTA1.
   const currentSlot = active ? (active.sequence - 1) % APP_SLOTS.length : 0;
-  const currentAddress = APP_SLOTS[currentSlot];
-  const stock = await isKnownStock(loader, currentAddress);
-  const keepFactoryOta0 = !stock && currentSlot === 1 && await isKnownStock(loader, APP_SLOTS[0]);
-  // Recognize an interrupted web write when the original factory app and
-  // a web installation record still identify the device.
-  const knownWebInstall = keepFactoryOta0 && active.webSelector;
-  if (!stock && !knownWebInstall && (!active || !(await hasSnowMuxBoardTag(loader, currentAddress)))) {
-    throw new Error('当前启动槽未找到受支持的原厂固件或雪酥版 SnowMux。');
-  }
-
-  // Keep a verified factory OTA0 on web-only installations. Once OTA0 has
-  // changed, write the inactive slot so a failed write leaves SnowMux bootable.
-  const targetSlot = keepFactoryOta0 ? currentSlot : 1 - currentSlot;
-  const target = { address: APP_SLOTS[targetSlot], label: `OTA${targetSlot}` };
-  if (keepFactoryOta0) return { selectors, mode: 'update', target };
-
+  const targetSlot = 1 - currentSlot;
   const sequence = active ? active.sequence + 1 : 2;
   if (sequence === 0xffffffff) throw new Error('启动记录序号已用尽。');
   return {
     selectors,
-    mode: stock ? 'install' : 'update',
-    target,
+    target: { address: APP_SLOTS[targetSlot], label: `OTA${targetSlot}` },
     activate: {
       address: active?.address === SECOND_SELECTOR ? FIRST_SELECTOR : SECOND_SELECTOR,
       sequence,
@@ -246,7 +183,7 @@ export async function inspectDevice(loader) {
   const partitionTable = await loader.readFlash(PARTITIONS, 0xc00);
   if ((await sha256(partitionTable)) !== PARTITION_SHA256)
     throw new Error('设备的分区表与雪酥不符。');
-  return planBootSelection(loader, await readSelectors(loader));
+  return planBootSelection(await readSelectors(loader));
 }
 
 export async function backupFlash(loader, report) {
@@ -287,14 +224,12 @@ export async function installFirmware(loader, bytes, release, bootPlan, report) 
   report(`校验 ${label}`, 92);
   if ((await loader.flashMd5sum(targetAddress, bytes.length)) !== release.md5)
     throw new Error(`${label} 写入校验失败。`);
-  if (bootPlan.activate) {
-    const { address, sequence } = bootPlan.activate;
-    const expected = makeSelector(sequence);
-    report('设置启动槽', 96);
-    await write(loader, address, expected.slice());
-    const selector = await loader.readFlash(address, SECTOR);
-    if (!equals(selector, expected)) throw new Error('启动记录读回校验失败。');
-  }
+  const { address, sequence } = bootPlan.activate;
+  const expected = makeSelector(sequence);
+  report('设置启动槽', 96);
+  await write(loader, address, expected.slice());
+  const selector = await loader.readFlash(address, SECTOR);
+  if (!equals(selector, expected)) throw new Error('启动记录读回校验失败。');
   report('写入校验完成', 100);
 }
 
