@@ -21,7 +21,8 @@ def main():
     parser.add_argument('--repository', required=True)
     args = parser.parse_args()
 
-    if not re.fullmatch(r'xuesu-v[0-9]+\.[0-9]+\.[0-9]+', args.version):
+    release = re.fullmatch(r'xuesu-v([0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9})', args.version)
+    if release is None:
         parser.error('Expected a release tag such as xuesu-v0.1.0')
     repository = re.fullmatch(r'([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)', args.repository)
     if not re.fullmatch(r'[0-9a-f]{40}', args.commit) or repository is None:
@@ -33,7 +34,7 @@ def main():
     if hashlib.sha256(partitions).hexdigest() != '6bc034d19c972844b71b0bc45ef77401b018cc2ec08cc7440193c87fd11149ab':
         raise SystemExit('The build partition table differs from the verified Xuesu layout')
     app = args.build / 'firmware.bin'
-    verify_firmware(app, chip_id=9, board_tag='xuesu_300')
+    verify_firmware(app, chip_id=9, board_tag='xuesu_300', expected_version=release[1])
     data = app.read_bytes()
     if not 64 <= len(data) <= 0x730000 or len(data) % 16:
         raise SystemExit('The application image does not fit the Xuesu OTA1 slot')
@@ -52,7 +53,7 @@ def main():
         'schema': 1,
         'board': 'xuesu-300-std',
         'target_partition': 'ota_1',
-        'tag_name': args.version.removeprefix('xuesu-v'),
+        'tag_name': release[1],
         'release_tag': args.version,
         'published_at': args.published_at,
         'commit': args.commit,

@@ -29,11 +29,12 @@ class BuildModesTest(unittest.TestCase):
             'simulator', 'simulator_x3', 'simulator_sticky', 'simulator_eego_a4',
             'simulator_murphy_m4', 'simulator_readpico',
         }
+        xuesu = {'xuesu_300', 'xuesu_300_probe', 'xuesu_300_txt_test'}
         released = {environment for target in TARGETS.values() for environment in target['environments'].values()}
         self.assertEqual(len(released), 18)
         self.assertEqual(
             {name.removeprefix('env:') for name in self.config.sections() if name.startswith('env:')},
-            development | simulators | released,
+            development | simulators | released | xuesu,
         )
         for name in development | released:
             with self.subTest(environment=name):

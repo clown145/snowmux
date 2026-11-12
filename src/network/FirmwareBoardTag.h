@@ -34,6 +34,7 @@ class Scanner {
   // True once a tag naming a different board has been seen. Valid mid-stream:
   // callers may abort a download as soon as this turns true.
   bool mismatch() const { return mismatchFound; }
+  bool matched() const { return matchFound; }
   // Board name from the offending tag, for logging (empty until mismatch()).
   const char* foundName() const { return mismatchFound ? captured : ""; }
 
@@ -43,6 +44,7 @@ class Scanner {
   size_t nameLen = 0;
   size_t magicMatched = 0;
   bool capturing = false;
+  bool matchFound = false;
   bool mismatchFound = false;
 };
 

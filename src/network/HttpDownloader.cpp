@@ -5,11 +5,18 @@
 #include <HalSystem.h>
 #include <HttpHeader.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <ResumableFetch.h>
+
+#if FREEINK_DEVICE_XUESU_300
+#include <esp_crt_bundle.h>
+#include <esp_http_client.h>
+#endif
 
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <string_view>
 
 #include "WifiPowerSaveGuard.h"
 
@@ -144,6 +151,42 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   sink.write = onData;
   return runGetSecure(url, username, password, headers, sink) == OK;
 }
+
+#if FREEINK_DEVICE_XUESU_300
+bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onData) {
+  if (!std::string_view(url).starts_with("https://") || !hasMemoryForTls()) return false;
+
+  // Reuse a single 1 KiB buffer for the transfer without growing the activity stack.
+  constexpr size_t bufferSize = 1024;
+  const auto buffer = makeUniqueNoThrow<char[]>(bufferSize);
+  if (!buffer) {
+    LOG_ERR("HTTP", "OOM allocating %u bytes for verified HTTPS", static_cast<unsigned>(bufferSize));
+    return false;
+  }
+
+  WifiPowerSaveGuard psGuard;
+  esp_http_client_config_t config{};
+  config.url = url;
+  config.timeout_ms = HTTP_TIMEOUT_MS;
+  config.disable_auto_redirect = true;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.buffer_size = bufferSize;
+  const std::unique_ptr<std::remove_pointer_t<esp_http_client_handle_t>, decltype(&esp_http_client_cleanup)> client(
+      esp_http_client_init(&config), esp_http_client_cleanup);
+  if (!client || esp_http_client_open(client.get(), 0) != ESP_OK || esp_http_client_fetch_headers(client.get()) < 0 ||
+      esp_http_client_get_status_code(client.get()) != 200) {
+    LOG_ERR("HTTP", "Verified GET failed: %s", url);
+    return false;
+  }
+
+  for (;;) {
+    const int received = esp_http_client_read(client.get(), buffer.get(), bufferSize);
+    if (received < 0) return false;
+    if (received == 0) return esp_http_client_is_complete_data_received(client.get());
+    if (!onData(reinterpret_cast<const uint8_t*>(buffer.get()), static_cast<size_t>(received))) return false;
+  }
+}
+#endif
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const FetchOptions& options) {
   // OPDS fetches need what fetchResumable withholds: the final HTTP status

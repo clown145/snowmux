@@ -29,7 +29,11 @@ namespace fui = freeink::ui;
 
 enum ReadyRow {
   CHECK_UPDATES_ROW,
+#if FREEINK_DEVICE_XUESU_300
+  RESTORE_FACTORY_ROW,
+#else
   NIGHTLY_ROW,
+#endif
   READY_ROW_COUNT,
 };
 
@@ -141,7 +145,11 @@ void OtaUpdateActivity::onEnter() {
   app.on(ACTION_INSTALL_UPDATE, &OtaUpdateActivity::onInstallUpdate, this);
   app.setScreen(&OtaUpdateActivity::updateScreen, this);
   state = State::Ready;
+#if FREEINK_DEVICE_XUESU_300
+  selectedChannel = OtaUpdater::Channel::Stable;
+#else
   selectedChannel = SETTINGS.otaNightlyEnabled ? OtaUpdater::Channel::Nightly : OtaUpdater::Channel::Stable;
+#endif
   selectedReadyRow = CHECK_UPDATES_ROW;
   waitForConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   requestUpdate();
@@ -150,8 +158,17 @@ void OtaUpdateActivity::onEnter() {
 void OtaUpdateActivity::activateReadyRow() {
   switch (static_cast<ReadyRow>(selectedReadyRow)) {
     case CHECK_UPDATES_ROW:
+#if FREEINK_DEVICE_XUESU_300
+      selectedChannel = OtaUpdater::Channel::Stable;
+#endif
       beginWifiSelection();
       break;
+#if FREEINK_DEVICE_XUESU_300
+    case RESTORE_FACTORY_ROW:
+      selectedChannel = OtaUpdater::Channel::Factory;
+      beginWifiSelection();
+      break;
+#else
     case NIGHTLY_ROW:
       selectedChannel =
           selectedChannel == OtaUpdater::Channel::Stable ? OtaUpdater::Channel::Nightly : OtaUpdater::Channel::Stable;
@@ -159,6 +176,7 @@ void OtaUpdateActivity::activateReadyRow() {
       SETTINGS.saveToFile();
       requestUpdate();
       break;
+#endif
     case READY_ROW_COUNT:
       break;
   }
@@ -219,7 +237,18 @@ void OtaUpdateActivity::onExit() {
 
 void OtaUpdateActivity::showUpdateConfirmation() {
   static constexpr StrId OPTIONS[] = {StrId::STR_CANCEL, StrId::STR_UPDATE};
-  updateConfirmation.show(StrId::STR_NEW_UPDATE, OPTIONS, 2, 0, [this](const int index) {
+  StrId title = StrId::STR_NEW_UPDATE;
+  const StrId* options = OPTIONS;
+#if FREEINK_DEVICE_XUESU_300
+  if (selectedChannel == OtaUpdater::Channel::Factory) {
+    static constexpr StrId RESTORE_OPTIONS[] = {StrId::STR_CANCEL, StrId::STR_INSTALL};
+    title = StrId::STR_XUESU_RESTORE_FACTORY;
+    options = RESTORE_OPTIONS;
+  } else if (updater.targetsOta0()) {
+    title = StrId::STR_XUESU_OTA_OVERWRITE_OTA0;
+  }
+#endif
+  updateConfirmation.show(title, options, 2, 0, [this](const int index) {
     if (index == 0) {
       {
         RenderLock lock(*this);
@@ -286,8 +315,12 @@ void OtaUpdateActivity::renderUpdateAvailable(const Rect& safeArea) {
   const int bottomInset = mappedInput.hasTouch() ? app.theme().footerHeight : 0;
   rebuildReleaseNotePages(safeArea, bottomInset);
 
+  const char* heading = tr(STR_UPDATE);
+#if FREEINK_DEVICE_XUESU_300
+  if (selectedChannel == OtaUpdater::Channel::Factory) heading = tr(STR_XUESU_RESTORE_FACTORY);
+#endif
   GUI.drawHeader(renderer, Rect{safeArea.x, safeArea.y + metrics.topPadding, safeArea.width, metrics.headerHeight},
-                 tr(STR_UPDATE));
+                 heading);
 
   if (releaseNotePage == 0) {
     const int versionTop = safeArea.y + metrics.topPadding + metrics.headerHeight;
@@ -466,14 +499,22 @@ void OtaUpdateActivity::render(RenderLock&&) {
       GUI.drawList(
           renderer, readyList, READY_ROW_COUNT, selectedReadyRow,
           [](const int index) {
+#if FREEINK_DEVICE_XUESU_300
+            return std::string(index == CHECK_UPDATES_ROW ? tr(STR_CHECK_UPDATES) : tr(STR_XUESU_RESTORE_FACTORY));
+#else
             return std::string(index == CHECK_UPDATES_ROW ? tr(STR_CHECK_UPDATES) : tr(STR_UPDATE_NIGHTLY));
+#endif
           },
           nullptr, nullptr,
+#if FREEINK_DEVICE_XUESU_300
+          nullptr,
+#else
           [this](const int index) {
             if (index != NIGHTLY_ROW) return std::string();
             return selectedChannel == OtaUpdater::Channel::Nightly ? std::string(tr(STR_STATE_ON))
                                                                    : std::string(tr(STR_STATE_OFF));
           },
+#endif
           true);
       if (selectedChannel == OtaUpdater::Channel::Nightly) {
         const int warningTop = readyList.y + readyList.height + relatedGap;
@@ -603,6 +644,9 @@ void OtaUpdateActivity::runUpdateInstall() {
       RenderLock lock(*this);
       sdFontSystem.ensureLoaded(renderer, false);
       failedDetail = res == OtaUpdater::WRONG_DEVICE_ERROR ? tr(STR_FIRMWARE_WRONG_DEVICE) : nullptr;
+#if FREEINK_DEVICE_XUESU_300
+      if (res == OtaUpdater::VERIFICATION_ERROR) failedDetail = tr(STR_INVALID_FIRMWARE);
+#endif
       state = State::Failed;
     }
     requestUpdate();

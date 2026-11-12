@@ -66,6 +66,9 @@ class HttpDownloader {
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
                        const std::string& password = "", const std::vector<Header>& headers = {});
 
+  // Stream a firmware response over verified HTTPS with redirects disabled.
+  static bool fetchVerifiedHttps(const char* url, const DataCallback& onData);
+
   /**
    * Authentication and response inspection options for fetchUrl/postForm.
    * `bearer`, when set, sends "Authorization: Bearer <token>" and overrides

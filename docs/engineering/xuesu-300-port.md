@@ -33,7 +33,7 @@ PYTHONUTF8=1 pio run -e xuesu_300
 | 原厂阅读记录 | 可导入最近阅读和近似百分比进度。精确阅读位置、统计、字体、壁纸槽和设置仍需另行兼容。 |
 | 三键与应用 | 双击确认打开悬浮快捷栏。应用菜单和「隐藏应用」共用同一张表，雪酥省略依赖触屏或独立左右键的入口。默认隐藏和不可用的应用见 [应用与可见性](../../README.zh-CN.md#应用与可见性)。 |
 | 内置说明书 | 首次导入使用 SnowMux 中英文手册，见[生成与导入规则](generated-files.md#bundled-first-use-user-guide)。 |
-| 发布与升级 | 社区版本由 GitHub Release 触发独立构建和网页发布。CrossMux Stable、Nightly、设备内 OTA 和 SD 卡更新入口暂未接入。 |
+| 发布与升级 | 社区版本由 GitHub Release 触发独立构建和网页发布。设备内提供社区更新和恢复最新原厂应用，待真机验收。 |
 
 依赖与二进制发布信息见[固件许可说明](../../licenses/README.md)。下文保留按开发阶段记录的硬件证据和验收结果。
 
@@ -43,11 +43,11 @@ PYTHONUTF8=1 pio run -e xuesu_300
 
 1. 新仓库在 **Settings → Pages → Source** 选 **GitHub Actions**。如果 `github-pages` 环境限制部署来源，在该环境的部署规则中允许标签 `xuesu-v*`。
 2. [构建工作流](../../.github/workflows/xuesu-build.yml)在推送 `main` 或针对 `main` 提交 PR 时运行，也可手动运行。构建通过后可下载 `xuesu-site` 工件预览网页和固件。
-3. 在 **Releases** 发布形如 `xuesu-v0.1.0` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)复用构建流程，校验芯片、板型标记、分区和镜像摘要，将 OTA1 应用、SHA-256 校验文件与许可附到 Release，并同步部署网页和更新清单。[波形数据的许可说明](../../licenses/README.md#third-party-material)
+3. 在 **Releases** 发布形如 `xuesu-v0.1.1` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)复用构建流程，把社区版本号编入固件并校验芯片、板型标记、分区和镜像摘要，将应用镜像、SHA-256 校验文件与许可附到 Release，并同步部署网页和更新清单。[波形数据的许可说明](../../licenses/README.md#third-party-material)
 
 网站通过 Chrome 或 Edge 的 Web Serial 接入雪酥。连接后检查 ESP32-S3 安全状态、Flash 容量、原厂分区表、已知的 OTA0 应用及两份启动记录。首次安装先下载 16 MiB Flash 备份，再写 `0x750000`。应用摘要一致后才向 `0x10000` 写入启动记录。后续更新只写 OTA1。网页串口流程待实体设备验收，建议用首次安装和 OTA1 更新分别验证，记录备份长度、写入摘要、OTA0 启动槽保留情况及应用重启结果。
 
-本地预览从 `flasher/` 运行 `npm ci`、`npm test`、`npm run build` 和 `python -m http.server 8765 --directory dist`，然后打开 `http://localhost:8765/`。使用已有构建的 `firmware.bin` 和 `partitions.bin` 时，可从仓库根目录用 `python scripts/package_xuesu_pages.py --help` 查看发布数据的打包参数。
+本地预览从 `flasher/` 运行 `npm ci`、`npm test`、`npm run build` 和 `python -m http.server 8765 --directory dist`，然后打开 `http://localhost:8765/`。需要打包固件时，用 `XUESU_RELEASE_TAG=xuesu-v0.1.1 pio run -e xuesu_300` 构建测试版本，再以相同标签运行 `python scripts/package_xuesu_pages.py`，具体参数见 `--help`。
 
 ### 更新查询接口
 
@@ -56,11 +56,19 @@ PYTHONUTF8=1 pio run -e xuesu_300
 | 字段 | 含义 |
 | --- | --- |
 | `schema` | 接口格式版本，当前为 `1`。 |
-| `board`, `target_partition` | 板型 `xuesu-300-std`，应用目标槽 `ota_1`。 |
+| `board`, `target_partition` | 板型 `xuesu-300-std`，网页刷写目标槽 `ota_1`。 |
 | `tag_name`, `release_tag`, `commit` | 社区版本号（如 `0.1.0`）、GitHub 标签（如 `xuesu-v0.1.0`）和源码提交。 |
 | `assets[0]` | 逻辑文件名 `firmware.bin`、字节数 `size`、HTTPS 下载地址 `browser_download_url` 和 `sha256:` 前缀的 `digest`。网页串口读回使用该条目的 `md5`。 |
 
-现有 [`ReleaseJsonParser`](../../lib/JsonParser/ReleaseJsonParser.h) 可以读取版本、镜像地址和大小。设备端接入时需要记录当前安装的社区版本、校验板型和 SHA-256，并实现保留原厂 OTA0 的写入与恢复流程。当前 [`OtaUpdater`](../../src/network/OtaUpdater.cpp) 对雪酥禁用了设备内更新，从 OTA1 启动时沿用其通用的下一槽选择会指向 OTA0。
+### 设备内更新
+
+没有「检查更新」入口的旧版须先通过 USB 刷入支持设备内更新的版本。此后从「设置 → 系统 → 检查更新」连接 Wi-Fi，设备比较社区版本并直接从 SnowMux 刷机站下载。设备验证站点 TLS 证书，按 URL 中的 SHA-256 校验镜像，同时检查大小、ESP32-S3 芯片 ID 和雪酥板型标记。
+
+更新器只写两个应用槽中空闲的一个，并在完整验证后切换启动槽。第一次从 OTA1 更新会覆盖 OTA0 中的原厂固件，确认框会标明写入目标。后续更新交替使用 OTA0 和 OTA1。下载中断时设备仍从当前槽启动，再试会重新下载。网页的初装识别依赖受支持的原厂 OTA0。
+
+同一菜单中的「恢复原厂固件」读取[官方刷机页](https://xiaomoreader.top/tools/XueSuFlash.html)使用的[更新清单](https://xiaomoreader.top/XueBingOTA/version.json)，选取 `xuesu-300-std` 当前发布版本并显示版本号。确认后通过 HTTPS 下载，校验清单大小、ESP32-S3 芯片 ID 和 ESP 应用镜像，再从写入的槽启动。恢复范围为原厂应用和 OTA 启动选择。要恢复整片 Flash 的原始状态，可用首次安装保存的本机完整备份经 USB 串口恢复。
+
+真机验收时先测试 OTA1 到 OTA0，再用更高版本验证 OTA0 到 OTA1。另测试下载中断、镜像校验失败、两个槽上的原厂恢复和 USB 备份恢复。原厂引导器在新应用启动失败时的自动回滚行为待实测。
 
 ## 历史移植基线
 

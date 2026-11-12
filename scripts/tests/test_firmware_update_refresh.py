@@ -54,8 +54,9 @@ int main() {
         guard = re.search(r'#if [^\n]*\n(?:(?!#endif).)*recoveryFirmwareMode = gpio.isPressed',
                           recovery, re.S).group()
         self.assertIn('!FREEINK_DEVICE_PICCO', guard.splitlines()[0])
-        rows = re.search(r'#if !FREEINK_DEVICE_PICCO\n\s*addAction\(SettingsSection::General, '
-                         r'StrId::STR_CHECK_UPDATES,.*?#endif', settings, re.S).group()
+        rows = '\n'.join(re.findall(r'#if !FREEINK_DEVICE_PICCO(?: && !FREEINK_DEVICE_XUESU_300)?\n'
+                                   r'\s*addAction\(SettingsSection::General, '
+                                   r'StrId::STR_(?:CHECK_UPDATES|SD_FIRMWARE_UPDATE),.*?#endif', settings, re.S))
         program = r'''
 #include <cassert>
 #include <vector>
@@ -155,6 +156,148 @@ int main() {
 }
 '''
         run_cpp(program, defines=('FREEINK_DEVICE_PICCO=1',))
+
+    def test_xuesu_switches_only_after_a_verified_download_to_the_inactive_slot(self):
+        source = (ROOT / 'src/network/OtaUpdater.cpp').read_text()
+        helpers = source[source.index('constexpr char xuesuManifestUrl'):source.index('#endif\n}  // namespace')]
+        program = r'''
+#include <algorithm>
+#include <ArduinoJson.h>
+#include <cassert>
+#include <charconv>
+#include <memory>
+#include <string_view>
+#include "OtaUpdater.h"
+#define LOG_DBG(...) ((void)0)
+#define LOG_INF(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+#define CROSSPOINT_VERSION "0.1.0"
+constexpr int ESP_OK=0, WIFI_PS_MIN_MODEM=0, ESP_PARTITION_TYPE_APP=0;
+constexpr int ESP_PARTITION_SUBTYPE_APP_OTA_0=0x10, ESP_PARTITION_SUBTYPE_APP_OTA_1=0x11;
+constexpr size_t OTA_WITH_SEQUENTIAL_WRITES=0xfffffffe;
+struct esp_partition_t { size_t size; unsigned address; int subtype; int type=ESP_PARTITION_TYPE_APP; };
+using esp_ota_handle_t=int;
+using esp_err_t=int;
+esp_partition_t ota0{0x730000,0x20000,ESP_PARTITION_SUBTYPE_APP_OTA_0};
+esp_partition_t ota1{0x730000,0x750000,ESP_PARTITION_SUBTYPE_APP_OTA_1};
+const esp_partition_t *running=&ota1, *selected=&ota1;
+int begins=0, aborts=0, switches=0;
+enum class Response { Complete, Interrupted, BadHash, NoBoard, Oversized, BadImage };
+Response response=Response::Complete;
+const esp_partition_t* esp_ota_get_running_partition() { return running; }
+const esp_partition_t* esp_ota_get_boot_partition() { return selected; }
+const esp_partition_t* esp_ota_get_next_update_partition(void*) { return running==&ota1 ? &ota0 : &ota1; }
+int esp_ota_begin(const esp_partition_t* dest,size_t mode,esp_ota_handle_t*) {
+  assert(dest!=running && selected==running && mode==OTA_WITH_SEQUENTIAL_WRITES);
+  ++begins;
+  return ESP_OK;
+}
+int esp_ota_write(esp_ota_handle_t,const uint8_t*,size_t) { return ESP_OK; }
+int esp_ota_end(esp_ota_handle_t) { return response==Response::BadImage ? -1 : ESP_OK; }
+void esp_ota_abort(esp_ota_handle_t) { ++aborts; }
+int esp_ota_set_boot_partition(const esp_partition_t* dest) { selected=dest; ++switches; return ESP_OK; }
+void esp_wifi_set_ps(int) {}
+struct mbedtls_sha256_context {};
+void mbedtls_sha256_init(mbedtls_sha256_context*) {}
+int mbedtls_sha256_starts(mbedtls_sha256_context*,int) { return 0; }
+int mbedtls_sha256_update(mbedtls_sha256_context*,const uint8_t*,size_t) { return 0; }
+int mbedtls_sha256_finish(mbedtls_sha256_context*,uint8_t* hash) {
+  std::fill_n(hash,32,response==Response::BadHash ? 0xbb : 0xaa);
+  return 0;
+}
+void mbedtls_sha256_free(mbedtls_sha256_context*) {}
+struct { bool hasValidTime(){return true;} bool syncFromNTP(){return true;} } halClock;
+namespace firmware_flash { uint16_t runningPartitionChipId(){return 9;} }
+namespace board_tag {
+struct Scanner {
+  void feed(const uint8_t*,size_t) {}
+  bool mismatch() const { return false; }
+  bool matched() const { return response!=Response::NoBoard; }
+  const char* foundName() const { return ""; }
+};
+}
+template<class T,class Arg> auto makeUniqueNoThrow(Arg& arg) { return std::make_unique<T>(arg); }
+'''
+        program += helpers + r'''
+std::string manifestVersion="0.1.1";
+std::string assetUrl=std::string(xuesuImageBase)+std::string(64,'a')+".bin";
+std::string officialModel="xuesu-300-std";
+std::string officialUrl="/XueSu_300OTA/firmware10049.bin";
+std::string officialVersion="1.4.9";
+namespace HttpDownloader {
+template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink) {
+  if (std::string_view(url)==xuesuManifestUrl) {
+    const std::string json="{\"tag_name\":\""+manifestVersion+"\",\"assets\":[{\"name\":\"firmware.bin\","
+      "\"size\":64,\"browser_download_url\":\""+assetUrl+"\"}]}";
+    return sink(reinterpret_cast<const uint8_t*>(json.data()),json.size());
+  }
+  if (std::string_view(url)==xuesuFactoryManifest) {
+    const std::string json="{\"devices\":{\"xuebing-370-std\":{\"version_name\":\"9.0.0\",\"url\":\"/wrong.bin\",\"size\":64},\""
+      +officialModel+"\":{\"version_name\":\""+officialVersion+"\",\"version_code\":10049,\"size\":64,\"url\":\""
+      +officialUrl+"\"}}}";
+    return sink(reinterpret_cast<const uint8_t*>(json.data()),json.size());
+  }
+  assert(url==assetUrl || url==std::string(xuesuFactoryOrigin)+officialUrl);
+  std::array<uint8_t,65> image{};
+  image[0]=0xe9;
+  image[12]=9;
+  if (response==Response::Interrupted) { sink(image.data(),16); return false; }
+  return sink(image.data(),response==Response::Oversized ? 65 : 64);
+}
+}
+'''
+        program += '\n'.join(method(source, signature) for signature in (
+            'OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(',
+            'OtaUpdater::OtaUpdaterError OtaUpdater::checkFactoryRelease(',
+            'bool OtaUpdater::isUpdateNewer(',
+            'const std::string& OtaUpdater::getLatestVersion(',
+            'OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(',
+        ))
+        program += r'''
+int main() {
+  OtaUpdater update;
+  assert(update.checkForUpdate(OtaUpdater::Channel::Stable)==OtaUpdater::OK);
+  assert(update.isUpdateNewer());
+  for (auto mode : {Response::Interrupted, Response::BadHash, Response::NoBoard, Response::Oversized}) {
+    response=mode;
+    assert(update.installUpdate()!=OtaUpdater::OK);
+    assert(selected==running && switches==0);
+  }
+  assert(aborts==4);
+  response=Response::Complete;
+  assert(update.installUpdate()==OtaUpdater::OK && selected==&ota0 && switches==1);
+  assert(update.installUpdate()!=OtaUpdater::OK && begins==5);
+  running=&ota0;
+  assert(update.installUpdate()==OtaUpdater::OK && selected==&ota1 && switches==2);
+  manifestVersion="0.1.0";
+  assert(update.checkForUpdate(OtaUpdater::Channel::Stable)==OtaUpdater::OK && !update.isUpdateNewer());
+  assetUrl="https://github.com/firmware.bin";
+  assert(update.checkForUpdate(OtaUpdater::Channel::Stable)==OtaUpdater::JSON_PARSE_ERROR);
+  assert(!update.isUpdateNewer());
+  running=&ota1;
+  assert(update.checkForUpdate(OtaUpdater::Channel::Factory)==OtaUpdater::OK);
+  assert(update.getLatestVersion()=="1.4.9" && update.getOtaSize()==64 && update.getReleaseNotes().empty());
+  response=Response::BadImage;
+  assert(update.installUpdate()!=OtaUpdater::OK && selected==running && switches==2);
+  response=Response::NoBoard;
+  assert(update.installUpdate()==OtaUpdater::OK && selected==&ota0 && switches==3);
+  officialVersion="1.5.0";
+  officialUrl="/XueSu_300OTA/firmware10050.bin";
+  assert(update.checkForUpdate(OtaUpdater::Channel::Factory)==OtaUpdater::OK);
+  assert(update.getLatestVersion()=="1.5.0");
+  officialUrl="http://xiaomoreader.top/insecure.bin";
+  assert(update.checkForUpdate(OtaUpdater::Channel::Factory)==OtaUpdater::JSON_PARSE_ERROR);
+  officialModel="other-device";
+  officialUrl="/XueSu_300OTA/firmware10050.bin";
+  assert(update.checkForUpdate(OtaUpdater::Channel::Factory)==OtaUpdater::JSON_PARSE_ERROR);
+}
+'''
+        sax = ROOT / 'freeink-sdk/libs/network/JsonSax'
+        parser = ROOT / 'lib/JsonParser'
+        arduino_json = next((ROOT / '.pio/libdeps').glob('*/ArduinoJson/src'))
+        run_cpp(program, include_dirs=(ROOT / 'src/network', parser, sax / 'include', arduino_json),
+                defines=('FREEINK_DEVICE_XUESU_300=1',),
+                extra_sources=(parser / 'ReleaseJsonParser.cpp', sax / 'src/StreamingJsonParser.cpp'))
 
     def test_flash_ordering_failure_paths_and_complete_frames(self):
         ota = (ROOT / 'src/activities/settings/OtaUpdateActivity.cpp').read_text()

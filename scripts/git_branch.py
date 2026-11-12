@@ -2,6 +2,7 @@
 
 import configparser
 import os
+import re
 import subprocess
 import sys
 
@@ -85,10 +86,21 @@ def inject_version(env):
         return
 
     project_dir = env['PROJECT_DIR']
-    version_string = version_for(
-        get_base_version(project_dir), None, mode, 'global', get_git_short_sha(project_dir),
-        get_git_branch(project_dir) if mode == 'dev' else 'unknown',
-    )
+    if env.get('PIOENV') == 'xuesu_300':
+        tag = os.environ.get('XUESU_RELEASE_TAG')
+        if tag:
+            match = re.fullmatch(r'xuesu-v([0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9})', tag)
+            if match is None:
+                raise ValueError('Expected XUESU_RELEASE_TAG in the form xuesu-v0.1.0')
+            version_string = match[1]
+        else:
+            version_string = version_for('0.0.0', None, mode, 'global', get_git_short_sha(project_dir),
+                                         get_git_branch(project_dir))
+    else:
+        version_string = version_for(
+            get_base_version(project_dir), None, mode, 'global', get_git_short_sha(project_dir),
+            get_git_branch(project_dir) if mode == 'dev' else 'unknown',
+        )
 
     def add_version(build_env, node):
         # Only these translation units depend on Git metadata. Keep library and

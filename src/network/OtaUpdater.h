@@ -11,7 +11,13 @@
 
 class OtaUpdater {
  public:
-  enum class Channel : uint8_t { Stable, Nightly };
+  enum class Channel : uint8_t {
+    Stable,
+    Nightly,
+#if FREEINK_DEVICE_XUESU_300
+    Factory,
+#endif
+  };
   using ReleaseNote = ReleaseJsonParser::ReleaseNote;
 
  private:
@@ -38,6 +44,7 @@ class OtaUpdater {
     INTERNAL_UPDATE_ERROR,
     OOM_ERROR,
     WRONG_DEVICE_ERROR,
+    VERIFICATION_ERROR,
   };
 
   size_t getOtaSize() const { return otaSize; }
@@ -70,4 +77,10 @@ class OtaUpdater {
 #endif
   OtaUpdaterError checkForUpdate(Channel requestedChannel);
   OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr);
+#if FREEINK_DEVICE_XUESU_300
+  bool targetsOta0() const;
+
+ private:
+  OtaUpdaterError checkFactoryRelease();
+#endif
 };

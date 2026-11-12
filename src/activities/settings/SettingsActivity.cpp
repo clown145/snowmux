@@ -259,8 +259,10 @@ void SettingsActivity::rebuildSettingsLists() {
                                 })
                                 .withManagedEnumPicker());
 #endif
-#if !FREEINK_DEVICE_PICCO && !FREEINK_DEVICE_XUESU_300
+#if !FREEINK_DEVICE_PICCO
   addAction(SettingsSection::General, StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates);
+#endif
+#if !FREEINK_DEVICE_PICCO && !FREEINK_DEVICE_XUESU_300
   addAction(SettingsSection::General, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
 #endif
   addAction(SettingsSection::General, StrId::STR_ABOUT, SettingAction::About);

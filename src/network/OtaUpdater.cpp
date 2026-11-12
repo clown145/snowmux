@@ -11,9 +11,15 @@
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
 #include <esp_wifi.h>
+#if FREEINK_DEVICE_XUESU_300
+#include <ArduinoJson.h>
+#include <HalClock.h>
+#include <mbedtls/sha256.h>
+#endif
 // clang-format on
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -58,13 +64,66 @@ static_assert(!isSameNightlyBuild("1.5.2-rc+5064d90", "nightly"));
 // path to api.github.com.
 constexpr size_t releaseUrlCapacity = 192;
 static_assert(releaseUrlCapacity < 256);
+
+#if FREEINK_DEVICE_XUESU_300
+constexpr char xuesuManifestUrl[] = "https://clown145.github.io/snowmux/api/v1/firmware/latest.json";
+constexpr std::string_view xuesuImageBase = "https://clown145.github.io/snowmux/firmware/";
+constexpr size_t xuesuSlotSize = 0x730000;
+constexpr size_t xuesuManifestLimit = 4096;
+using ImageHash = std::array<uint8_t, 32>;
+using ReleaseVersion = std::array<unsigned, 3>;
+
+constexpr char xuesuFactoryOrigin[] = "https://xiaomoreader.top";
+constexpr char xuesuFactoryManifest[] = "https://xiaomoreader.top/XueBingOTA/version.json";
+constexpr char xuesuFactoryModel[] = "xuesu-300-std";
+
+bool parseReleaseVersion(std::string_view text, ReleaseVersion& version) {
+  for (size_t i = 0; i < version.size(); ++i) {
+    const char* end = text.data() + text.size();
+    const auto [next, error] = std::from_chars(text.data(), end, version[i]);
+    if (error != std::errc{}) return false;
+    if (i == version.size() - 1) return next == end;
+    if (next == end || *next != '.') return false;
+    text.remove_prefix(next - text.data() + 1);
+  }
+  return false;
+}
+
+bool readImageHash(std::string_view url, ImageHash& hash) {
+  constexpr std::string_view suffix = ".bin";
+  if (!url.starts_with(xuesuImageBase) || !url.ends_with(suffix) ||
+      url.size() != xuesuImageBase.size() + hash.size() * 2 + suffix.size()) {
+    return false;
+  }
+  url.remove_prefix(xuesuImageBase.size());
+  for (auto& byte : hash) {
+    const auto [next, error] = std::from_chars(url.data(), url.data() + 2, byte, 16);
+    if (error != std::errc{} || next != url.data() + 2) return false;
+    url.remove_prefix(2);
+  }
+  return true;
+}
+
+bool isXuesuAppSlot(const esp_partition_t* partition) {
+  if (!partition || partition->type != ESP_PARTITION_TYPE_APP || partition->size != xuesuSlotSize) return false;
+  return (partition->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 && partition->address == 0x20000) ||
+         (partition->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1 && partition->address == 0x750000);
+}
+#endif
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
-#if FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300
+#if FREEINK_DEVICE_PICCO
   return UNSUPPORTED_CHANNEL;
 #endif
+  updateAvailable = false;
   channel = requestedChannel;
+#if FREEINK_DEVICE_XUESU_300
+  if (channel == Channel::Nightly) return UNSUPPORTED_CHANNEL;
+  if (!halClock.hasValidTime() && !halClock.syncFromNTP()) return HTTP_ERROR;
+  if (channel == Channel::Factory) return checkFactoryRelease();
+  const char* releaseUrl = xuesuManifestUrl;
+#else
   char releaseUrl[releaseUrlCapacity];
   const char* channelQuery = channel == Channel::Nightly ? "&channel=nightly" : "";
   const int releaseUrlLength =
@@ -74,6 +133,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     LOG_ERR("OTA", "Release URL exceeds %zu bytes", sizeof(releaseUrl));
     return INTERNAL_UPDATE_ERROR;
   }
+#endif
   LOG_DBG("OTA", "Checking %s channel (current: %s)", channel == Channel::Nightly ? "nightly" : "stable",
           CROSSPOINT_VERSION);
 
@@ -88,10 +148,22 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     LOG_ERR("OTA", "OOM: release parser (%zu bytes)", sizeof(ReleaseJsonParser));
     return INTERNAL_UPDATE_ERROR;
   }
-  const bool ok = HttpDownloader::fetchUrl(releaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
+#if FREEINK_DEVICE_XUESU_300
+  size_t manifestBytes = 0;
+#endif
+  const auto feedRelease = [&](const uint8_t* data, size_t len) {
+#if FREEINK_DEVICE_XUESU_300
+    if (len > xuesuManifestLimit - manifestBytes) return false;
+    manifestBytes += len;
+#endif
     releaseParser->feed(reinterpret_cast<const char*>(data), len);
     return true;
-  });
+  };
+#if FREEINK_DEVICE_XUESU_300
+  const bool ok = HttpDownloader::fetchVerifiedHttps(releaseUrl, feedRelease);
+#else
+  const bool ok = HttpDownloader::fetchUrl(releaseUrl, feedRelease);
+#endif
   if (!ok) {
     LOG_ERR("OTA", "Release check fetch failed");
     return HTTP_ERROR;
@@ -115,6 +187,17 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     return NO_UPDATE;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  ReleaseVersion version{};
+  ImageHash hash{};
+  const size_t imageSize = releaseParser->getFirmwareSize();
+  if (!parseReleaseVersion(releaseParser->getTagName(), version) ||
+      !readImageHash(releaseParser->getFirmwareUrl(), hash) || imageSize < 64 || imageSize > xuesuSlotSize ||
+      imageSize % 16 != 0) {
+    LOG_ERR("OTA", "Invalid Xuesu release metadata");
+    return JSON_PARSE_ERROR;
+  }
+#endif
   latestVersion = releaseParser->getTagName();
   otaUrl = releaseParser->getFirmwareUrl();
   otaSize = releaseParser->getFirmwareSize();
@@ -127,10 +210,66 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   return OK;
 }
 
+#if FREEINK_DEVICE_XUESU_300
+OtaUpdater::OtaUpdaterError OtaUpdater::checkFactoryRelease() {
+  // The vendor publishes a multi-device JSON document. Read it into one
+  // bounded heap buffer so the update activity does not need a larger stack.
+  constexpr size_t manifestCapacity = 8192;
+  const auto manifest = makeUniqueNoThrow<char[]>(manifestCapacity);
+  if (!manifest) {
+    LOG_ERR("OTA", "OOM allocating %zu bytes for factory manifest", manifestCapacity);
+    return OOM_ERROR;
+  }
+  size_t length = 0;
+  if (!HttpDownloader::fetchVerifiedHttps(xuesuFactoryManifest, [&](const uint8_t* data, size_t len) {
+        if (len > manifestCapacity - length) return false;
+        std::memcpy(manifest.get() + length, data, len);
+        length += len;
+        return true;
+      })) {
+    return HTTP_ERROR;
+  }
+
+  JsonDocument filter;
+  JsonObject fields = filter["devices"][xuesuFactoryModel].to<JsonObject>();
+  fields["version_name"] = true;
+  fields["version_code"] = true;
+  fields["url"] = true;
+  fields["size"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, manifest.get(), length, DeserializationOption::Filter(filter))) return JSON_PARSE_ERROR;
+  const JsonVariantConst release = doc["devices"][xuesuFactoryModel].as<JsonVariantConst>();
+  const std::string_view version = release["version_name"] | "";
+  const std::string_view url = release["url"] | "";
+  const size_t size = release["size"] | 0u;
+  const bool relativePath = url.starts_with('/') && !url.starts_with("//");
+  if (version.empty() || version.size() >= 32 || (release["version_code"] | 0u) == 0 || size < 64 ||
+      size > xuesuSlotSize || url.size() > 511 || (!relativePath && !url.starts_with("https://"))) {
+    LOG_ERR("OTA", "Invalid official Xuesu release metadata");
+    return JSON_PARSE_ERROR;
+  }
+
+  latestVersion.assign(version);
+  otaUrl = relativePath ? xuesuFactoryOrigin : "";
+  otaUrl.append(url);
+  otaSize = totalSize = size;
+  releaseNoteCount = 0;
+  updateAvailable = true;
+  return OK;
+}
+#endif
+
 bool OtaUpdater::isUpdateNewer() const {
   if (!updateAvailable || latestVersion.empty()) {
     return false;
   }
+#if FREEINK_DEVICE_XUESU_300
+  if (channel == Channel::Factory) return true;
+  constexpr std::string_view current = CROSSPOINT_VERSION;
+  ReleaseVersion installed{}, latest{};
+  return parseReleaseVersion(current.substr(0, current.find('-')), installed) &&
+         parseReleaseVersion(latestVersion, latest) && latest > installed;
+#else
   switch (channel) {
     case Channel::Stable:
       break;
@@ -175,12 +314,13 @@ bool OtaUpdater::isUpdateNewer() const {
   }
 
   return false;
+#endif
 }
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
-#if FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300
+#if FREEINK_DEVICE_PICCO
   return UNSUPPORTED_CHANNEL;
 #endif
   if (!isUpdateNewer()) {
@@ -198,8 +338,22 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return INTERNAL_UPDATE_ERROR;
   }
 
+#if FREEINK_DEVICE_XUESU_300
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (!isXuesuAppSlot(running) || !isXuesuAppSlot(updatePartition) || running->address == updatePartition->address ||
+      esp_ota_get_boot_partition() != running || otaSize > updatePartition->size) {
+    LOG_ERR("OTA", "Xuesu OTA slots or boot selection do not match the running firmware");
+    return INTERNAL_UPDATE_ERROR;
+  }
+  const bool restoringFactory = channel == Channel::Factory;
+  ImageHash expectedHash{};
+  if (!restoringFactory && !readImageHash(otaUrl, expectedHash)) return VERIFICATION_ERROR;
+  constexpr size_t imageWriteSize = OTA_WITH_SEQUENTIAL_WRITES;
+#else
+  constexpr auto imageWriteSize = OTA_SIZE_UNKNOWN;
+#endif
   esp_ota_handle_t otaHandle = 0;
-  esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);
+  esp_err_t esp_err = esp_ota_begin(updatePartition, imageWriteSize, &otaHandle);
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(esp_err));
     return INTERNAL_UPDATE_ERROR;
@@ -216,7 +370,22 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   bool wrongChip = false;
   board_tag::Scanner boardScanner;
   bool wrongBoard = false;
-  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
+#if FREEINK_DEVICE_XUESU_300
+  mbedtls_sha256_context hashContext;
+  bool verificationOk = true;
+  if (!restoringFactory) {
+    mbedtls_sha256_init(&hashContext);
+    verificationOk = mbedtls_sha256_starts(&hashContext, 0) == 0;
+  }
+#endif
+  const auto writeChunk = [&](const uint8_t* data, size_t len) {
+#if FREEINK_DEVICE_XUESU_300
+    if (!verificationOk || len > otaSize - processedSize ||
+        (!restoringFactory && mbedtls_sha256_update(&hashContext, data, len) != 0)) {
+      verificationOk = false;
+      return false;
+    }
+#endif
     if (hdrLen < sizeof(hdr)) {
       const size_t take = std::min(len, sizeof(hdr) - hdrLen);
       std::memcpy(hdr + hdrLen, data, take);
@@ -224,7 +393,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       if (hdrLen == sizeof(hdr)) {
         uint16_t imageChip;
         std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
+#if FREEINK_DEVICE_XUESU_300
+        constexpr uint16_t deviceChip = 9;  // ESP32-S3 image chip ID.
+#else
         const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
+#endif
         if (deviceChip != 0xFFFF && imageChip != deviceChip) {
           LOG_ERR("OTA", "wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
           wrongChip = true;
@@ -232,7 +405,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
         }
       }
     }
+#if FREEINK_DEVICE_XUESU_300
+    if (!restoringFactory) boardScanner.feed(data, len);
+#else
     boardScanner.feed(data, len);
+#endif
     if (boardScanner.mismatch()) {
       LOG_ERR("OTA", "wrong board: image=%s device=%.*s", boardScanner.foundName(),
               static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
@@ -255,7 +432,25 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       }
     }
     return true;
-  });
+  };
+#if FREEINK_DEVICE_XUESU_300
+  const bool fetchOk = verificationOk && HttpDownloader::fetchVerifiedHttps(otaUrl.c_str(), writeChunk);
+  ImageHash actualHash{};
+  if (fetchOk) {
+    verificationOk =
+        processedSize == otaSize &&
+        (restoringFactory || (boardScanner.matched() && mbedtls_sha256_finish(&hashContext, actualHash.data()) == 0 &&
+                              actualHash == expectedHash));
+  }
+  if (!restoringFactory) mbedtls_sha256_free(&hashContext);
+  if (!verificationOk) {
+    LOG_ERR("OTA", "Xuesu image failed size, board tag or SHA-256 verification");
+    esp_ota_abort(otaHandle);
+    return VERIFICATION_ERROR;
+  }
+#else
+  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, writeChunk);
+#endif
 
   /* Return back to default power saving for WiFi in case of failing */
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
@@ -287,3 +482,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   LOG_INF("OTA", "Update completed");
   return OK;
 }
+
+#if FREEINK_DEVICE_XUESU_300
+bool OtaUpdater::targetsOta0() const {
+  const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
+  return dest && dest->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0;
+}
+#endif

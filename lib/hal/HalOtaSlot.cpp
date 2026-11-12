@@ -37,8 +37,8 @@ extern "C" bool verifyRollbackLater() { return true; }
 
 HalOtaSlot HalOtaSlot::inactive() {
 #if FREEINK_DEVICE_XUESU_300
-  // OTA0 contains the original reader. CrossMux normally uses the inactive app
-  // slot as scratch for its SD font cache.
+  // Either app slot may hold a bootable reader after a Xuesu update. Keep both
+  // slots out of the disposable SD font cache.
   return {};
 #endif
   const esp_partition_t* partition = esp_ota_get_next_update_partition(nullptr);
