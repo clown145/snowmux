@@ -433,6 +433,8 @@ class BaseTheme {
   static void drawSelectionHandle(const GfxRenderer& renderer, Rect rect, bool left);
   static void drawSelectionActions(const GfxRenderer& renderer, Rect rect, int count = 3, int firstAction = 0);
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
+  // Paint an inline message within a subpage's content; the caller refreshes the display.
+  void drawPopupInContent(const GfxRenderer& renderer, const Rect& content, const char* message) const;
   virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
                                int selectedIndex, int firstVisible = -1) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;

@@ -710,7 +710,8 @@ void WeReadBrowseActivity::render(RenderLock&&) {
       drawDetail(content);
       break;
     case State::Error:
-      GUI.drawPopup(renderer, errorMessage());
+      GUI.drawPopupInContent(renderer, SubpageLayout::insetHorizontal(content, metrics.contentSidePadding),
+                             errorMessage());
       break;
   }
 

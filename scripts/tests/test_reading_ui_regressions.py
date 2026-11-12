@@ -1984,7 +1984,13 @@ struct Renderer {
 };
 using GfxRenderer=Renderer;
 std::vector<std::string> shown;
-struct { void drawPopup(const Renderer&, const char* s) { shown.emplace_back(s); } } GUI;
+Rect popupBounds;
+struct {
+  void drawPopupInContent(const Renderer&, Rect r, const char* s) {
+    popupBounds = r;
+    shown.emplace_back(s);
+  }
+} GUI;
 namespace SubpageLayout {
 int sectionGap(const Metrics&) { return 12; }
 int centeredTop(Rect r,int h) { return r.y + std::max(0,(r.height-h)/2); }
@@ -2015,8 +2021,13 @@ int main() {
     assert(shown==std::vector<std::string>({STR_WEREAD_STORAGE_ERROR,STR_WEREAD_CHECK_STORAGE_SPACE,STR_WEREAD_CHECK_SD_CARD}));
     page.error_=E::OutOfMemory; shown.clear(); page.renderError();
     assert(shown==std::vector<std::string>({STR_WEREAD_MEMORY_ERROR,STR_WEREAD_RESTART_HINT}));
-    page.error_=E::Network; shown.clear(); page.renderError();
+  }
+  for (Rect bounds : {Rect{0,105,300,279},Rect{0,105,400,179},Rect{0,66,480,694},Rect{0,66,800,374}}) {
+    WeReadActivity page{E::Network,{}, {},bounds};
+    shown.clear(); page.renderError();
     assert(shown==std::vector<std::string>({STR_WEREAD_HTTP_ERROR}));
+    assert(popupBounds.x==bounds.x+20 && popupBounds.width==bounds.width-40);
+    assert(popupBounds.y==bounds.y && popupBounds.height==bounds.height);
     WiFi.connected=0; shown.clear(); page.renderError();
     assert(shown==std::vector<std::string>({STR_WEREAD_NO_WIFI})); WiFi.connected=1;
   }

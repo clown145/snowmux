@@ -2669,7 +2669,8 @@ void WeReadActivity::render(RenderLock&&) {
     }
     case State::Error: {
       if (error_ != WeReadClient::Error::SdCard && error_ != WeReadClient::Error::OutOfMemory) {
-        GUI.drawPopup(renderer, errorMessage());
+        GUI.drawPopupInContent(renderer, SubpageLayout::insetHorizontal(content, metrics.contentSidePadding),
+                               errorMessage());
         break;
       }
       // Fixed translated lines keep the low-memory error path free of wrapping allocations.
