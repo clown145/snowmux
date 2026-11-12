@@ -45,9 +45,11 @@ PYTHONUTF8=1 pio run -e xuesu_300
 2. [构建工作流](../../.github/workflows/xuesu-build.yml)在推送 `main` 或针对 `main` 提交 PR 时运行，也可手动运行。构建通过后可下载 `xuesu-site` 工件预览网页和固件。
 3. 在 **Releases** 发布形如 `xuesu-v0.1.1` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)复用构建流程，把社区版本号编入固件并校验芯片、板型标记、分区和镜像摘要，将应用镜像、SHA-256 校验文件与许可附到 Release，并同步部署网页和更新清单。[波形数据的许可说明](../../licenses/README.md#third-party-material)
 
-电脑上的 Chrome 或 Edge 使用 Web Serial。安卓 Chrome 使用 WebUSB，通过 `web-serial-polyfill` 连接雪酥的 CDC 串口（`303A:1001`），无需依赖 Android 17 的有线 Web Serial。手机需要支持 USB 主机模式和数据传输。用安卓 Chrome 打开 HTTPS 刷机页，连接并唤醒雪酥，点「连接设备」并允许 USB 访问。首次安装时，等读取完成后点「下载 Flash 备份」，在下载列表确认保存后再刷。iPhone 和 iPad 可下载固件。
+电脑上的 Chrome 或 Edge 使用 Web Serial。安卓 Chrome 使用 WebUSB，通过 `web-serial-polyfill` 连接雪酥的 CDC 串口（`303A:1001`），无需依赖 Android 17 的有线 Web Serial。手机需要支持 USB 主机模式和数据传输。用安卓 Chrome 打开 HTTPS 刷机页，连接并唤醒雪酥，点「连接设备」并允许 USB 访问。若选择备份，等读取完成后点「下载 Flash 备份」，在下载列表确认文件已保存。iPhone 和 iPad 可下载固件。
 
-两种连接都检查 ESP32-S3 安全状态、Flash 容量、原厂分区表、已知的 OTA0 应用及两份启动记录。首次安装先下载 16 MiB Flash 备份，再写 `0x750000`。应用摘要一致后才向 `0x10000` 写入启动记录。后续更新只写 OTA1。
+两种连接都检查 ESP32-S3 安全状态、Flash 容量、原厂分区表、已知的 OTA0 应用及两份启动记录。网页按 ESP-IDF 序号和 CRC 识别启动槽，识别设备后即可刷机。首次安装前建议保存 16 MiB Flash 备份，可跳过。原厂 OTA0 运行时，网页将镜像写到 `0x750000`。校验镜像后，在非活动的启动记录扇区写入下一个偶数序号，保留当前原厂启动记录。更新已识别的网页安装时只写 OTA1。
+
+从设备内「恢复原厂固件」返回 OTA0 的实机记录为 `0xF000: seq=3, VALID` 和 `0x10000: seq=2, UNDEFINED`。旧网页把这组合法记录拒绝为未知布局。新版识别为首次安装，写入计划是先校验 OTA1，再在 `0x10000` 写 `seq=4`。单元测试使用实机记录验证这条路径，也检查损坏记录和写入前记录变化。
 
 写入校验完成或主动断开设备时，网页清除 ESP32-S3 的强制下载标志，再把 RTS 拉有效 100 ms 后释放。esptool-js 0.7.1 默认只释放已空闲的 RTS，会让雪酥留在刷机模式。用同一 JavaScript 刷机库通过 COM12 验证：旧流程结束后刷机程序仍回应，修正后日志显示 `USB_UART_CHIP_RESET`、`SPI_FAST_FLASH_BOOT`，固件自行启动。测试设备未插 SD 卡，启动后进入预期的 SD 卡错误界面；测试未写入 Flash。
 

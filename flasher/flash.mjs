@@ -4,6 +4,12 @@ const FIRST_SELECTOR = 0xf000;
 const SECOND_SELECTOR = 0x10000;
 const OTA0 = 0x20000;
 const OTA1 = 0x750000;
+const SELECTOR_ENTRY_SIZE = 32;
+const OTA_STATE_VALID = 2;
+const OTA_STATE_INVALID = 3;
+const OTA_STATE_ABORTED = 4;
+const OTA_STATE_UNDEFINED = 0xffffffff;
+const WEB_SELECTOR_LABEL = new TextEncoder().encode('SnowMux');
 const SLOT_SIZE = 0x730000;
 const PARTITION_SHA256 = '6bc034d19c972844b71b0bc45ef77401b018cc2ec08cc7440193c87fd11149ab';
 const STOCK_APPS = [
@@ -69,34 +75,84 @@ export async function validateFirmware(bytes, release) {
   }
 }
 
-function makeOta1Selector() {
-  const sector = new Uint8Array(SECTOR).fill(0xff);
-  const entry = new DataView(sector.buffer);
-  // The reference bootloader accepts the same sequence-2 entry used in hardware trials.
-  entry.setUint32(0, 2, true);
-  entry.setUint32(28, 0x55f63774, true); // ESP-IDF CRC32 over the little-endian sequence.
-  return sector;
+function otaSequenceCrc(sequence) {
+  // esp_rom_crc32_le(UINT32_MAX, &ota_seq, 4) starts with the inverted seed.
+  let crc = 0;
+  for (let byte = 0; byte < 4; byte++) {
+    crc ^= (sequence >>> (8 * byte)) & 0xff;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return ~crc >>> 0;
 }
 
-const OTA1_SELECTOR = makeOta1Selector();
+function makeOta1Selector(sequence) {
+  const sector = new Uint8Array(SECTOR).fill(0xff);
+  const entry = new DataView(sector.buffer);
+  entry.setUint32(0, sequence, true);
+  sector.set(WEB_SELECTOR_LABEL, 4); // The bootloader ignores seq_label.
+  entry.setUint32(28, otaSequenceCrc(sequence), true);
+  return sector;
+}
 
 function equals(bytes, other) {
   return bytes.length === other.length && bytes.every((byte, index) => byte === other[index]);
 }
 
-export function selectorMode(first, second) {
-  const stockFirst =
-    first.length === SECTOR && first.every((byte, index) => byte === (index < 4 ? 0 : 0xff));
-  const erased = (bytes) => bytes.length === SECTOR && bytes.every((byte) => byte === 0xff);
-  if (!stockFirst && !erased(first)) throw new Error('启动记录与已验证布局不同。');
-  if (erased(second)) return 'install';
-  if (equals(second, OTA1_SELECTOR)) return 'update';
-  throw new Error('OTA1 启动记录与已验证布局不同。');
+function readSelector(sector, address) {
+  if (sector.every((byte) => byte === 0xff)) return null;
+  if (address === FIRST_SELECTOR && sector.every((byte, index) => byte === (index < 4 ? 0 : 0xff))) {
+    return null; // The original reference unit's uninitialized marker.
+  }
+
+  const entry = new DataView(sector.buffer, sector.byteOffset, SELECTOR_ENTRY_SIZE);
+  const sequence = entry.getUint32(0, true);
+  const state = entry.getUint32(24, true);
+  if (
+    sequence === 0 || sequence === 0xffffffff ||
+    (state > OTA_STATE_ABORTED && state !== OTA_STATE_UNDEFINED) ||
+    entry.getUint32(28, true) !== otaSequenceCrc(sequence) ||
+    !sector.subarray(SELECTOR_ENTRY_SIZE).every((byte) => byte === 0xff)
+  ) {
+    throw new Error('启动记录格式或校验异常，已停止刷机。');
+  }
+  if (state === OTA_STATE_INVALID || state === OTA_STATE_ABORTED) return null;
+
+  const label = sector.subarray(4, 24);
+  const webLabel = equals(label.subarray(0, WEB_SELECTOR_LABEL.length), WEB_SELECTOR_LABEL) &&
+    label.subarray(WEB_SELECTOR_LABEL.length).every((byte) => byte === 0xff);
+  const legacyWebSelector = address === SECOND_SELECTOR && sequence === 2 && state === OTA_STATE_UNDEFINED &&
+    label.every((byte) => byte === 0xff);
+  return { address, sequence, state, webSelector: webLabel || legacyWebSelector };
 }
 
-async function readSelectors(loader) {
-  const bytes = await loader.readFlash(FIRST_SELECTOR, SECTOR * 2);
-  return selectorMode(bytes.subarray(0, SECTOR), bytes.subarray(SECTOR));
+export function planBootSelection(selectors) {
+  if (selectors.length !== 2 * SECTOR) throw new Error('启动记录读取不完整。');
+  const first = readSelector(selectors.subarray(0, SECTOR), FIRST_SELECTOR);
+  const second = readSelector(selectors.subarray(SECTOR), SECOND_SELECTOR);
+  const active = second && (!first || second.sequence > first.sequence) ? second : first;
+  if (active && active.state < OTA_STATE_VALID) {
+    throw new Error('当前固件的启动记录尚未确认，请先启动当前固件再重试。');
+  }
+  // With two app slots, odd sequences select OTA0 and even sequences select OTA1.
+  if (active && active.sequence % 2 === 0) {
+    if (!active.webSelector) throw new Error('当前从 OTA1 启动，网页无法确认它是 SnowMux。');
+    return { selectors, mode: 'update' };
+  }
+
+  return {
+    selectors,
+    mode: 'install',
+    activate: {
+      address: active?.address === SECOND_SELECTOR ? FIRST_SELECTOR : SECOND_SELECTOR,
+      sequence: active ? active.sequence + 1 : 2,
+    },
+  };
+}
+
+function readSelectors(loader) {
+  return loader.readFlash(FIRST_SELECTOR, SECTOR * 2);
 }
 
 export async function inspectDevice(loader) {
@@ -114,7 +170,9 @@ export async function inspectDevice(loader) {
   if ((await sha256(partitionTable)) !== PARTITION_SHA256)
     throw new Error('设备的分区表与雪酥不符。');
   for (const stock of STOCK_APPS) {
-    if ((await loader.flashMd5sum(OTA0, stock.bytes)) === stock.md5) return readSelectors(loader);
+    if ((await loader.flashMd5sum(OTA0, stock.bytes)) === stock.md5) {
+      return planBootSelection(await readSelectors(loader));
+    }
   }
   throw new Error('OTA0 未找到受支持的原厂固件。');
 }
@@ -145,20 +203,23 @@ async function write(loader, address, data, reportProgress) {
   });
 }
 
-export async function installFirmware(loader, bytes, release, expectedMode, report) {
+export async function installFirmware(loader, bytes, release, bootPlan, report) {
   await validateFirmware(bytes, release);
-  if ((await readSelectors(loader)) !== expectedMode)
+  if (!equals(await readSelectors(loader), bootPlan.selectors)) {
     throw new Error('设备启动记录已变化，请重新连接。');
+  }
   report('写入 OTA1', 0);
   await write(loader, OTA1, bytes, (_, written, total) => report('写入 OTA1', (90 * written) / total));
   report('校验 OTA1', 92);
   if ((await loader.flashMd5sum(OTA1, bytes.length)) !== release.md5)
     throw new Error('OTA1 写入校验失败。');
-  if (expectedMode === 'install') {
+  if (bootPlan.activate) {
+    const { address, sequence } = bootPlan.activate;
+    const expected = makeOta1Selector(sequence);
     report('设置启动槽', 96);
-    await write(loader, SECOND_SELECTOR, OTA1_SELECTOR.slice());
-    const selector = await loader.readFlash(SECOND_SELECTOR, SECTOR);
-    if (!equals(selector, OTA1_SELECTOR)) throw new Error('启动记录读回校验失败。');
+    await write(loader, address, expected.slice());
+    const selector = await loader.readFlash(address, SECTOR);
+    if (!equals(selector, expected)) throw new Error('启动记录读回校验失败。');
   }
   report('写入校验完成', 100);
 }

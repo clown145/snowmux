@@ -31,8 +31,7 @@ function message(text, error = false) {
 function renderButtons() {
   connectButton.disabled = !ready || !supported || busy;
   backupButton.disabled = busy || !session;
-  installButton.disabled =
-    busy || !release || !session || (session.mode === 'install' && !session.backedUp);
+  installButton.disabled = busy || !release || !session;
   installButton.classList.toggle('dark', !installButton.disabled);
   installButton.classList.toggle('light', installButton.disabled);
   connectButton.textContent = session ? '断开设备' : '连接设备 ↗';
@@ -128,11 +127,11 @@ connectButton.addEventListener('click', () =>
     message('正在连接并读取设备信息…');
     try {
       await loader.main();
-      const mode = await inspectDevice(loader);
-      session = { port, usbDevice, transport, loader, mode, backedUp: false };
+      const bootPlan = await inspectDevice(loader);
+      session = { port, usbDevice, transport, loader, bootPlan };
       message(
-        mode === 'install'
-          ? '已识别雪酥。请先备份 Flash。'
+        bootPlan.mode === 'install'
+          ? '已识别雪酥，可以刷机。建议先保存一份 Flash 备份。'
           : '已识别雪酥，可以更新 OTA1。',
       );
     } catch (error) {
@@ -165,15 +164,12 @@ backupButton.addEventListener('click', () =>
 );
 
 backupDownload.addEventListener('click', () => {
-  if (session) session.backedUp = true;
   if (!busy) message('请在浏览器的下载列表确认备份文件已保存。');
-  renderButtons();
 });
 
 installButton.addEventListener('click', () => {
   const current = session;
-  const reminder = current.mode === 'install' ? '请确认已保存本机 Flash 备份。' : '';
-  if (!window.confirm(`${reminder}将 v${release.version} 写入 OTA1。开始后请保持 USB 连接。`)) return;
+  if (!window.confirm(`将 v${release.version} 写入 OTA1。开始后请保持 USB 连接。`)) return;
   operation(async () => {
     message('正在下载并校验固件…');
     progress('下载固件', 0);
@@ -182,7 +178,7 @@ installButton.addEventListener('click', () => {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (session !== current) throw new Error('USB 连接已断开，请重新连接设备。');
     message('正在刷机，请勿拔出 USB 数据线。');
-    await installFirmware(current.loader, bytes, release, current.mode, progress);
+    await installFirmware(current.loader, bytes, release, current.bootPlan, progress);
     session = undefined;
     try {
       await resetToFirmware(current.loader);
