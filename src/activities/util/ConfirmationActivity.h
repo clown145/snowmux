@@ -28,6 +28,7 @@ class ConfirmationActivity : public Activity {
   std::string safeBody;
   // At most body.size() bytes; cached once so button-driven re-renders never wrap/allocate again.
   std::string safeBodySecondLine;
+  Rect pageTextBounds{};
   OptionPopup confirmPopup;
 
  public:

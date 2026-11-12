@@ -9,6 +9,7 @@
 #include "OpdsServerStore.h"
 #include "XuesuSettingsLayout.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #if FREEINK_DEVICE_XUESU_300
 #include "activities/network/WifiProvisionActivity.h"
@@ -307,6 +308,10 @@ const char* OpdsSettingsActivity::headerTitle() const {
 void OpdsSettingsActivity::drawFooter() {
   UiListActivity::drawFooter();
   if (showSaveError) {
-    GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+    const Rect content = SubpageLayout::contentRect(safe, metrics);
+    GUI.drawPopupInContent(renderer, SubpageLayout::insetHorizontal(content, metrics.contentSidePadding),
+                           tr(STR_ERROR_GENERAL_FAILURE));
   }
 }

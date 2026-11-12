@@ -72,12 +72,13 @@ class WeReadActivity final : public Activity {
   std::atomic<uint32_t> progressCompleted_{0};
   std::atomic<uint32_t> progressTotal_{0};
   std::atomic<PostProcessNotice> postProcessNotice_{PostProcessNotice::None};
-  std::atomic<int> disclaimerActionsY_{-1};
+  std::atomic<int> disclaimerPage_{0};
+  std::atomic<int> disclaimerPageCount_{0};
   WeReadClient::Error error_ = WeReadClient::Error::Ok;
   WeReadStore::ShelfRecord pendingBook_;
   char qrUrl_[256] = {};
   uint32_t shelfCount_ = 0;
-  int disclaimerSelected_ = 0;
+  std::atomic<int> disclaimerSelected_{0};
   int manageSelected_ = 0;
   std::atomic<int> shelfSelected_{0};
   int shelfFrameSelection_ = -1;
@@ -108,7 +109,7 @@ class WeReadActivity final : public Activity {
   bool introPagesTruncated_ = false;
   bool shelfCoverStopped_ = false;
   bool optionPopupClosing_ = false;
-  bool disclaimerSaveFailed_ = false;
+  std::atomic<bool> disclaimerSaveFailed_{false};
   bool wifiSessionActive_ = false;
   bool wifiReleasePending_ = false;
   bool readingStatsReleased_ = false;
@@ -121,9 +122,7 @@ class WeReadActivity final : public Activity {
   Rect contentBounds() const;
   Rect mainContentBounds() const;
   WeReadDetailLayout detailLayout(const Rect& content) const;
-  Rect disclaimerSafeBounds() const;
-  Rect disclaimerContentBounds() const;
-  Rect disclaimerActionsBounds() const;
+  Rect disclaimerActionsBounds(const Rect& content) const;
   int shelfItemsPerPage() const;
   void resetShelfCoverLoading();
   void advanceShelfCovers();

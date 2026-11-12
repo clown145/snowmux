@@ -5,6 +5,8 @@
 #include <algorithm>
 
 #include "HalDisplay.h"
+#include "InxItemLayout.h"
+#include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 
 ConfirmationActivity::ConfirmationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -21,104 +23,76 @@ ConfirmationActivity::ConfirmationActivity(GfxRenderer& renderer, MappedInputMan
 }
 
 void ConfirmationActivity::onEnter() {
-  if (!UITheme::getInstance().hasMainTabs()) {
-    Activity::onEnter();
+  Activity::onEnter();
+  const char* options[] = {cancelLabel.empty() ? tr(STR_CANCEL) : cancelLabel.c_str(),
+                           confirmLabel.empty() ? tr(STR_CONFIRM) : confirmLabel.c_str()};
+  const auto resolve = [this](int index) {
+    ActivityResult result;
+    result.isCancelled = index != 1;
+    setResult(std::move(result));
+    finish();
+  };
 
-    // Both texts live inside the dialog: the heading as its caption and the
-    // subject (a book title) as the wrapping headline beneath it. No
-    // pre-truncation — the dialog wraps both to its own width.
-    const char* options[] = {cancelLabel.empty() ? tr(STR_CANCEL) : cancelLabel.c_str(),
-                             confirmLabel.empty() ? tr(STR_CONFIRM) : confirmLabel.c_str()};
-    confirmPopup.show(heading.c_str(), body.c_str(), options, 2, 0, [this](int idx) {
-      ActivityResult res;
-      res.isCancelled = (idx != 1);
-      setResult(std::move(res));
-      finish();
-    });
-
+  auto& theme = UITheme::getInstance();
+  if (!theme.hasMainTabs()) {
+    confirmPopup.show(heading.c_str(), body.c_str(), options, 2, 0, resolve);
     requestUpdate(true);
-
     return;
   }
 
-  Activity::onEnter();
-
-  const int maxWidth = renderer.getScreenWidth() - (MARGIN * 2);
-
-  if (!heading.empty()) {
-    safeHeading = renderer.truncatedText(HEADING_FONT_ID, heading.c_str(), maxWidth, EpdFontFamily::BOLD);
-  }
-  if (!body.empty()) {
-    if (bodyPlacement == BodyPlacement::Page) {
-      auto lines = renderer.wrappedText(BODY_FONT_ID, body.c_str(), maxWidth, MAX_BODY_LINES, EpdFontFamily::REGULAR);
-      if (!lines.empty()) safeBody = std::move(lines[0]);
-      if (lines.size() > 1) safeBodySecondLine = std::move(lines[1]);
-    } else {
-      safeBody = renderer.truncatedText(BODY_FONT_ID, body.c_str(), maxWidth, EpdFontFamily::REGULAR);
-    }
+  const Rect safe = theme.getScreenSafeArea(renderer, true, false);
+  const int maxWidth = safe.width - 2 * MARGIN;
+  auto pageHeading = renderer.truncatedText(HEADING_FONT_ID, heading.c_str(), maxWidth, EpdFontFamily::BOLD);
+  std::string firstLine;
+  std::string secondLine;
+  if (bodyPlacement == BodyPlacement::Page && !body.empty()) {
+    auto lines = renderer.wrappedText(BODY_FONT_ID, body.c_str(), maxWidth, MAX_BODY_LINES, EpdFontFamily::REGULAR);
+    if (!lines.empty()) firstLine = std::move(lines[0]);
+    if (lines.size() > 1) secondLine = std::move(lines[1]);
   }
 
-  const char* options[] = {cancelLabel.empty() ? tr(STR_CANCEL) : cancelLabel.c_str(),
-                           confirmLabel.empty() ? tr(STR_CONFIRM) : confirmLabel.c_str()};
-  const char* popupTitle = nullptr;
-  switch (bodyPlacement) {
-    case BodyPlacement::Page:
-      popupTitle = safeHeading.c_str();
-      break;
-    case BodyPlacement::PopupTitle:
-      popupTitle = safeBody.c_str();
-      break;
+  const int headingHeight = pageHeading.empty() ? 0 : renderer.getLineHeight(HEADING_FONT_ID);
+  const int bodyLines = firstLine.empty() ? 0 : (secondLine.empty() ? 1 : 2);
+  const int textHeight = headingHeight + (headingHeight > 0 && bodyLines > 0 ? SPACING : 0) +
+                         bodyLines * renderer.getLineHeight(BODY_FONT_ID);
+  const int top = safe.y + std::max(MARGIN, safe.height / 6 - textHeight / 2);
+  const Rect panel = InxOptionGeometry::layout(safe, 2, 0).panel;
+  if (textHeight > 0 && top + textHeight + SubpageLayout::sectionGap(theme.getMetrics()) > panel.y) {
+    // The wrapped headline and the options are measured together on a short screen.
+    confirmPopup.show(heading.c_str(), body.c_str(), options, 2, 0, resolve);
+  } else {
+    safeHeading = std::move(pageHeading);
+    safeBody = std::move(firstLine);
+    safeBodySecondLine = std::move(secondLine);
+    pageTextBounds = Rect{safe.x + MARGIN, top, maxWidth, textHeight};
+    const char* popupTitle = bodyPlacement == BodyPlacement::Page ? safeHeading.c_str() : body.c_str();
+    confirmPopup.show(popupTitle, options, 2, 0, resolve);
   }
-  confirmPopup.show(popupTitle, options, 2, 0, [this](int idx) {
-    ActivityResult res;
-    res.isCancelled = (idx != 1);
-    setResult(std::move(res));
-    finish();
-  });
 
   requestUpdate(true);
 }
 
-void ConfirmationActivity::render(RenderLock&& lock) {
-  if (!UITheme::getInstance().hasMainTabs()) {
-    renderer.clearScreen();
-
-    if (confirmPopup.processRender(renderer, mappedInput)) return;
-
-    renderer.displayBuffer(HalDisplay::RefreshMode::FAST_REFRESH);
-
-    return;
-  }
-
+void ConfirmationActivity::render(RenderLock&&) {
   renderer.clearScreen();
-
-  const int headingHeight = safeHeading.empty() ? 0 : renderer.getLineHeight(HEADING_FONT_ID);
-  const int bodyLineHeight = renderer.getLineHeight(BODY_FONT_ID);
-  const int bodyLines = safeBody.empty() ? 0 : (safeBodySecondLine.empty() ? 1 : 2);
-  const int textBlockHeight =
-      headingHeight + (headingHeight > 0 && bodyLines > 0 ? SPACING : 0) + bodyLines * bodyLineHeight;
-  int currentY = std::max(MARGIN, renderer.getScreenHeight() / 6 - textBlockHeight / 2);
-  if (!safeHeading.empty()) {
-    renderer.drawCenteredText(HEADING_FONT_ID, currentY, safeHeading.c_str(), true, EpdFontFamily::BOLD);
-    currentY += headingHeight + SPACING;
-  }
-
-  switch (bodyPlacement) {
-    case BodyPlacement::Page:
-      if (!safeBody.empty()) {
-        renderer.drawCenteredText(BODY_FONT_ID, currentY, safeBody.c_str(), true, EpdFontFamily::REGULAR);
-      }
-      if (!safeBodySecondLine.empty()) {
-        renderer.drawCenteredText(BODY_FONT_ID, currentY + bodyLineHeight, safeBodySecondLine.c_str(), true,
-                                  EpdFontFamily::REGULAR);
-      }
-      break;
-    case BodyPlacement::PopupTitle:
-      break;
+  if (pageTextBounds.height > 0) {
+    const GfxRenderer::ClipScope clip(renderer, pageTextBounds.x, pageTextBounds.y, pageTextBounds.width,
+                                      pageTextBounds.height);
+    int y = pageTextBounds.y;
+    if (!safeHeading.empty()) {
+      UITheme::drawCenteredText(renderer, pageTextBounds, HEADING_FONT_ID, y, safeHeading.c_str(), true,
+                                EpdFontFamily::BOLD);
+      y += renderer.getLineHeight(HEADING_FONT_ID) + SPACING;
+    }
+    if (!safeBody.empty()) {
+      UITheme::drawCenteredText(renderer, pageTextBounds, BODY_FONT_ID, y, safeBody.c_str());
+      y += renderer.getLineHeight(BODY_FONT_ID);
+    }
+    if (!safeBodySecondLine.empty()) {
+      UITheme::drawCenteredText(renderer, pageTextBounds, BODY_FONT_ID, y, safeBodySecondLine.c_str());
+    }
   }
 
   if (confirmPopup.processRender(renderer, mappedInput)) return;
-
   renderer.displayBuffer(HalDisplay::RefreshMode::FAST_REFRESH);
 }
 

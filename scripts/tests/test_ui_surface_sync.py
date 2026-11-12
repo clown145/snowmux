@@ -21,13 +21,20 @@ class UiSurfaceSyncTest(unittest.TestCase):
 #include <string>
 #include <utility>
 #include <vector>
+#include "InxItemLayout.h"
 constexpr int UI_12_FONT_ID=12, UI_10_FONT_ID=10, STR_CANCEL=0, STR_CONFIRM=1;
 const char* tr(int key) {return key == STR_CANCEL ? "Cancel" : "Confirm";}
 namespace EpdFontFamily {enum Style {REGULAR, BOLD};}
 struct GfxRenderer {
- int getScreenWidth() const {return 480;}
+ int width=480,height=800;
+ int getLineHeight(int font) const {return font==UI_12_FONT_ID ? 29 : 24;}
  std::string truncatedText(int,const char* text,int,EpdFontFamily::Style) {return text;}
- std::vector<std::string> wrappedText(int,const char* text,int,int,EpdFontFamily::Style) {return {text};}
+ std::vector<std::string> wrappedText(int,const char* text,int width,int,EpdFontFamily::Style) {
+   const std::string body(text);
+   const auto columns=static_cast<size_t>(width/10);
+   if (body.size()<=columns) return {body};
+   return {body.substr(0,columns),body.substr(columns)};
+ }
 };
 struct MappedInputManager {}; struct RenderLock {}; struct ActivityResult {bool isCancelled=false;};
 struct Activity {
@@ -39,8 +46,12 @@ struct Activity {
 struct Theme {
  bool mainTabs=false; bool hasMainTabs() const {return mainTabs;}
  static Theme& getInstance() {static Theme value;return value;}
+ Rect getScreenSafeArea(const GfxRenderer& r,bool,bool) const {return Rect{0,0,r.width,r.height};}
+ struct Metrics {};
+ Metrics getMetrics() const {return {};}
 };
 using UITheme=Theme;
+namespace SubpageLayout {int sectionGap(Theme::Metrics) {return 16;}}
 struct OptionPopup {
  inline static std::vector<std::string> labels;
  inline static std::string title, headline;
@@ -68,6 +79,59 @@ int main() {
    ConfirmationActivity placed(renderer,input,"Delete?","book",ConfirmationActivity::BodyPlacement::PopupTitle);
    placed.onEnter();assert(OptionPopup::title==(inx ? "book" : "Delete?"));
  }
+ Theme::getInstance().mainTabs=true;
+ const std::string longName="A long filename with enough letters to use two lines.epub";
+ for (const Rect screen : {Rect{0,0,300,400}, Rect{0,0,400,300}}) {
+   renderer.width=screen.width;
+   renderer.height=screen.height;
+   ConfirmationActivity dialog(renderer,input,"Delete?",longName);
+   dialog.onEnter();
+   assert(OptionPopup::title=="Delete?" && OptionPopup::headline==longName);
+   assert((OptionPopup::labels==std::vector<std::string>{"Cancel","Confirm"}));
+ }
+}
+''', include_dirs=(ROOT / "src",))
+
+    def test_weread_disclaimer_requires_its_last_page_before_saving(self):
+        source = (ROOT / "src/activities/apps/weread/webapi/WeReadActivity.cpp").read_text()
+        activate = method(source, "void WeReadActivity::activateDisclaimerSelection(")
+        run_cpp(r'''
+#include <atomic>
+#include <cassert>
+#define LOG_ERR(...) do {} while (false)
+struct {int exits=0; void goToApps() {++exits;}} activityManager;
+namespace WeReadStore {
+int saves=0;
+bool writable=false;
+bool acceptDisclaimer() {++saves;return writable;}
+}
+struct WeReadActivity {
+  std::atomic<int> disclaimerSelected_{1},disclaimerPage_{0},disclaimerPageCount_{0};
+  std::atomic<bool> disclaimerSaveFailed_{false};
+  int renders=0,entries=0;
+  void activateDisclaimerSelection();
+  void requestUpdate() {++renders;}
+  void requestUpdateAndWait() {++renders;}
+  void enterApp() {++entries;}
+};
+''' + activate + r'''
+int main() {
+  WeReadActivity app;
+  app.activateDisclaimerSelection();
+  assert(WeReadStore::saves==0 && app.renders==0);
+  app.disclaimerPageCount_=3;
+  for (int page=1;page<=2;++page) {
+    app.activateDisclaimerSelection();
+    assert(app.disclaimerPage_==page && app.renders==page && WeReadStore::saves==0);
+  }
+  app.activateDisclaimerSelection();
+  assert(WeReadStore::saves==1 && app.disclaimerSaveFailed_ && app.entries==0);
+  WeReadStore::writable=true;
+  app.activateDisclaimerSelection();
+  assert(WeReadStore::saves==2 && app.entries==1);
+  app.disclaimerSelected_=0;
+  app.activateDisclaimerSelection();
+  assert(activityManager.exits==1 && WeReadStore::saves==2);
 }
 ''')
 

@@ -17,6 +17,7 @@
 #include "AirPageWallpaper.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
@@ -953,13 +954,11 @@ void AirPageActivity::render(RenderLock&&) {
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_AIRPAGE_SETTINGS_ACTION),
                                                 tr(STR_AIRPAGE_IMAGES_ACTION), refreshActionText());
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      if (notice_ == Notice::InvalidImage) GUI.drawPopup(renderer, noticeText());
       break;
     }
     case Screen::Settings: {
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      if (notice_ == Notice::SettingsSaveFailed) GUI.drawPopup(renderer, noticeText());
       break;
     }
     case Screen::History: {
@@ -975,8 +974,10 @@ void AirPageActivity::render(RenderLock&&) {
 
   if (mappedInput.hasTouch() || screen_ == Screen::Settings || screen_ == Screen::History) renderUi();
 
-  if (screen_ == Screen::History && (notice_ == Notice::ImageOutOfMemory || notice_ == Notice::ImageDisplayFailed)) {
-    GUI.drawPopup(renderer, noticeText());
+  if ((screen_ == Screen::Qr && notice_ == Notice::InvalidImage) ||
+      (screen_ == Screen::Settings && notice_ == Notice::SettingsSaveFailed) ||
+      (screen_ == Screen::History && (notice_ == Notice::ImageOutOfMemory || notice_ == Notice::ImageDisplayFailed))) {
+    GUI.drawPopupInContent(renderer, SubpageLayout::insetHorizontal(content, metrics.contentSidePadding), noticeText());
   }
   renderer.displayBuffer();
   imageNeedsDisplay_ = true;

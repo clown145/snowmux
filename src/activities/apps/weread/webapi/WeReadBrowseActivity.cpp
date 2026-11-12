@@ -470,7 +470,9 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
     bodyReady = drawBody();
   }
   if (!bodyReady) {
-    GUI.drawPopup(renderer, tr(STR_WEREAD_DETAIL_UNAVAILABLE));
+    GUI.drawPopupInContent(
+        renderer, SubpageLayout::insetHorizontal(content, UITheme::getInstance().getMetrics().contentSidePadding),
+        tr(STR_WEREAD_DETAIL_UNAVAILABLE));
     return;
   }
 
@@ -670,6 +672,7 @@ void WeReadBrowseActivity::render(RenderLock&&) {
   const char* header = state_ == State::List || state_ == State::Detail ? kindTitle() : tr(STR_WEREAD_BROWSE_ENTRY);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight}, header);
   const Rect content = contentBounds();
+  const Rect popupBounds = SubpageLayout::insetHorizontal(content, metrics.contentSidePadding);
   switch (state_) {
     case State::Menu:
       GUI.drawList(
@@ -685,12 +688,12 @@ void WeReadBrowseActivity::render(RenderLock&&) {
                             operation_.qrUrl());
         renderer.drawCenteredText(UI_10_FONT_ID, qrY + qrSide, tr(STR_WEREAD_SCAN_LOGIN));
       } else {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_CACHING));
+        GUI.drawPopupInContent(renderer, popupBounds, tr(STR_WEREAD_CACHING));
       }
       break;
     case State::List: {
       if (pageHeader_.count == 0 && pageItemCount() == 0) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_BROWSE_EMPTY));
+        GUI.drawPopupInContent(renderer, popupBounds, tr(STR_WEREAD_BROWSE_EMPTY));
       } else {
         GUI.drawList(
             renderer, content, pageItemCount(), listSelected_, [this](const int index) { return rowTitle(index); },
@@ -710,8 +713,7 @@ void WeReadBrowseActivity::render(RenderLock&&) {
       drawDetail(content);
       break;
     case State::Error:
-      GUI.drawPopupInContent(renderer, SubpageLayout::insetHorizontal(content, metrics.contentSidePadding),
-                             errorMessage());
+      GUI.drawPopupInContent(renderer, popupBounds, errorMessage());
       break;
   }
 

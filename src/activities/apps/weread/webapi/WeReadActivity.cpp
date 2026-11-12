@@ -16,7 +16,6 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
-#include <numeric>
 #include <optional>
 #include <string>
 
@@ -59,11 +58,6 @@ constexpr StrId kDisclaimerParagraphs[] = {
     StrId::STR_WEREAD_DISCLAIMER_PARAGRAPH_3,
 };
 
-constexpr StrId kDisclaimerActions[] = {
-    StrId::STR_WEREAD_DISCLAIMER_CANCEL,
-    StrId::STR_WEREAD_DISCLAIMER_CONFIRM,
-};
-
 constexpr StrId kCacheScopeOptions[] = {
     StrId::STR_WEREAD_CACHE_WHOLE_BOOK,
     StrId::STR_WEREAD_CACHE_CHAPTER_RANGE,
@@ -85,10 +79,10 @@ constexpr StrId kPostProcessLongWaitLines[] = {
     StrId::STR_WEREAD_POST_PROCESS_LONG_WAIT_LINE_4,
 };
 
-constexpr int kDisclaimerActionCount = static_cast<int>(sizeof(kDisclaimerActions) / sizeof(kDisclaimerActions[0]));
+constexpr int kDisclaimerActionCount = 2;
 constexpr int kDisclaimerParagraphCount =
     static_cast<int>(sizeof(kDisclaimerParagraphs) / sizeof(kDisclaimerParagraphs[0]));
-constexpr int kMinimumDisclaimerActionGap = 4;
+constexpr int kMinimumDisclaimerActionGap = 6;
 constexpr int kManageEntryCount = static_cast<int>(sizeof(kManageEntries) / sizeof(kManageEntries[0]));
 constexpr size_t kMainTabCount = 2;
 constexpr int kPortraitShelfColumns = 3;
@@ -486,6 +480,8 @@ void WeReadActivity::onEnter() {
   Activity::onEnter();
   if (!WeReadBrowse::clearLegacyWorkspace()) LOG_ERR("WR", "legacy browse workspace cleanup failed");
   NetworkStartup::prepare(renderer);
+  disclaimerPage_ = 0;
+  disclaimerPageCount_ = 0;
   disclaimerSelected_ = 0;
   disclaimerSaveFailed_ = false;
   manageSelected_ = 0;
@@ -601,33 +597,20 @@ WeReadDetailLayout WeReadActivity::detailLayout(const Rect& content) const {
                             kDetailListActionCount, renderer.getLineHeight(UI_10_FONT_ID));
 }
 
-Rect WeReadActivity::disclaimerSafeBounds() const {
-  return UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-}
-
-Rect WeReadActivity::disclaimerContentBounds() const {
+Rect WeReadActivity::disclaimerActionsBounds(const Rect& content) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  return SubpageLayout::contentRect(disclaimerSafeBounds(), metrics);
-}
-
-Rect WeReadActivity::disclaimerActionsBounds() const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect content = disclaimerContentBounds();
   const int minimumHeight = renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
   const int height = std::min(content.height, std::max(GUI.getListRowStep(false), minimumHeight));
   const int availableWidth = std::max(0, content.width - metrics.contentSidePadding * 2);
-  const int labelWidth =
-      std::accumulate(std::begin(kDisclaimerActions), std::end(kDisclaimerActions), 0, [this](int width, StrId action) {
-        return std::max(width, renderer.getTextWidth(UI_10_FONT_ID, I18N.get(action)));
-      });
+  const int labelWidth = std::max({renderer.getTextWidth(UI_10_FONT_ID, tr(STR_WEREAD_DISCLAIMER_CANCEL)),
+                                   renderer.getTextWidth(UI_10_FONT_ID, tr(STR_WEREAD_DISCLAIMER_CONFIRM)),
+                                   renderer.getTextWidth(UI_10_FONT_ID, tr(STR_NEXT_PAGE))});
   const int gap = disclaimerActionGap(availableWidth, metrics.verticalSpacing);
   const int targetWidth =
       (labelWidth + metrics.contentSidePadding * 2) * kDisclaimerActionCount + gap * (kDisclaimerActionCount - 1);
   const int width = std::min(availableWidth, targetWidth);
   const int bottomY = content.y + content.height - height;
-  const int cachedY = disclaimerActionsY_.load();
-  const int y = cachedY >= content.y ? std::min(cachedY, bottomY) : bottomY;
-  return Rect{content.x + (content.width - width) / 2, y, width, height};
+  return Rect{content.x + (content.width - width) / 2, bottomY, width, height};
 }
 
 int WeReadActivity::shelfItemsPerPage() const {
@@ -1454,6 +1437,14 @@ void WeReadActivity::activateDisclaimerSelection() {
     activityManager.goToApps();
     return;
   }
+  const int pageCount = disclaimerPageCount_.load();
+  if (pageCount <= 0) return;
+  const int page = disclaimerPage_.load();
+  if (page < pageCount - 1) {
+    disclaimerPage_ = page + 1;
+    requestUpdateAndWait();
+    return;
+  }
   if (!WeReadStore::acceptDisclaimer()) {
     LOG_ERR("WR", "Failed to persist disclaimer acceptance");
     disclaimerSaveFailed_ = true;
@@ -1464,7 +1455,7 @@ void WeReadActivity::activateDisclaimerSelection() {
 }
 
 void WeReadActivity::handleDisclaimerInput() {
-  const Rect actions = disclaimerActionsBounds();
+  const Rect actions = disclaimerActionsBounds(contentBounds());
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int gap = disclaimerActionGap(actions.width, metrics.verticalSpacing);
   const int buttonWidth = std::max(1, (actions.width - gap) / kDisclaimerActionCount);
@@ -1497,6 +1488,13 @@ void WeReadActivity::handleDisclaimerInput() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activateDisclaimerSelection();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    const int page = std::min(disclaimerPage_.load(), std::max(0, disclaimerPageCount_.load() - 1));
+    if (page > 0) {
+      disclaimerPage_ = page - 1;
+      disclaimerSaveFailed_ = false;
+      requestUpdateAndWait();
+      return;
+    }
     activityManager.goToApps();
   }
 }
@@ -2135,82 +2133,92 @@ bool WeReadActivity::drawDetailIntroduction(const Rect& bounds, const bool selec
 }
 
 void WeReadActivity::drawDisclaimer(const Rect& content) {
+  namespace fui = freeink::ui;
   const auto& metrics = UITheme::getInstance().getMetrics();
-  Rect actions = disclaimerActionsBounds();
-  int paragraphSpacing = metrics.verticalSpacing;
-  const int textWidth = std::max(0, content.width - metrics.contentSidePadding * 2);
-  freeink::ui::GfxRendererTarget target(renderer);
-  applyUiTextAlignment(target);
-  freeink::ui::TextStyle textStyle;
-  textStyle.font = freeink::ui::GfxRendererTarget::FONT_BODY;
-  textStyle.maxLines = 16;
-  int paragraphHeights[kDisclaimerParagraphCount] = {};
+  const Rect actions = disclaimerActionsBounds(content);
+  const int buttonLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  int lineHeight = buttonLineHeight;
   int textFont = UI_10_FONT_ID;
-  const auto measureText = [&] {
-    target.setFont(textStyle.font, textFont);
-    int height = paragraphSpacing * (kDisclaimerParagraphCount - 1);
-    for (int i = 0; i < kDisclaimerParagraphCount; ++i) {
-      paragraphHeights[i] =
-          freeink::ui::measureWrappedText(target, I18N.get(kDisclaimerParagraphs[i]), textStyle, textWidth).height;
-      height += paragraphHeights[i];
-    }
-    return height;
-  };
-  int textHeight = measureText();
-  if (textHeight + actions.height + metrics.verticalSpacing > content.height) {
-    textFont = SMALL_FONT_ID;
-    paragraphSpacing = std::min(paragraphSpacing, 6);
-    textHeight = measureText();
-  }
-  const int freeHeight = std::max(0, content.height - textHeight - actions.height);
-  const int actionGap = std::min(freeHeight, std::max(metrics.verticalSpacing, freeHeight / 3));
-  actions.y = std::min(content.y + content.height - actions.height, content.y + textHeight + actionGap);
-  disclaimerActionsY_.store(actions.y);
-  const Rect textBounds{
-      content.x + metrics.contentSidePadding,
-      content.y,
-      textWidth,
-      std::max(0, actions.y - actionGap - content.y),
-  };
-  {
-    int y = textBounds.y;
-    GfxRenderer::ClipScope clip(renderer, textBounds.x, textBounds.y, textBounds.width, textBounds.height);
-    for (int i = 0; i < kDisclaimerParagraphCount; ++i) {
-      const char* paragraph = I18N.get(kDisclaimerParagraphs[i]);
-      const freeink::ui::Rect paragraphBounds{
-          static_cast<int16_t>(textBounds.x),
-          static_cast<int16_t>(y),
-          static_cast<int16_t>(textBounds.width),
-          static_cast<int16_t>(paragraphHeights[i]),
-      };
-      freeink::ui::layoutText(target, paragraphBounds, paragraph, textStyle,
-                              [&](const char* line, const freeink::ui::Rect lineBounds) {
-                                renderer.drawText(textFont, lineBounds.x, lineBounds.y, line);
-                              });
-      y += paragraphHeights[i];
-      if (i + 1 < kDisclaimerParagraphCount) y += paragraphSpacing;
-    }
+  const int gap = SubpageLayout::relatedGap(metrics);
+  Rect textBounds = SubpageLayout::insetHorizontal(content, metrics.contentSidePadding);
+  textBounds.height = actions.y - gap - textBounds.y;
+  if (textBounds.width <= 0 || lineHeight <= 0 || textBounds.height < lineHeight) {
+    disclaimerPageCount_ = 0;
+    return;
   }
 
+  fui::GfxRendererTarget target(renderer);
+  fui::TextStyle textStyle;
+  textStyle.font = fui::GfxRendererTarget::FONT_BODY;
+  textStyle.maxLines = 16;
+  const auto textWidth = static_cast<int16_t>(textBounds.width);
+  const auto measureLines = [&] {
+    target.setFont(textStyle.font, textFont);
+    int lines = kDisclaimerParagraphCount - 1;
+    for (const auto paragraph : kDisclaimerParagraphs) {
+      lines += fui::measureWrappedText(target, I18N.get(paragraph), textStyle, textWidth).height / lineHeight;
+    }
+    return lines;
+  };
+  int totalLines = measureLines();
+  const int smallLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  if (totalLines > textBounds.height / lineHeight && smallLineHeight > 0 && smallLineHeight < lineHeight) {
+    textFont = SMALL_FONT_ID;
+    lineHeight = smallLineHeight;
+    totalLines = measureLines();
+  }
+
+  const bool paginated = totalLines > textBounds.height / lineHeight;
+  const bool saveFailed = disclaimerSaveFailed_.load();
+  const bool showIndicator = paginated && textBounds.height >= 2 * lineHeight;
+  const Rect noticeBounds = textBounds;
+  if (showIndicator) textBounds.height -= lineHeight;
+  const int linesPerPage = textBounds.height / lineHeight;
+  const int pageCount = std::max(1, (totalLines + linesPerPage - 1) / linesPerPage);
+  const int page = std::min(disclaimerPage_.load(), pageCount - 1);
+  const int firstLine = page * linesPerPage;
+  int index = 0;
+  {
+    const GfxRenderer::ClipScope clip(renderer, textBounds.x, textBounds.y, textBounds.width, textBounds.height);
+    for (const auto paragraph : kDisclaimerParagraphs) {
+      fui::layoutText(target, fui::Rect{0, 0, textWidth, 1}, I18N.get(paragraph), textStyle,
+                      [&](const char* line, fui::Rect) {
+                        const int row = index++ - firstLine;
+                        if (row >= 0 && row < linesPerPage) {
+                          renderer.drawText(textFont, textBounds.x, textBounds.y + row * lineHeight, line);
+                        }
+                      });
+      ++index;  // One blank line between paragraphs.
+    }
+  }
+  if (showIndicator && !saveFailed) {
+    char indicator[24];
+    snprintf(indicator, sizeof(indicator), "%d/%d", page + 1, pageCount);
+    UITheme::drawCenteredText(renderer, textBounds, SMALL_FONT_ID, textBounds.y + textBounds.height, indicator);
+  }
+
+  const char* labels[] = {tr(STR_WEREAD_DISCLAIMER_CANCEL),
+                          page + 1 < pageCount ? tr(STR_NEXT_PAGE) : tr(STR_WEREAD_DISCLAIMER_CONFIRM)};
+  const int selectedIndex = disclaimerSelected_.load();
   const int buttonGap = disclaimerActionGap(actions.width, metrics.verticalSpacing);
   const int buttonWidth = std::max(1, (actions.width - buttonGap) / kDisclaimerActionCount);
   const int buttonRadius = std::min(metrics.popupCornerRadius, actions.height / 2);
-  const int buttonLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   for (int i = 0; i < kDisclaimerActionCount; ++i) {
     const int buttonX = actions.x + i * (buttonWidth + buttonGap);
-    const bool selected = disclaimerSelected_ == i;
+    const bool selected = selectedIndex == i;
     renderer.fillRoundedRect(buttonX, actions.y, buttonWidth, actions.height, buttonRadius,
                              selected ? Color::Black : Color::White);
     renderer.drawRoundedRect(buttonX, actions.y, buttonWidth, actions.height, 1, buttonRadius, true);
-    const auto label = renderer.truncatedText(UI_10_FONT_ID, I18N.get(kDisclaimerActions[i]), buttonWidth - 8);
+    const auto label = renderer.truncatedText(UI_10_FONT_ID, labels[i], buttonWidth - 8);
     const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
     renderer.drawText(UI_10_FONT_ID, buttonX + (buttonWidth - labelWidth) / 2,
                       actions.y + (actions.height - buttonLineHeight) / 2, label.c_str(), !selected);
   }
 
-  if (disclaimerSaveFailed_) {
-    GUI.drawPopup(renderer, tr(STR_WEREAD_DISCLAIMER_SAVE_FAILED));
+  if (saveFailed) {
+    GUI.drawPopupInContent(renderer, noticeBounds, tr(STR_WEREAD_DISCLAIMER_SAVE_FAILED));
   }
+  disclaimerPageCount_ = pageCount;
 }
 
 void WeReadActivity::drawShelfGrid(const Rect& content, const int selectedIndex, const int frameSelection,
@@ -2486,8 +2494,7 @@ void WeReadActivity::render(RenderLock&&) {
   const MainTab mainTab = mainTab_.load();
   const MainFocus mainFocus = mainFocus_.load();
   const int shelfSelection = shelfSelected_.load();
-  const Rect content = state == State::Disclaimer ? disclaimerContentBounds()
-                                                  : (state == State::Home ? mainContentBounds() : contentBounds());
+  const Rect content = state == State::Home ? mainContentBounds() : contentBounds();
   const bool showingShelf = state == State::Home && mainTab == MainTab::Shelf;
   const int shelfItems = showingShelf && shelfCount_ > 0 ? shelfItemsPerPage() : 0;
   const int shelfFrameSelection = shelfFrameSelection_;
@@ -2537,6 +2544,9 @@ void WeReadActivity::render(RenderLock&&) {
                    mainTabs_, mainFocus == MainFocus::Tabs);
   }
 
+  const auto showStatus = [&](const char* message) {
+    GUI.drawPopupInContent(renderer, SubpageLayout::insetHorizontal(content, metrics.contentSidePadding), message);
+  };
   switch (state) {
     case State::Disclaimer:
       drawDisclaimer(content);
@@ -2545,7 +2555,7 @@ void WeReadActivity::render(RenderLock&&) {
       switch (mainTab) {
         case MainTab::Shelf:
           if (shelfCount_ == 0) {
-            GUI.drawPopup(renderer, tr(STR_WEREAD_SHELF_EMPTY));
+            showStatus(tr(STR_WEREAD_SHELF_EMPTY));
           } else {
             drawShelfGrid(content, shelfSelection, incrementalShelfFrame ? shelfFrameSelection : kNoShelfSelection,
                           mainFocus == MainFocus::Content);
@@ -2566,14 +2576,14 @@ void WeReadActivity::render(RenderLock&&) {
       break;
     case State::DetailLoading:
       drawBookDetail(content);
-      GUI.drawPopup(renderer, tr(STR_WEREAD_FETCHING_DETAIL));
+      showStatus(tr(STR_WEREAD_FETCHING_DETAIL));
       break;
     case State::Introduction:
       drawIntroduction(content);
       break;
     case State::Qr: {
       if (!qrUrl_[0]) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+        showStatus(tr(STR_WEREAD_LOADING));
         break;
       }
       const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
@@ -2597,14 +2607,14 @@ void WeReadActivity::render(RenderLock&&) {
         if (completed > 0) {
           char status[96];
           snprintf(status, sizeof(status), tr(STR_WEREAD_SHELF_RECEIVED), static_cast<unsigned>(completed));
-          GUI.drawPopup(renderer, status);
+          showStatus(status);
         } else {
-          GUI.drawPopup(renderer, tr(STR_WEREAD_SYNCING_SHELF));
+          showStatus(tr(STR_WEREAD_SYNCING_SHELF));
         }
         break;
       }
       if (total == 0) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+        showStatus(tr(STR_WEREAD_LOADING));
         break;
       }
       const char* label = nullptr;
@@ -2692,30 +2702,30 @@ void WeReadActivity::render(RenderLock&&) {
       break;
     }
     case State::LogoutError:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOGOUT_FAILED));
+      showStatus(tr(STR_WEREAD_LOGOUT_FAILED));
       break;
     case State::LogoutCacheWarning:
       drawProgressStatus(renderer, content, tr(STR_WEREAD_LOGGED_OUT), nullptr, tr(STR_WEREAD_LOGOUT_CACHE_WARNING), 0,
                          0);
       break;
     case State::ClearingCache:
-      GUI.drawPopup(renderer, tr(STR_CLEARING_CACHE));
+      showStatus(tr(STR_CLEARING_CACHE));
       break;
     case State::CacheCleared:
-      GUI.drawPopup(renderer, tr(STR_CACHE_CLEARED));
+      showStatus(tr(STR_CACHE_CLEARED));
       break;
     case State::CacheClearError:
-      GUI.drawPopup(renderer, tr(STR_CLEAR_CACHE_FAILED));
+      showStatus(tr(STR_CLEAR_CACHE_FAILED));
       break;
     case State::LoginConfirmed:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOGIN_CONFIRMED));
+      showStatus(tr(STR_WEREAD_LOGIN_CONFIRMED));
       break;
     case State::Connecting:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+      showStatus(tr(STR_WEREAD_LOADING));
       break;
     case State::Cancelling:
     case State::OpenBook:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+      showStatus(tr(STR_WEREAD_LOADING));
       break;
   }
 
@@ -2725,7 +2735,7 @@ void WeReadActivity::render(RenderLock&&) {
   const char* next = "";
   switch (state) {
     case State::Disclaimer:
-      back = tr(STR_CANCEL);
+      back = disclaimerPage_.load() > 0 && disclaimerPageCount_.load() > 1 ? tr(STR_PREV_PAGE) : tr(STR_CANCEL);
       confirm = tr(STR_SELECT);
       previous = tr(STR_DIR_LEFT);
       next = tr(STR_DIR_RIGHT);

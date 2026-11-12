@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "BleInput.h"
@@ -1304,51 +1305,44 @@ void drawPopupFrame(const GfxRenderer& renderer, const Rect& box, const ThemeMet
     renderer.fillRect(box.x, box.y, box.width, box.height, false);
   }
 }
-}  // namespace
 
-Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int marginX = metrics.popupMarginX;
-  const int marginY = metrics.popupMarginY;
-  const EpdFontFamily::Style popupFontFamily = metrics.popupTextBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-  // Scale y position proportionally to screen height
-  const int y = static_cast<int>(renderer.getScreenHeight() * metrics.popupTopOffsetRatio);
-  const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, message, popupFontFamily);
-  const int textHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int w = textWidth + marginX * 2;
-  const int h = textHeight + marginY * 2;
-  const int x = (renderer.getScreenWidth() - w) / 2;
-
-  drawPopupFrame(renderer, Rect{x, y, w, h}, metrics);
-
-  const int textX = x + (w - textWidth) / 2;
-  const int textY = y + marginY + metrics.popupTextBaselineOffsetY;
-  renderer.drawText(UI_12_FONT_ID, textX, textY, message, metrics.popupTextInverted, popupFontFamily);
-  renderer.displayBuffer();
-  return Rect{x, y, w, h};
-}
-
-void BaseTheme::drawPopupInContent(const GfxRenderer& renderer, const Rect& content, const char* message) const {
+Rect paintPopup(const GfxRenderer& renderer, const Rect& content, const char* message, const ThemeMetrics& metrics,
+                const std::optional<int> preferredTop) {
   namespace fui = freeink::ui;
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int maxWidth = content.width - 2 * (metrics.popupMarginX + metrics.popupFrameThickness);
-  const int maxHeight = content.height - 2 * (metrics.popupMarginY + metrics.popupFrameThickness);
-  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  if (!message || !*message || maxWidth <= 0 || lineHeight <= 0 || maxHeight < lineHeight) return;
+  const int frame = metrics.popupFrameThickness;
+  const int maxWidth = content.width - 2 * (metrics.popupMarginX + frame);
+  const int maxHeight = content.height - 2 * (metrics.popupMarginY + frame);
+  if (!message || !*message || maxWidth <= 0 || maxHeight <= 0) return Rect{};
 
   fui::GfxRendererTarget target(renderer);
-  target.setFont(fui::GfxRendererTarget::FONT_BODY, UI_12_FONT_ID);
   fui::TextStyle style;
   style.font = fui::GfxRendererTarget::FONT_BODY;
   style.align = fui::TextAlign::Center;
   style.bold = metrics.popupTextBold;
-  style.maxLines = std::min(2, maxHeight / lineHeight);
+  style.maxLines = 6;
   const auto width = static_cast<int16_t>(maxWidth);
-  const auto size = fui::measureWrappedText(target, message, style, width);
+  fui::Size size{};
+  int fontId = UI_12_FONT_ID;
+  int lineHeight = 0;
+  for (const int candidate : {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID}) {
+    const int candidateHeight = renderer.getLineHeight(candidate);
+    if (candidateHeight <= 0 || candidateHeight > maxHeight) continue;
+    fontId = candidate;
+    lineHeight = candidateHeight;
+    target.setFont(style.font, fontId);
+    size = fui::measureWrappedText(target, message, style, width);
+    if (size.height <= maxHeight) break;
+  }
+  if (size.height <= 0) return Rect{};
+  if (size.height > maxHeight) {
+    style.maxLines = maxHeight / lineHeight;
+    size = fui::measureWrappedText(target, message, style, width);
+  }
   const int boxWidth = std::min<int>(size.width, maxWidth) + 2 * metrics.popupMarginX;
   const int boxHeight = size.height + 2 * metrics.popupMarginY;
-  const Rect box{content.x + (content.width - boxWidth) / 2, content.y + (content.height - boxHeight) / 2, boxWidth,
-                 boxHeight};
+  const int top = std::clamp(preferredTop.value_or(content.y + (content.height - boxHeight) / 2), content.y + frame,
+                             content.y + content.height - boxHeight - frame);
+  const Rect box{content.x + (content.width - boxWidth) / 2, top, boxWidth, boxHeight};
   drawPopupFrame(renderer, box, metrics);
 
   const GfxRenderer::ClipScope clip(renderer, box.x, box.y, box.width, box.height);
@@ -1357,8 +1351,22 @@ void BaseTheme::drawPopupInContent(const GfxRenderer& renderer, const Rect& cont
                        size.height};
   const auto fontStyle = style.bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
   fui::layoutText(target, text, message, style, [&](const char* line, const fui::Rect run) {
-    renderer.drawText(UI_12_FONT_ID, run.x, run.y, line, metrics.popupTextInverted, fontStyle);
+    renderer.drawText(fontId, run.x, run.y, line, metrics.popupTextInverted, fontStyle);
   });
+  return box;
+}
+}  // namespace
+
+Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int preferredTop = static_cast<int>(renderer.getScreenHeight() * metrics.popupTopOffsetRatio);
+  const Rect box = paintPopup(renderer, UITheme::getContentArea(renderer), message, metrics, preferredTop);
+  renderer.displayBuffer();
+  return box;
+}
+
+void BaseTheme::drawPopupInContent(const GfxRenderer& renderer, const Rect& content, const char* message) const {
+  paintPopup(renderer, content, message, UITheme::getInstance().getMetrics(), std::nullopt);
 }
 
 void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
