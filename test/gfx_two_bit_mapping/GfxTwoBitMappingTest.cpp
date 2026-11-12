@@ -7,12 +7,14 @@ namespace {
 
 bool mappedBit(const GfxRenderer::TwoBitPixel pixel) { return pixel.draw && !pixel.state; }
 
-bool directBit(const GfxRenderer::RenderMode mode, const uint8_t value, const bool absolute) {
-  uint8_t framebuffer = 0;
+bool directBit(const GfxRenderer::RenderMode mode, const uint8_t value, const bool absolute,
+               const bool ditherBw = false, const bool initialBit = false) {
+  uint8_t framebuffer = initialBit ? 0xff : 0;
   DirectPixelWriter writer{};
   writer.fb = &framebuffer;
   writer.mode = mode;
   writer.absolute = absolute;
+  writer.ditherBw = ditherBw;
   writer.displayWidthBytes = 1;
   writer.originY = 0;
   writer.clipRows = 1;
@@ -51,5 +53,15 @@ TEST(GfxTwoBitMapping, BwKeepsLogicalPixelState) {
     const auto pixel = GfxRenderer::mapTwoBitPixel(GfxRenderer::BW, value);
     EXPECT_EQ(pixel.draw, value < 3);
     EXPECT_TRUE(pixel.state);
+  }
+}
+
+TEST(GfxTwoBitMapping, DitheredBwProxyKeepsImagePixelsInAbsoluteGrayPlanes) {
+  for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+    for (uint8_t level = 0; level < 4; ++level) {
+      const bool expected = (level >> (mode == GfxRenderer::GRAYSCALE_MSB ? 1 : 0)) & 1;
+      EXPECT_EQ(directBit(mode, level, true, true, true), expected);
+      EXPECT_FALSE(directBit(mode, level, false, true));
+    }
   }
 }

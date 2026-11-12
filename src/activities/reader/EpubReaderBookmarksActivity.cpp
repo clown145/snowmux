@@ -181,9 +181,8 @@ void EpubReaderBookmarksActivity::startRename() {
 
 #if FREEINK_DEVICE_XUESU_300
 const char* EpubReaderBookmarksActivity::xuesuQuickActionLabel() const {
-  return !confirmPopup.isActive() && nav.selected >= 0 && nav.selected < listCount()
-             ? tr(STR_XUESU_BOOKMARK_ACTIONS)
-             : nullptr;
+  return !confirmPopup.isActive() && nav.selected >= 0 && nav.selected < listCount() ? tr(STR_XUESU_BOOKMARK_ACTIONS)
+                                                                                     : nullptr;
 }
 #endif
 

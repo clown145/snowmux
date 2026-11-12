@@ -746,7 +746,7 @@ void StandbyActivity::render(RenderLock&&) {
     // image. Only fires in Immersive — Normal-mode navigation needs the
     // ~300-500ms FAST_REFRESH and can't afford the ~2s gray LUT. inverseMode_
     // short-circuits because invertScreen is BW-only and mixes poorly with gray.
-    if (renderer.getGrayscaleLevels() >= 4 && currentFace_->wantsGrayscale() && !inverseMode_) {
+    if (currentFace_->wantsGrayscale() && !inverseMode_ && renderer.grayscaleCapabilities().supported()) {
       applyGrayscalePass(faceViewport);
     }
     return;

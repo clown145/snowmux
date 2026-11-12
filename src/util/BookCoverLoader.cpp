@@ -59,11 +59,12 @@ std::string ensureThumbnail(const std::string& bookPath, const int height, bool*
   if (generated) *generated = false;
   if (height <= 0 || !Storage.exists(bookPath.c_str())) return "";
 
-  if (FsHelpers::hasEpubExtension(bookPath)) {
+  const bool imported = FsHelpers::hasImportedBookExtension(bookPath);
+  if (FsHelpers::hasEpubExtension(bookPath) || imported) {
     Epub epub(bookPath, "/.crosspoint");
     const std::string path = epub.getThumbBmpPath(height);
     return ensureCachedCover(path, !epub.hasCoverOverride(), generated, [&]() {
-      if (!epub.load(true, true)) return false;
+      if (!epub.load(!imported, true)) return false;
       epub.setupCacheDir();
       return epub.generateThumbBmp(height);
     });
@@ -88,11 +89,12 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
   if (generated) *generated = false;
   if (!Storage.exists(bookPath.c_str())) return "";
 
-  if (FsHelpers::hasEpubExtension(bookPath)) {
+  const bool imported = FsHelpers::hasImportedBookExtension(bookPath);
+  if (FsHelpers::hasEpubExtension(bookPath) || imported) {
     Epub epub(bookPath, "/.crosspoint");
     const std::string path = epub.getCoverBmpPath();
     return ensureCachedCover(path, false, generated, [&]() {
-      if (!epub.load(true, true)) return false;
+      if (!epub.load(!imported, true)) return false;
       epub.setupCacheDir();
       if (title) *title = epub.getTitle();
       if (author) *author = epub.getAuthor();

@@ -14,14 +14,14 @@
 namespace fui = freeink::ui;
 
 void UsbDriveActivity::onEnter() {
-  bleinput::stop();
+  const bool bluetoothStopped = bleinput::stop();
   Activity::onEnter();
   resetUi();
   app.setScreen(&UsbDriveActivity::driveScreen, this);
 
   // Show the safety instructions before giving the raw SD card to the USB host.
   requestUpdateAndWait();
-  if (!Storage.beginUsbDrive()) {
+  if (!bluetoothStopped || !Storage.beginUsbDrive()) {
     LOG_ERR("USB", "Unable to start USB Drive");
     preparing = false;
     startFailed = true;

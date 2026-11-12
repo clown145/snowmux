@@ -306,7 +306,8 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   const int priorIndex = findPrior(st, entry.pathHash);
 
   const bool isXtc = FsHelpers::hasXtcExtension(name);
-  const bool extractionExpected = st.readMetadata && (FsHelpers::hasEpubExtension(name) || isXtc);
+  const bool extractionExpected =
+      st.readMetadata && (FsHelpers::hasEpubExtension(name) || FsHelpers::hasImportedBookExtension(name) || isXtc);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
   bool reuseMetadata = false;
   ClixRecord priorRecord{};
@@ -1067,8 +1068,7 @@ bool isLibraryBookFile(const std::string_view path) {
     if (slash == std::string_view::npos) break;
     start = slash + 1;
   }
-  return FsHelpers::checkFileExtension(path, ".epub") || FsHelpers::checkFileExtension(path, ".txt") ||
-         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::hasXtcExtension(path);
+  return FsHelpers::hasReflowableBookExtension(path) || FsHelpers::hasXtcExtension(path);
 }
 
 bool markLibraryIndexDirty() {

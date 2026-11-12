@@ -22,13 +22,14 @@ def method(source, name):
     return source[start:end]
 
 
-def run_cpp(program, include_dirs=(), defines=(), extra_sources=()):
+def run_cpp(program, include_dirs=(), defines=(), extra_sources=(), system_include_dirs=()):
     with tempfile.TemporaryDirectory(prefix='reading-ui-') as directory:
         cpp = Path(directory) / 'check.cpp'
         exe = Path(directory) / 'check'
         cpp.write_text(f'#include "{ROOT}/src/components/UiHighDpiProfile.h"\n' + program)
         subprocess.run(['c++', '-std=c++20', '-Wall', '-Wextra', '-Werror',
-                        *('-I'+str(path) for path in include_dirs), *('-D'+define for define in defines), str(cpp), *map(str, extra_sources), '-o', str(exe)], check=True)
+                        *('-I'+str(path) for path in include_dirs), *('-isystem'+str(path) for path in system_include_dirs),
+                        *('-D'+define for define in defines), str(cpp), *map(str, extra_sources), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
 
 

@@ -66,6 +66,14 @@ The shared SD writer also rejects a destination at the running application's
 flash address, including the single-slot layout, before allocating or erasing.
 Build/host checks do not establish physical display, power or recovery acceptance.
 
+### Xuesu development target
+
+`xuesu_300` builds an ESP32-S3 application for Xuesu. The
+pinned SDK needs the repository's board patch, and the build uses a local waveform
+header generated from the factory 1.3.3 app. The vendor bootloader, partition
+table and OTA0 app are retained during the verified OTA1 installation. See the
+[Xuesu guide](xuesu-300-port.md) for setup, capabilities and hardware checks.
+
 ## Standby-display light sleep
 
 ### Adapter ownership

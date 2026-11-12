@@ -116,7 +116,8 @@ void ReadingDateSelectionActivity::openSelectedField() {
   startActivityForResultWith<IntervalSelectionActivity>(
       [this, current](const ActivityResult& result) {
         if (!result.isCancelled) {
-          if (const auto* value = std::get_if<IntervalResult>(&result.data)) adjustSelectedField(value->value - current);
+          if (const auto* value = std::get_if<IntervalResult>(&result.data))
+            adjustSelectedField(value->value - current);
         }
       },
       "ReadingDateValue", FIELD_NAMES[selectedField], current, minimums[selectedField], maximums[selectedField], 1, 1);
@@ -136,8 +137,10 @@ void ReadingDateSelectionActivity::loop() {
 
 #if FREEINK_DEVICE_XUESU_300
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedField == FIELD_COUNT) finishWithDate();
-    else openSelectedField();
+    if (selectedField == FIELD_COUNT)
+      finishWithDate();
+    else
+      openSelectedField();
     return;
   }
   buttonNavigator.onNextRelease([this] {
@@ -223,8 +226,9 @@ void ReadingDateSelectionActivity::render(RenderLock&&) {
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT + 1, selectedField, rowTitle, nullptr,
                nullptr, rowValue, true);
 #else
-  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField, rowTitle, rowValue,
-               [](int) { return UIIcon::Recent; }, nullptr, false);
+  GUI.drawList(
+      renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField, rowTitle, rowValue,
+      [](int) { return UIIcon::Recent; }, nullptr, false);
 #endif
 
 #if !FREEINK_DEVICE_XUESU_300

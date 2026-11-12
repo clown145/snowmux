@@ -169,7 +169,8 @@ std::string BookReadingAdjustmentActivity::getDateLabel() const {
 const char* BookReadingAdjustmentActivity::getDurationLabel() const {
   static char label[24];
 #if FREEINK_DEVICE_XUESU_300
-  snprintf(label, sizeof(label), tr(STR_SLEEP_TIMER_VALUE_FORMAT), static_cast<unsigned>(DURATION_MINUTES[selectedDuration]));
+  snprintf(label, sizeof(label), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
+           static_cast<unsigned>(DURATION_MINUTES[selectedDuration]));
 #else
   snprintf(label, sizeof(label), "%d min", DURATION_MINUTES[selectedDuration]);
 #endif
@@ -210,7 +211,8 @@ void BookReadingAdjustmentActivity::openSelectedField() {
     char labels[DURATION_COUNT][24];
     const char* choices[DURATION_COUNT];
     for (int i = 0; i < DURATION_COUNT; ++i) {
-      snprintf(labels[i], sizeof(labels[i]), tr(STR_SLEEP_TIMER_VALUE_FORMAT), static_cast<unsigned>(DURATION_MINUTES[i]));
+      snprintf(labels[i], sizeof(labels[i]), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
+               static_cast<unsigned>(DURATION_MINUTES[i]));
       choices[i] = labels[i];
     }
     adjustmentPicker.show(tr(STR_AMOUNT), choices, DURATION_COUNT, selectedDuration, [this](int choice) {
@@ -235,8 +237,10 @@ void BookReadingAdjustmentActivity::loop() {
 
 #if FREEINK_DEVICE_XUESU_300
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedField == FIELD_COUNT) applyAdjustment();
-    else openSelectedField();
+    if (selectedField == FIELD_COUNT)
+      applyAdjustment();
+    else
+      openSelectedField();
     return;
   }
   buttonNavigator.onNextRelease([this] {
@@ -322,8 +326,8 @@ void BookReadingAdjustmentActivity::render(RenderLock&&) {
   const int sidePadding = metrics.contentSidePadding;
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
 #if FREEINK_DEVICE_XUESU_300
-  const int listHeight = renderer.getScreenHeight() - contentTop - 2 * renderer.getLineHeight(UI_10_FONT_ID) -
-                         2 * metrics.verticalSpacing;
+  const int listHeight =
+      renderer.getScreenHeight() - contentTop - 2 * renderer.getLineHeight(UI_10_FONT_ID) - 2 * metrics.verticalSpacing;
 #else
   const int listHeight = metrics.listWithSubtitleRowHeight * FIELD_COUNT;
 #endif
@@ -348,8 +352,9 @@ void BookReadingAdjustmentActivity::render(RenderLock&&) {
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT + 1, selectedField, rowTitle, nullptr,
                nullptr, rowValue, true);
 #else
-  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField, rowTitle, rowValue,
-               [](int index) { return index == 0 ? UIIcon::Settings : UIIcon::Recent; }, nullptr, false);
+  GUI.drawList(
+      renderer, Rect{0, contentTop, pageWidth, listHeight}, FIELD_COUNT, selectedField, rowTitle, rowValue,
+      [](int index) { return index == 0 ? UIIcon::Settings : UIIcon::Recent; }, nullptr, false);
 #endif
 
   const int infoTop = contentTop + listHeight + metrics.verticalSpacing;

@@ -22,7 +22,7 @@ void encodeCredentials(JsonDocument& doc, const std::vector<WifiCredential>& cre
     obj["password_crc32"] = credential_integrity::crc32(cred.password);
   }
 }
-}
+}  // namespace
 
 void WifiCredentialStore::toJson(JsonDocument& doc) const {
   std::lock_guard<std::mutex> lock(credentialMutex);

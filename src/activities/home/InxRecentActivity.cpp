@@ -419,8 +419,8 @@ void InxRecentActivity::drawCompactFlow(UiScreen& screen, const Rect& content) {
   char percent[8];
   snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
   const int barWidth = footer.width / 2;
-  drawMiniProgress(renderer, Rect{footer.x, footer.y + (footer.height - kProgressHeight) / 2, barWidth, kProgressHeight},
-                   progress);
+  drawMiniProgress(
+      renderer, Rect{footer.x, footer.y + (footer.height - kProgressHeight) / 2, barWidth, kProgressHeight}, progress);
   renderer.drawText(SMALL_FONT_ID, footer.x + barWidth + kGap, footer.y, percent);
 
   if (books->size() > 1) {

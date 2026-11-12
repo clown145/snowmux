@@ -1,5 +1,9 @@
 #include "EpubReaderActivity.h"
 
+#if FREEINK_DEVICE_XUESU_300
+#include "bringup/XuesuLegacyData.h"
+#endif
+
 #include <BlePageTurner.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
@@ -473,6 +477,14 @@ bool EpubReaderActivity::loadBook() {
     nextPageNumber = cachedChapterTotalPageCount = 0;
     cachedVisibleTextOffset.reset();
   }
+
+#if FREEINK_DEVICE_XUESU_300
+  if (!hasSavedProgress && !legacyProgressPending) {
+    if (const auto fraction = xuesu_legacy::recentProgress(bookPath)) {
+      hasSavedProgress = jumpToFraction(*fraction);
+    }
+  }
+#endif
 
 #ifdef ENABLE_CHINESE_VERSION
   if (wereadBookId_[0]) {
@@ -2969,15 +2981,23 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   } pxcSlotGuard;
 
   auto* fcm = renderer.getFontCacheManager();
-  // Black & White images: the page turns as plain B/W, images dither in the
-  // B/W pass and text keeps its usual anti-aliasing.
   const bool imageGrayscale = SETTINGS.imageRendering != CrossPointSettings::IMAGES_DISPLAY_BW;
+  const bool pageHasImages = imageGrayscale && page->hasImages();
+  const bool overlayGrayscale = !renderer.isInverted() && renderer.grayscaleCapabilities().supported();
+  const bool absoluteSupported =
+      !renderer.isInverted() && renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+  const bool absoluteOnly = absoluteSupported && !overlayGrayscale;
+  const bool absoluteImageGrayscale =
+      pageHasImages && absoluteSupported &&
+      ((absoluteOnly && !SETTINGS.readingBackgroundEnabled) ||
+       (overlayGrayscale && !gpio.deviceIsX3() && display.getController() == HalDisplay::Controller::UC8279));
+  // Keep a dithered B/W proxy on absolute-only panels for menus and failed uploads.
   struct DitherScope {
     GfxRenderer& renderer;
-    ~DitherScope() { renderer.setDitherImagesInBw(false); }
-  } ditherScope{renderer};
-  renderer.setDitherImagesInBw(!imageGrayscale);
-  const bool pageHasImages = imageGrayscale && page->hasImages();
+    bool previous;
+    ~DitherScope() { renderer.setDitherImagesInBw(previous); }
+  } ditherScope{renderer, renderer.imagesDitheredInBw()};
+  renderer.setDitherImagesInBw(!imageGrayscale || !overlayGrayscale);
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   if (pageHasImagesNeedingDecode) {
     // Lend the fixed framebuffer to the large JPEG/PNG decoder while it streams
@@ -3045,18 +3065,13 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool manualRefreshPending = forcedRefreshPending;
   forcedRefreshPending = false;
   const bool cleanImageBasePending = manualRefreshPending || pagesUntilFullRefresh <= 1;
-  // Night mode renders crisp B/W; the SDK disables every grayscale display path.
-  const bool grayscaleEnabled = !renderer.isInverted() && renderer.grayscaleCapabilities().supported();
-  const bool needsTextGrayscale = grayscaleEnabled && SETTINGS.textAntiAliasing;
+  const bool needsTextGrayscale = overlayGrayscale && SETTINGS.textAntiAliasing;
   // Images write the BW buffer directly; keep them, backgrounds and faux bold on the existing path.
   const bool use16LevelText = needsTextGrayscale && !pageHasImages && renderer.getGrayscaleLevels() == 16 &&
                               sdFontSystem.readerFaceIsFourBit() && !SETTINGS.readingBackgroundEnabled &&
                               SETTINGS.fakeBold == 0;
-  const bool needsAnyGrayscale =
-      grayscaleEnabled && (needsTextGrayscale || (pageHasImages && !renderer.grayscaleReplacesFrame()));
-  const bool absoluteImageGrayscale = grayscaleEnabled && pageHasImages && !gpio.deviceIsX3() &&
-                                      display.getController() == HalDisplay::Controller::UC8279 &&
-                                      renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+  const bool needsAnyGrayscale = absoluteImageGrayscale || needsTextGrayscale ||
+                                 (overlayGrayscale && pageHasImages && !renderer.grayscaleReplacesFrame());
   const auto grayscale = renderer.grayscaleCapabilities(absoluteImageGrayscale ? HalDisplay::GrayscaleMode::Absolute
                                                                                : HalDisplay::GrayscaleMode::Overlay);
   const bool tiledGrayscale = needsAnyGrayscale && grayscale.stripUploads;
@@ -3144,7 +3159,7 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.restoreBwBuffer(false);
       return finish();
     }
-    LOG_DBG("ERS", "UC8279 image page: absolute quality waveform");
+    LOG_DBG("ERS", "Image page: absolute grayscale waveform");
     pagesUntilFullRefresh = 1;
   } else if (use16LevelText) {
     // 16 级文字：下面那一趟 commitGrayscale16() 自己把整帧推给面板，所以这里**不**推底图。
@@ -3371,6 +3386,10 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.clearScreen(renderer.grayPlanesAreAbsolute() ? 0xFF : 0x00);
       renderGrayscalePass();
     });
+    if (!displayed && absoluteOnly && absoluteImageGrayscale && !activityManager.isSwitchPending()) {
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      return finish();
+    }
     committed = displayed;
     return displayed;
   }

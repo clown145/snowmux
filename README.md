@@ -1,10 +1,13 @@
-# CrossMux
+# SnowMux
 
 **English** | [简体中文](./README.zh-CN.md)
 
+**SnowMux** is a community port of [CrossMux](https://github.com/0x1abin/crossmux) for the Xuesu (雪酥) e-reader.
+[Xuesu web flasher](https://clown145.github.io/snowmux/) · [Xuesu releases](https://github.com/clown145/snowmux/releases) · [Xuesu device guide](./docs/engineering/xuesu-300-port.md)
+
 **CrossMux** is a community fork of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) for ESP32 e-ink devices. Reading comes first, with lightweight apps, reading analytics, standby faces, and on-demand services alongside the reader.
 
-[Releases](https://github.com/0x1abin/crossmux/releases) · [User guide](./USER_GUIDE.md) · [Contributing](./docs/contributing/README.md)
+[Upstream CrossMux releases](https://github.com/0x1abin/crossmux/releases) · [User guide](./USER_GUIDE.md) · [Contributing](./docs/contributing/README.md)
 
 ![CrossMux running on an Xteink device](./docs/images/cover.jpg)
 
@@ -40,6 +43,9 @@
 Stable publishes only X3/X4, Sticky, X4 Pro and Metalio E-Ink 4. All nine targets publish Nightly. Local Stable build modes do not grant release eligibility; availability follows the selected regional catalog. This configuration does not establish hardware acceptance. Each S3 target needs its own image. X4 Classic (`x4c`), [LilyGo T5 S3 4.7 PRO/Lite](./docs/engineering/lilygo-t5s3.md) (`lilygo_t5s3`), and BOOX Picco (`picco`) remain development-only. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
 
 Use [Stable](https://github.com/0x1abin/crossmux/releases/tag/stable) for formal releases, or [Nightly](https://github.com/0x1abin/crossmux/releases/tag/nightly) for development builds. Both channels use the same package rules, with separate eligible target sets. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
+
+[Xuesu (雪酥)](./docs/engineering/xuesu-300-port.md) has a separate ESP32-S3 development build, `xuesu_300`. The device guide documents the SDK patch, panel waveform generation, and OTA1 testing on the reference device.
+See [the community web flasher and release workflow](./docs/engineering/xuesu-300-port.md#社区刷机站与发版) for GitHub Pages setup.
 
 ## Install firmware
 
@@ -84,7 +90,7 @@ pio run -e gh_release
 pio run -e gh_release -t upload
 ```
 
-The application binary is `.pio/build/<environment>/firmware.bin`. The committed configuration has 36 build entries: local Dev, Stable and Nightly modes for nine hardware targets, three development-only boards and six simulators. Only the four targets listed above are eligible for Stable publication. Versions and Git hashes are generated automatically: Stable `<base>`, Nightly `<base>-rc+<sha7>`, Dev `<base>-dev-<branch>-<sha7>`. For other boards, see [build-system.md](./docs/engineering/build-system.md).
+The application binary is `.pio/build/<environment>/firmware.bin`. The nine published targets each have local Dev, Stable and Nightly modes. The configuration also includes development-only boards and simulators. The four targets listed above are eligible for Stable publication. Versions and Git hashes are generated automatically. Stable uses `<base>`, Nightly uses `<base>-rc+<sha7>`, and Dev uses `<base>-dev-<branch>-<sha7>`. For other boards, see [build-system.md](./docs/engineering/build-system.md).
 
 For X4 Pro and Metalio E-Ink 4:
 

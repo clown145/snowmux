@@ -39,6 +39,7 @@ enum class SettingAction {
   HomeButton,
   TapZones,
   BatteryCalibration,
+  ImportStockRecents,
   Sleep,
 };
 

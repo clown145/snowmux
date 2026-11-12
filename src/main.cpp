@@ -68,8 +68,8 @@
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SlideSwitch.h"
-#include "util/Timezones.h"
 #include "util/TimeUtils.h"
+#include "util/Timezones.h"
 #include "util/UserGuide.h"
 
 #if CROSSPOINT_VECTOR_FONTS
@@ -634,10 +634,9 @@ void enterDeepSleep(bool fromTimeout = false) {
   constexpr bool clockSleep = false;
 #endif
   const bool isQuickResumeSleep =
-      !clockSleep &&
-      (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-       (fromTimeout &&
-        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT));
+      !clockSleep && (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
+                      (fromTimeout && SETTINGS.quickResumeSleepScreen ==
+                                          CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT));
   // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
   // it visible until the first useful reader or home paint replaces it.
   APP_STATE.showBootScreen = false;
@@ -995,8 +994,8 @@ void setup() {
 
   const auto wakeupReason = gpio.getWakeupReason();
 #if FREEINK_DEVICE_XUESU_300
-  const auto standbyResume = xuesu_sleep_clock::takeStandbyResume(
-      clockTimerWake || wakeupReason == HalGPIO::WakeupReason::PowerButton);
+  const auto standbyResume =
+      xuesu_sleep_clock::takeStandbyResume(clockTimerWake || wakeupReason == HalGPIO::WakeupReason::PowerButton);
 #endif
   // Sample the wake hold now — a click wake is released within milliseconds of
   // boot — but defer the sleep-or-boot decision until SETTINGS is loaded below:
@@ -1044,7 +1043,7 @@ void setup() {
   if (!Storage.begin()) {
     LOG_ERR("MAIN", "SD card initialization failed");
     const bool fontsReady = setupDisplayAndFonts(isSilentReboot);
-    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
+    activityManager.goToFullScreenMessage(tr(STR_SD_CARD_ERROR), EpdFontFamily::BOLD);
     activityManager.requestUpdateAndWait();
     if (otaPendingAtBoot && fontsReady) {
       if (HalOtaSlot::confirmRunningImage()) {
@@ -1385,6 +1384,23 @@ void loop() {
   }
 
   // After the exclusive-storage return: it saves settings to the SD card.
+#if FREEINK_DEVICE_XUESU_300
+  if (!scene.wifiOn && !activityManager.isSwitchPending() && !activityManager.deferBluetoothStart() &&
+      (homeShown || activityManager.isForegroundReader() || activityManager.showsMainTabStatusBar()) &&
+      gpio.physicalPressedMask() == 0 && !mappedInputManager.wasAnyReleased()) {
+    const auto warning = Storage.takeHealthWarning();
+    if (warning != SdHealthWarning::None) {
+      const auto body = warning == SdHealthWarning::IoError ? StrId::STR_SD_CARD_IO_WARNING : StrId::STR_SD_CARD_SLOW;
+      auto notice =
+          makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInputManager, tr(STR_SD_CARD), I18N.get(body));
+      if (notice) {
+        activityManager.pushActivity(std::move(notice));
+      } else {
+        LOG_ERR("STORAGE", "OOM allocating SD card notice (%zu bytes)", sizeof(ConfirmationActivity));
+      }
+    }
+  }
+#endif
   handleSlideSwitch();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
   halClock.update();

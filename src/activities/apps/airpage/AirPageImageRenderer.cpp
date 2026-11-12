@@ -94,7 +94,7 @@ AirPageImageRenderer::Result AirPageImageRenderer::render(GfxRenderer& renderer,
       ImageBlock::releaseRenderCache();
     }
   } cleanup{renderer, renderer.imagesDitheredInBw()};
-  const bool monochrome = renderer.getGrayscaleLevels() < 4;
+  const bool monochrome = renderer.getGrayscaleLevels() != 16 && !renderer.grayscaleCapabilities().supported();
   renderer.setDitherImagesInBw(monochrome);
 
   if (renderer.getGrayscaleLevels() == 16) {

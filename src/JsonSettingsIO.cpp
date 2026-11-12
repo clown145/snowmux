@@ -19,7 +19,7 @@ namespace {
 // Stream into "<path>.tmp" and reject incomplete output before replacing the target.
 // Streaming avoids a second buffer for large analytics documents.
 bool saveJsonDocumentToFile(const char* moduleName, const char* path, const JsonDocument& doc,
-                           const bool keepPrevious = false) {
+                            const bool keepPrevious = false) {
   if (!path || *path == '\0') {
     LOG_ERR(moduleName, "Missing JSON path for write");
     return false;
@@ -41,8 +41,8 @@ bool saveJsonDocumentToFile(const char* moduleName, const char* path, const Json
   memcpy(tempPath.get() + pathLength, ".tmp", sizeof(".tmp"));
 
   HalStorage::StorageLock lock;
-  if (!Storage.exists(path) && (Storage.exists(tempPath.get()) ||
-                                (keepPrevious && Storage.exists((std::string(path) + ".rollback").c_str()))) &&
+  if (!Storage.exists(path) &&
+      (Storage.exists(tempPath.get()) || (keepPrevious && Storage.exists((std::string(path) + ".rollback").c_str()))) &&
       !PersistableStoreBase::recoverTempFile(path)) {
     LOG_ERR(moduleName, "Cannot recover staged JSON for %s", path);
     return false;

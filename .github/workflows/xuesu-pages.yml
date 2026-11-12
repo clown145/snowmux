@@ -1,0 +1,74 @@
+name: Release Xuesu firmware and publish Pages
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: xuesu-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: startsWith(github.event.release.tag_name, 'xuesu-v')
+    uses: ./.github/workflows/xuesu-build.yml
+    with:
+      release_tag: ${{ github.event.release.tag_name }}
+      published_at: ${{ github.event.release.published_at }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: xuesu-site
+          path: site
+      - name: Attach verified files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          digest=$(jq -er '.assets[0].digest | sub("^sha256:"; "")' site/api/v1/firmware/latest.json)
+          firmware="${RELEASE_TAG}-ota1.bin"
+          cp "site/firmware/${digest}.bin" "release/${firmware}"
+          cp site/firmware/LICENSE.txt release/LICENSE.txt
+          printf '%s  %s\n' "$digest" "$firmware" > release/SHA256SUMS.txt
+          (cd release && sha256sum --check SHA256SUMS.txt)
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "$RUNNER_TEMP/xuesu-release.json"
+          for file in "release/${firmware}" release/LICENSE.txt release/SHA256SUMS.txt; do
+            name=${file##*/}
+            existing=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // "missing"' "$RUNNER_TEMP/xuesu-release.json")
+            if [[ -z "$existing" ]]; then
+              gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY"
+            elif [[ "$existing" != "sha256:$(sha256sum "$file" | cut -d' ' -f1)" ]]; then
+              echo "::error::Existing release asset $name has a different digest. Publish a new version for a changed build."
+              exit 1
+            fi
+          done
+      - name: Upload GitHub Pages site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

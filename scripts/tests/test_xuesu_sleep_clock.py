@@ -12,6 +12,7 @@ class XuesuSleepClockTest(unittest.TestCase):
         run_cpp(r'''
 #include <cassert>
 #include <cstdlib>
+#include <type_traits>
 #include <vector>
 #include "activities/boot_sleep/XuesuSleepClock.h"
 #include "activities/boot_sleep/XuesuSleepClockTiming.h"
@@ -176,7 +177,7 @@ int main() {
   hal_environment::nextReading = {284, 530};
   refreshAfterTimerWake(renderer);
   assert(powerManager.laterDelay == 0);
-  assert(!retained.environment.valid());
+  assert(retained.humidity == hal_environment::Reading::missing);
   clear();
   epoch = 0;
   assert(!drawBeforeSleep(renderer));
@@ -226,5 +227,32 @@ int main() {
   assert(renderer.inversions == firstInversion + 2);
   assert(UITheme::paints.back().styleSeed == sketch.styleSeed);
   assert(!takeStandbyResume(false));  // An ordinary boot clears retained state.
+
+  // A face selected in the standby app stays authoritative after timer wakes,
+  // including reconstruction of the old frame and a fresh sensor sample.
+  SETTINGS.sleepScreen = CrossPointSettings::CLOCK_SLOPPY;
+  hal_environment::nextReading = {247, 402};
+  assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Newspaper}));
+  UITheme::paints.clear();
+  hal_environment::nextReading = {249, 399};
+  for (int minute = 1; minute <= 5; ++minute) {
+    epoch += 60;
+    refreshAfterTimerWake(renderer);
+  }
+  assert(UITheme::paints.size() == 10);
+  for (const auto& paint : UITheme::paints) assert(paint.layout == Layout::Newspaper);
+  assert(UITheme::paints[8].environment.humidity == 402 && UITheme::paints[9].environment.humidity == 399);
+  assert(SETTINGS.sleepScreen == CrossPointSettings::CLOCK_SLOPPY);
+  const auto weather = takeStandbyResume(true);
+  assert(weather && weather->layout == Layout::Newspaper);
+
+  // An older firmware's retained bytes cannot serve as a differential baseline.
+  assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Newspaper}));
+  retained.magic = 0x58534333;
+  UITheme::paints.clear();
+  powerManager.laterDelay = 0;
+  epoch += 60;
+  refreshAfterTimerWake(renderer);
+  assert(UITheme::paints.empty() && powerManager.laterDelay == 0);
 }
 ''', include_dirs=(ROOT / 'src', ROOT / 'lib/hal'))

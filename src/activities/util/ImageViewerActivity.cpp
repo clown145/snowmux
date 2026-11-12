@@ -17,6 +17,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/SleepCover.h"
+#include "util/XuesuXmpic.h"
 
 namespace {
 constexpr const char* IMAGE_PREVIEW_PATH = "/.crosspoint/image_preview.bmp";
@@ -96,6 +97,11 @@ bool ImageViewerActivity::preparePreview() {
   if (Storage.exists(IMAGE_PREVIEW_PATH) && !Storage.remove(IMAGE_PREVIEW_PATH)) return false;
 
   bool prepared = false;
+#if FREEINK_DEVICE_XUESU_300
+  if (FsHelpers::hasXmpicExtension(filePath)) {
+    prepared = xuesu_xmpic::writeBmpPreview(filePath.c_str(), IMAGE_PREVIEW_PATH);
+  } else
+#endif
   {
     GfxRenderer::FrameBufferLoan loan(renderer);
     prepared = PngToBmpConverter::pngFileToBmpFile(filePath.c_str(), IMAGE_PREVIEW_PATH, true);
@@ -130,8 +136,21 @@ bool ImageViewerActivity::renderJpeg() {
     renderer.cancelGrayscale16();
     renderer.clearScreen();
   }
-  if (!drawImage(DecodeOutput::FrameBufferAndCache)) return false;
   const bool absolute = renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+  const bool overlay = renderer.grayscaleCapabilities().supported();
+  const bool monochrome = !absolute && !overlay;
+  const auto drawBw = [&] {
+    const bool previousDither = renderer.imagesDitheredInBw();
+    renderer.setDitherImagesInBw(!overlay);
+    const bool drawn = drawImage(DecodeOutput::FrameBufferAndCache);
+    renderer.setDitherImagesInBw(previousDither);
+    return drawn;
+  };
+  if (!drawBw()) return false;
+  if (monochrome) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return true;
+  }
   if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) return false;
   if (!absolute) renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   const ScopedCleanup resetMode{[this] { renderer.setRenderMode(GfxRenderer::BW); }};
@@ -148,12 +167,19 @@ bool ImageViewerActivity::renderJpeg() {
     else
       renderer.copyGrayscaleMsbBuffers();
   }
-  if (ready) renderer.displayGrayBuffer();
+  if (ready) {
+    renderer.displayGrayBuffer();
+    ready = renderer.displayCommitted();
+  }
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.clearScreen();
-  if (!drawImage(DecodeOutput::FrameBufferAndCache)) ready = false;
+  const bool restored = drawBw();
   renderer.cleanupGrayscaleWithFrameBuffer();
-  return ready;
+  if (!ready && absolute && !overlay && restored) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return renderer.displayCommitted();
+  }
+  return ready && restored;
 }
 
 void ImageViewerActivity::onEnter() {
@@ -180,7 +206,7 @@ void ImageViewerActivity::onEnter() {
     }
     return;
   }
-  const bool needsPreview = isPng();
+  const bool needsPreview = isPng() || FsHelpers::hasXmpicExtension(filePath);
   const bool prepared = !needsPreview || preparePreview();
   const char* bitmapPath = needsPreview ? IMAGE_PREVIEW_PATH : filePath.c_str();
   HalFile file;
@@ -230,7 +256,17 @@ void ImageViewerActivity::onEnter() {
       GUI.fillPopupProgress(renderer, popupRect, 50);
 
       renderer.clearScreen();
-      if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0)) {
+      const bool absolute = renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+      const bool overlay = renderer.grayscaleCapabilities().supported();
+      const bool monochrome = !absolute && !overlay;
+      const auto drawBw = [&] {
+        const bool previousDither = renderer.imagesDitheredInBw();
+        renderer.setDitherImagesInBw(!overlay);
+        const bool drawn = renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+        renderer.setDitherImagesInBw(previousDither);
+        return drawn;
+      };
+      if (!drawBw()) {
         renderer.clearScreen();
         renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_FILE_OPEN_FAILED));
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -242,8 +278,7 @@ void ImageViewerActivity::onEnter() {
       if (mappedInput.hasTouch()) {
         GUI.drawActionButton(renderer, sleepCoverActionRect(renderer), tr(STR_SET_SLEEP_COVER));
       }
-      if (bitmap.hasGreyscale()) {
-        const bool absolute = renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+      if (bitmap.hasGreyscale() && !monochrome) {
         if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) return;
         if (!absolute) renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
         bool planesReady = true;
@@ -268,13 +303,16 @@ void ImageViewerActivity::onEnter() {
             renderer.copyGrayscaleMsbBuffers();
           }
         }
-        if (planesReady) renderer.displayGrayBuffer();
+        if (planesReady) {
+          renderer.displayGrayBuffer();
+          planesReady = renderer.displayCommitted();
+        }
 
         // Rebuild the BW framebuffer for popups and subsequent differential updates.
         renderer.setRenderMode(GfxRenderer::BW);
         renderer.clearScreen();
-        if (bitmap.rewindToData() != BmpReaderError::Ok ||
-            !renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0)) {
+        const bool restored = bitmap.rewindToData() == BmpReaderError::Ok && drawBw();
+        if (!restored) {
           LOG_ERR("BMP", "Failed to rewind bitmap to restore the BW framebuffer");
           renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_FILE_OPEN_FAILED));
           planesReady = false;
@@ -282,7 +320,10 @@ void ImageViewerActivity::onEnter() {
         GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
         renderer.cleanupGrayscaleWithFrameBuffer();
         imageReady = planesReady;
-        if (!planesReady) renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (!planesReady) {
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+          if (absolute && !overlay) imageReady = restored && renderer.displayCommitted();
+        }
       } else {
         renderer.displayBuffer(HalDisplay::FAST_REFRESH);
         imageReady = true;
@@ -462,7 +503,8 @@ void ImageViewerActivity::showSleepCoverOptions() {
       if (!result.isCancelled) {
         const bool overlay =
             FsHelpers::hasBmpExtension(filePath) && SETTINGS.sleepScreen == CrossPointSettings::COVER_TRANSPARENT;
-        doSetSleepCover(filePath.c_str(), overlay);
+        const char* coverPath = FsHelpers::hasXmpicExtension(filePath) ? IMAGE_PREVIEW_PATH : filePath.c_str();
+        doSetSleepCover(coverPath, overlay);
       }
       onEnter();
     });

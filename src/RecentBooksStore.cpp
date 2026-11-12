@@ -78,6 +78,22 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
   }
 }
 
+#if FREEINK_DEVICE_XUESU_300
+bool RecentBooksStore::appendImportedBooks(std::vector<RecentBook>&& books) {
+  std::lock_guard lock(storeMutex);
+  const size_t previous = recentBooks.size();
+  if (previous >= MAX_RECENT_BOOKS) return true;
+  const size_t added = std::min(books.size(), MAX_RECENT_BOOKS - previous);
+  recentBooks.reserve(previous + added);
+  for (size_t i = 0; i < added; ++i) recentBooks.push_back(std::move(books[i]));
+  JsonDocument doc;
+  toJson(doc);
+  if (writeDocToFile(getFilePath(), doc, true)) return true;
+  recentBooks.resize(previous);
+  return false;
+}
+#endif
+
 bool RecentBooksStore::removeByPath(const std::string& path) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });

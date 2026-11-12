@@ -189,7 +189,7 @@ void AppsMenuActivity::activateIndex(const int index) {
 }
 
 void AppsMenuActivity::drawIconGrid(UiScreen& screen, const Rect& rect, const int visibleCount,
-                                   const bool showSelection) {
+                                    const bool showSelection) {
   const int lineHeight = screen.target().lineHeight(screen.theme().bodyText.font);
   int gridWidth = rect.width;
   int gridHeight = rect.height;

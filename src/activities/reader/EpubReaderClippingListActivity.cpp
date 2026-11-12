@@ -122,9 +122,8 @@ void EpubReaderClippingListActivity::onRowLongPress(const int index) {
 
 #if FREEINK_DEVICE_XUESU_300
 const char* EpubReaderClippingListActivity::xuesuQuickActionLabel() const {
-  return !confirmPopup.isActive() && nav.selected >= 0 && nav.selected < listCount()
-             ? tr(STR_XUESU_DELETE_CLIPPING)
-             : nullptr;
+  return !confirmPopup.isActive() && nav.selected >= 0 && nav.selected < listCount() ? tr(STR_XUESU_DELETE_CLIPPING)
+                                                                                     : nullptr;
 }
 #endif
 

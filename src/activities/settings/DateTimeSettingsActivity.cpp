@@ -87,8 +87,10 @@ void DateTimeSettingsActivity::loop() {
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
 #if FREEINK_DEVICE_XUESU_300
-    if (selectedEditField == EDIT_FIELD_COUNT) confirmManualEdit();
-    else openSelectedField();
+    if (selectedEditField == EDIT_FIELD_COUNT)
+      confirmManualEdit();
+    else
+      openSelectedField();
 #else
     confirmManualEdit();
 #endif
@@ -122,8 +124,8 @@ void DateTimeSettingsActivity::openSelectedField() {
           if (const auto* value = std::get_if<IntervalResult>(&result.data)) adjustEditField(value->value - current);
         }
       },
-      "DateTimeValue", FIELD_NAMES[selectedEditField], current, minimums[selectedEditField], maximums[selectedEditField],
-      1, 1);
+      "DateTimeValue", FIELD_NAMES[selectedEditField], current, minimums[selectedEditField],
+      maximums[selectedEditField], 1, 1);
 }
 #endif
 

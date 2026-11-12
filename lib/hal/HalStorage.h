@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "SdHealthMonitor.h"
+
 class HalFile;
 
 enum class UsbDriveState : uint8_t {
@@ -26,6 +28,7 @@ class HalStorage {
   bool begin();
   bool ready() const;
   bool getSpace(uint64_t& totalBytes, uint64_t& freeBytes);
+  SdHealthWarning takeHealthWarning();
   // Physical card-detect hint, when the board has one (Read Pico: FCA9555 P0.6,
   // active-low). ADVISORY ONLY, never a mount gate: the frozen round-1 decision
   // is mount-by-attempt (docs/engineering/read-pico.md B11), because a CD line

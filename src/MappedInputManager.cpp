@@ -510,7 +510,7 @@ bool MappedInputManager::resolveXuesuConfirmShortcut(const bool enabled, const u
                            gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_DOWN) || hasRemoteClick();
   using Action = XuesuConfirmInput::Action;
   const auto action = xuesuConfirmInput.update(millis(), mapButton(Button::Confirm, &HalGPIO::wasReleased),
-                                                gpio.isXuesuConfirmHeld(), interrupted);
+                                               gpio.isXuesuConfirmHeld(), interrupted);
   xuesuConfirmSingle = action == Action::Single;
   return action == Action::Double;
 }

@@ -20,13 +20,13 @@ class WordSelectionInput {
 
   static uint8_t buttonEdges(const MappedInputManager& input) {
     using B = MappedInputManager::Button;
-    uint8_t buttons = (input.wasReleased(B::Confirm) ? INPUT_CONFIRM : 0) |
-                      (input.wasReleased(B::Back) ? INPUT_BACK : 0) |
-                      (input.wasPressed(B::NavPrevious) ? INPUT_PREVIOUS : 0) |
-                      (input.wasPressed(B::NavNext) ? INPUT_NEXT : 0);
+    uint8_t buttons =
+        (input.wasReleased(B::Confirm) ? INPUT_CONFIRM : 0) | (input.wasReleased(B::Back) ? INPUT_BACK : 0) |
+        (input.wasPressed(B::NavPrevious) ? INPUT_PREVIOUS : 0) | (input.wasPressed(B::NavNext) ? INPUT_NEXT : 0);
 #if !FREEINK_DEVICE_XUESU_300
-    buttons |= (input.wasPressed(B::ScreenLeft) ? INPUT_LEFT : 0) | (input.wasPressed(B::ScreenRight) ? INPUT_RIGHT : 0) |
-               (input.wasPressed(B::ScreenUp) ? INPUT_UP : 0) | (input.wasPressed(B::ScreenDown) ? INPUT_DOWN : 0);
+    buttons |= (input.wasPressed(B::ScreenLeft) ? INPUT_LEFT : 0) |
+               (input.wasPressed(B::ScreenRight) ? INPUT_RIGHT : 0) | (input.wasPressed(B::ScreenUp) ? INPUT_UP : 0) |
+               (input.wasPressed(B::ScreenDown) ? INPUT_DOWN : 0);
 #endif
     return buttons;
   }

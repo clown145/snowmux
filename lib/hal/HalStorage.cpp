@@ -11,6 +11,12 @@
 
 #include <cassert>
 
+#if FREEINK_DEVICE_XUESU_300
+#include <sdmmc_cmd.h>
+
+#include "SdHealthMonitor.h"
+#endif
+
 #if FREEINK_DEVICE_READPICO
 #include <BoardReadPico.h>
 #endif
@@ -21,7 +27,35 @@ namespace {
 #if FREEINK_CAP_USB_MSC
 freeink::UsbMassStorage usbMassStorage;
 #endif
+#if FREEINK_DEVICE_XUESU_300
+SdHealthMonitor sdHealth;
+portMUX_TYPE sdHealthMux = portMUX_INITIALIZER_UNLOCKED;
+
+esp_err_t recordSdTransfer(const uint32_t started, const esp_err_t result) {
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&sdHealthMux);
+  sdHealth.observe(now, now - started, result == ESP_OK);
+  portEXIT_CRITICAL(&sdHealthMux);
+  if (result != ESP_OK) LOG_ERR("STORAGE", "SDMMC transfer failed: %s", esp_err_to_name(result));
+  return result;
+}
+#endif
 }  // namespace
+
+#if FREEINK_DEVICE_XUESU_300
+extern "C" esp_err_t __real_sdmmc_read_sectors(sdmmc_card_t*, void*, size_t, size_t);
+extern "C" esp_err_t __real_sdmmc_write_sectors(sdmmc_card_t*, const void*, size_t, size_t);
+
+extern "C" esp_err_t __wrap_sdmmc_read_sectors(sdmmc_card_t* card, void* dst, size_t sector, size_t count) {
+  const uint32_t started = millis();
+  return recordSdTransfer(started, __real_sdmmc_read_sectors(card, dst, sector, count));
+}
+
+extern "C" esp_err_t __wrap_sdmmc_write_sectors(sdmmc_card_t* card, const void* src, size_t sector, size_t count) {
+  const uint32_t started = millis();
+  return recordSdTransfer(started, __real_sdmmc_write_sectors(card, src, sector, count));
+}
+#endif
 
 HalStorage HalStorage::instance;
 
@@ -76,6 +110,17 @@ bool HalStorage::getSpace(uint64_t& totalBytes, uint64_t& freeBytes) {
   if (SDCard.getSpace(totalBytes, freeBytes)) return true;
   LOG_ERR("STORAGE", "Unable to query SD filesystem space");
   return false;
+}
+
+SdHealthWarning HalStorage::takeHealthWarning() {
+#if FREEINK_DEVICE_XUESU_300
+  portENTER_CRITICAL(&sdHealthMux);
+  const auto warning = sdHealth.takeWarning();
+  portEXIT_CRITICAL(&sdHealthMux);
+  return warning;
+#else
+  return SdHealthWarning::None;
+#endif
 }
 
 void HalStorage::prepareForDeepSleep() {

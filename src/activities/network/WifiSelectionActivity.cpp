@@ -132,12 +132,14 @@ void WifiSelectionActivity::onPromptEvent(const fui::ActionEvent& event, void* u
 void WifiSelectionActivity::applyCredentialPrompt(const int choice) {
   const bool save = state == WifiSelectionState::SAVE_PROMPT;
   if (!save && state != WifiSelectionState::FORGET_PROMPT) return;
-  if (save) savePromptSelection = choice;
-  else forgetPromptSelection = choice;
+  if (save)
+    savePromptSelection = choice;
+  else
+    forgetPromptSelection = choice;
   if (choice == (save ? 0 : 1)) {
     RenderLock lock(*this);
-    credentialWriteFailed = save ? !WIFI_STORE.addCredential(selectedSSID, enteredPassword)
-                                 : !WIFI_STORE.removeCredential(selectedSSID);
+    credentialWriteFailed =
+        save ? !WIFI_STORE.addCredential(selectedSSID, enteredPassword) : !WIFI_STORE.removeCredential(selectedSSID);
   } else {
     credentialWriteFailed = false;
   }
@@ -145,8 +147,10 @@ void WifiSelectionActivity::applyCredentialPrompt(const int choice) {
     requestUpdate();
     return;
   }
-  if (save) onComplete(true);
-  else startWifiScan();
+  if (save)
+    onComplete(true);
+  else
+    startWifiScan();
 }
 
 void WifiSelectionActivity::onEnter() {
@@ -966,8 +970,10 @@ void WifiSelectionActivity::loop() {
       const int current = rescanSelected ? 0 : static_cast<int>(selectedNetworkIndex) + 1;
       const int next = (current + direction + count) % count;
       rescanSelected = next == 0;
-      if (rescanSelected) requestUpdate();
-      else moveSelection(next - 1);
+      if (rescanSelected)
+        requestUpdate();
+      else
+        moveSelection(next - 1);
     };
     buttonNavigator.onNext([&] { step(1); });
     buttonNavigator.onPrevious([&] { step(-1); });

@@ -32,8 +32,8 @@ constexpr CompactFlow compactFlow(const Rect& content, const int titleLineHeight
   const int progressY = bottom - progressLineHeight;
   const int titleHeight = 2 * titleLineHeight;
   const int titleY = progressY - gap - titleHeight;
-  return {Rect{x, content.y, width, std::max(0, titleY - gap - content.y)},
-          Rect{x, titleY, width, titleHeight}, Rect{x, progressY, width, progressLineHeight}};
+  return {Rect{x, content.y, width, std::max(0, titleY - gap - content.y)}, Rect{x, titleY, width, titleHeight},
+          Rect{x, progressY, width, progressLineHeight}};
 }
 
 constexpr int contentHeight(const int screenHeight, const int top, const int buttonHintsHeight) {

@@ -164,8 +164,18 @@ bool hasPngExtension(std::string_view fileName) { return checkFileExtension(file
 
 bool hasBmpExtension(std::string_view fileName) { return checkFileExtension(fileName, ".bmp"); }
 
+bool hasXmpicExtension(std::string_view fileName) {
+#if FREEINK_DEVICE_XUESU_300
+  return checkFileExtension(fileName, ".xmpic");
+#else
+  (void)fileName;
+  return false;
+#endif
+}
+
 bool hasImageExtension(std::string_view fileName) {
-  return hasBmpExtension(fileName) || hasJpgExtension(fileName) || hasPngExtension(fileName);
+  return hasBmpExtension(fileName) || hasJpgExtension(fileName) || hasPngExtension(fileName) ||
+         hasXmpicExtension(fileName);
 }
 
 bool hasGifExtension(std::string_view fileName) { return checkFileExtension(fileName, ".gif"); }
@@ -180,8 +190,19 @@ bool hasTxtExtension(std::string_view fileName) { return checkFileExtension(file
 
 bool hasMarkdownExtension(std::string_view fileName) { return checkFileExtension(fileName, ".md"); }
 
+bool hasImportedBookExtension(std::string_view fileName) {
+#if FREEINK_DEVICE_XUESU_300
+  return checkFileExtension(fileName, ".docx") || checkFileExtension(fileName, ".mobi") ||
+         checkFileExtension(fileName, ".azw3");
+#else
+  (void)fileName;
+  return false;
+#endif
+}
+
 bool hasReflowableBookExtension(std::string_view fileName) {
-  return hasEpubExtension(fileName) || hasTxtExtension(fileName) || hasMarkdownExtension(fileName);
+  return hasEpubExtension(fileName) || hasTxtExtension(fileName) || hasMarkdownExtension(fileName) ||
+         hasImportedBookExtension(fileName);
 }
 
 bool hasCssExtension(std::string_view fileName) { return checkFileExtension(fileName, ".css"); }

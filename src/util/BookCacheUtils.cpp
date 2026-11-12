@@ -116,7 +116,8 @@ struct BookArtifacts {
 };
 BookArtifacts artifactsFor(const std::string& path) {
   const bool txt = FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path);
-  const std::string bookmark = FsHelpers::hasEpubExtension(path) ? BookmarkUtil::getBookmarkPath(path) : "";
+  const bool hasBookmarks = FsHelpers::hasEpubExtension(path) || FsHelpers::hasImportedBookExtension(path);
+  const std::string bookmark = hasBookmarks ? BookmarkUtil::getBookmarkPath(path) : "";
   return {{{path + ".key", path + ".key.tmp", path + ".rights", path + ".rights.tmp", bookCachePath(path),
             txt ? Txt(path, "/.crosspoint").getCachePath() : "", bookmark, bookmark.empty() ? "" : bookmark + ".tmp",
             bookmark.empty() ? "" : bookmark + ".bak"}}};

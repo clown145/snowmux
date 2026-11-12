@@ -1,8 +1,66 @@
-# 雪酥·3 移植记录
+# 雪酥移植记录
 
-目标是为 `xuesu-300-std` 构建独立的 CrossMux 固件。现阶段完成离线硬件取证、雪酥诊断构建、原厂 Flash 备份和屏幕控制器识别。
+`xuesu_300` 是雪酥（板型 ID `xuesu-300-std`）的独立 CrossMux 开发构建。参考设备使用 ESP32-S3、16 MiB Flash、8 MiB PSRAM、300×400 墨水屏和三个实体键。实机已验证启动、SD 挂载、黑白刷新、TXT 和 EPUB 阅读。最新灰阶插图修正版通过构建和主机回归，仍需刷机复测。USB 磁盘、蓝牙重连和原厂阅读记录导入也待真机验收。
 
-## 基线
+## 从源码构建
+
+安装 [pioarduino Core 和 Python](../contributing/getting-started.md)，在包含本设备支持的检出根目录用 Bash 运行以下命令。Windows 可使用 Git Bash。干净检出时应用一次雪酥 SDK 补丁。
+
+```bash
+git submodule update --init --recursive
+git -C freeink-sdk apply --check ../scripts/xuesu_freeink_sdk.patch
+git -C freeink-sdk apply ../scripts/xuesu_freeink_sdk.patch
+mkdir -p .pio
+curl -fL https://xiaomoreader.top/XueSu_300OTA/firmware10033.bin -o .pio/xuesu-factory-1.3.3.bin
+python3 scripts/prepare_xuesu_panel_lut.py .pio/xuesu-factory-1.3.3.bin
+PYTHONUTF8=1 pio run -e xuesu_300
+```
+
+生成器校验原厂镜像的 SHA-256，并在 `.pio/xuesu-local-include/` 生成波形头文件。官网 1.3.3 镜像和参考设备的 OTA0 备份生成的头文件逐字节相同。原厂镜像、波形头文件、实机备份和编译产物都留在构建机的 `.pio/` 下。SDK 修改通过项目补丁随源码分发。
+
+独立检出使用官网镜像和固定版本的 SDK 构建成功，应用镜像为 6,550,272 字节。esptool 校验了 ESP32-S3 镜像的校验和与哈希。该次构建复用了已安装的 PlatformIO 工具链，项目依赖重新安装。
+
+构建产物 `.pio/build/xuesu_300/firmware.bin` 是应用镜像。实机安装流程会校验设备的真实分区表和原厂镜像，再写入 `ota_1`，读回后选择该槽启动。参考设备的 OTA1 从 `0x750000` 开始，容量为 `0x730000`。写入前保留各自设备的完整 Flash 备份。PlatformIO 的常规上传入口已关闭，合并产物 `firmware.factory.bin` 含开发板引导数据，写入参考设备会覆盖原厂数据。具体分区和既有试机记录见下文。
+
+## 功能与限制
+
+| 项目 | 当前实现 |
+| --- | --- |
+| 阅读 | EPUB、TXT 和既有 CrossMux 阅读功能。无 DRM 的 MOBI/AZW3（源文件最多 4 MiB）及 DOCX 首次打开会生成阅读缓存。DOCX 重排正文和内嵌 JPEG、PNG、GIF。 |
+| 图片 | 书内插图和查看器接入原生四阶灰度。300×400 XMPIC 可查看并设为休眠封面。纯文字页使用黑白快刷。 |
+| USB 与 SD | 「文件传输 → USB 磁盘」把 SD 卡交给电脑。电脑弹出后设备重启并重新挂载。书库已有索引时，USB 传入的书可能需要手动重建书库索引。设备本机使用 SD 卡时会提示重复慢传输和底层读写故障。 |
+| 蓝牙 | BLE HID 翻页器的列表和密钥保存在本机 SD 卡。备份 SD 卡时也会包含这些本机配对记录。 |
+| 原厂阅读记录 | 可导入最近阅读和近似百分比进度。精确阅读位置、统计、字体、壁纸槽和设置仍需另行兼容。 |
+| 发布与升级 | 社区版本由 GitHub Release 触发独立构建和网页发布。CrossMux Stable、Nightly、设备内 OTA 和 SD 卡更新入口暂未接入。 |
+
+依赖与二进制发布信息见[固件许可说明](../../licenses/README.md)。下文保留按开发阶段记录的硬件证据和验收结果。
+
+## 社区刷机站与发版
+
+刷机站地址为 [clown145.github.io/snowmux](https://clown145.github.io/snowmux/)，使用 [GitHub Pages 的 GitHub Actions 发布来源](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)。其他项目仓库使用 `https://<owner>.github.io/<repo>/`，账号或组织站点仓库 `<owner>.github.io` 部署在同域名的根路径。
+
+1. 新仓库在 **Settings → Pages → Source** 选 **GitHub Actions**。如果 `github-pages` 环境限制部署来源，在该环境的部署规则中允许标签 `xuesu-v*`。
+2. [构建工作流](../../.github/workflows/xuesu-build.yml)在推送 `main` 或针对 `main` 提交 PR 时运行，也可手动运行。构建通过后可下载 `xuesu-site` 工件预览网页和固件。
+3. 在 **Releases** 发布形如 `xuesu-v0.1.0` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)复用构建流程，校验芯片、板型标记、分区和镜像摘要，将 OTA1 应用、SHA-256 校验文件与许可附到 Release，并同步部署网页和更新清单。[波形数据的许可说明](../../licenses/README.md#third-party-material)
+
+网站通过 Chrome 或 Edge 的 Web Serial 接入雪酥。连接后检查 ESP32-S3 安全状态、Flash 容量、原厂分区表、已知的 OTA0 应用及两份启动记录。首次安装先下载 16 MiB Flash 备份，再写 `0x750000`。应用摘要一致后才向 `0x10000` 写入启动记录。后续更新只写 OTA1。网页串口流程待实体设备验收，建议用首次安装和 OTA1 更新分别验证，记录备份长度、写入摘要、OTA0 启动槽保留情况及应用重启结果。
+
+本地预览从 `flasher/` 运行 `npm ci`、`npm test`、`npm run build` 和 `python -m http.server 8765 --directory dist`，然后打开 `http://localhost:8765/`。使用已有构建的 `firmware.bin` 和 `partitions.bin` 时，可从仓库根目录用 `python scripts/package_xuesu_pages.py --help` 查看发布数据的打包参数。
+
+### 更新查询接口
+
+`GET /api/v1/firmware/latest.json` 相对于站点根路径，项目站的完整地址为 `https://<owner>.github.io/<repo>/api/v1/firmware/latest.json`。发版时静态清单和它指向的镜像一起部署。网页也从该接口获取当前版本。
+
+| 字段 | 含义 |
+| --- | --- |
+| `schema` | 接口格式版本，当前为 `1`。 |
+| `board`, `target_partition` | 板型 `xuesu-300-std`，应用目标槽 `ota_1`。 |
+| `tag_name`, `release_tag`, `commit` | 社区版本号（如 `0.1.0`）、GitHub 标签（如 `xuesu-v0.1.0`）和源码提交。 |
+| `assets[0]` | 逻辑文件名 `firmware.bin`、字节数 `size`、HTTPS 下载地址 `browser_download_url` 和 `sha256:` 前缀的 `digest`。网页串口读回使用该条目的 `md5`。 |
+
+现有 [`ReleaseJsonParser`](../../lib/JsonParser/ReleaseJsonParser.h) 可以读取版本、镜像地址和大小。设备端接入时需要记录当前安装的社区版本、校验板型和 SHA-256，并实现保留原厂 OTA0 的写入与恢复流程。当前 [`OtaUpdater`](../../src/network/OtaUpdater.cpp) 对雪酥禁用了设备内更新，从 OTA1 启动时沿用其通用的下一槽选择会指向 OTA0。
+
+## 历史移植基线
 
 - CrossMux `a6fd569f7552db4ea1a6550ced7bc06568ae0e61`。
 - FreeInk SDK `d9a1304cd234b0536136302f629304b609f62b32`。
@@ -32,7 +90,7 @@
 
 公开 UC8276C 命令表未列出 `E1 02`，`0x20` 规定 56 个数据字节，SPI 写入周期至少 100 ns（最高 10 MHz）。原厂固件的对应路径发 42 字节，配置时钟 20 MHz。诊断保留原厂配置值，首个显示测试应按面板规格使用较低频率，并实测刷屏与 BUSY 时序。见 [UC8276C 命令表](https://v4.cecdn.yun300.cn/100001_1909185148/UC8276.pdf#page=7)和[交流特性](https://v4.cecdn.yun300.cn/100001_1909185148/UC8276.pdf#page=59)。
 
-## 接入顺序
+## 早期接入计划
 
 1. 通过 USB 只读识别实机，记录芯片、安全配置和分区。确认可恢复的原厂备份，再验证板级接线。
 2. 按 [FreeInk SDK 新设备流程](../../freeink-sdk/README.md#adding-a-new-device)增加雪酥 `BoardProfile` 和独立的 PlatformIO 环境。复用 `SdmmcBlockDevice` 的四位总线和匹配控制器的屏幕驱动。现有 S3 环境提供构建参考，雪酥的引脚、分区和电源设置来自本机证据。
@@ -60,7 +118,7 @@ $env:PLATFORMIO_CORE_DIR = Join-Path (Get-Location).Path '.pio\.platformio'
 
 Windows 本地用仓库忽略目录 `.pio/xuesu-host/` 下的 GCC 和 CMake 运行了 `ReaderSessionTest`、`txt_page_index_test`、`ProgressComparisonTest`、`WeReadProtocolTest` 与 `WeReadTouchGeometryTest`，共 55 项通过。微信读书协议测试使用本地 HTTP 句柄声明，验证解析与状态逻辑。全套主机测试配置仍需要 Expat 等系统依赖。
 
-300×400 竖屏的 INX 主题详情页有 284 px 内容高度。`WeReadActivity::detailActionsBounds()` 为 4 行各分配 66 px，固定的 140 px 封面区域与操作区在纵向重叠 120 px。该结果来自 `SubpageLayout::contentRect()`、现有主题参数和详情页几何的桌面计算。详情页需要按可用高度布局。
+早期 300×400 竖屏的 INX 主题详情页有 284 px 内容高度。`WeReadActivity::detailActionsBounds()` 为 4 行各分配 66 px，固定的 140 px 封面区域与操作区在纵向重叠 120 px。该结果来自 `SubpageLayout::contentRect()`、主题参数和详情页几何的桌面计算。修复见下文「微信读书详情与 Wi-Fi 保存确认」。
 
 完整窗口模拟器使用 [CrossMux 模拟器 fork](https://github.com/0x1abin/crosspoint-simulator)，Windows 需要 WSL。雪酥尺寸预览要从已确认的 400×300 原生方向和 300×400 竖屏方向出发。窗口验收、账号联网和真机显示仍待测。
 
@@ -100,21 +158,11 @@ BUSY_N 从高转低，约 1.12 秒后回到高。关电后 `0x71=0x1B`，最低�
 
 试机版使用固件内置字库。原厂备份中可见外部字体选择菜单、`.bin` 和 TrueType 加载分支，官网雪酥 1.3.3 更新说明列有 TTF 修复。该样机尚未做原厂字体导入实测。CrossMux 的应用层已有 SD 字体加载和选择菜单，启用 PSRAM 的目标可从 `/fonts/` 或 `/.fonts/` 加载 `.ttf`、`.otf`、`.ttc`，也可使用 `.cpfont` 位图字体。[原厂 OTA 清单](https://xiaomoreader.top/XueBingOTA/version.json) · [CrossMux 字体说明](../sd-card-fonts.md)
 
-在仓库根目录用实机备份中的 `ota0-app.bin` 生成本地屏幕波形后编译。脚本会核验原厂应用的 SHA-256。波形只支持该脚本中记录的参考镜像版本。
-
-```powershell
-& .\.venv\Scripts\python.exe scripts/prepare_xuesu_panel_lut.py .pio/xuesu-device-backups/2026-11-10/ota0-app.bin
-& .\.venv\Scripts\pio.exe run -e xuesu_300_txt_test
-```
+完成[源码构建](#从源码构建)中的波形生成步骤后，运行 `pio run -e xuesu_300_txt_test` 构建历史试机目标。
 
 试机应用为 `.pio/build/xuesu_300_txt_test/firmware.bin`。首次写入前用 esptool 校验原厂 `ota_0`、原厂 OTA 选择记录和 `ota_1` 的待写范围，再将应用单独写入 `0x750000`。写入摘要校验通过后，将 `seq=2` 的选择记录写入原厂空白的第二个 OTA 元数据扇区 `0x10000`。串口确认运行分区为 `ota_1`、SD 卡挂载成功、发现 53 个 TXT，墨水屏完成刷新。试机目标跳过 Arduino 默认 NVS 初始化。
 
-此台样机回退时，把试机前保存的 `.pio/xuesu-device-backups/2026-11-10/txt-test/stock-otadata-sector.bin` 写回 `0x10000` 并复位。备份是该扇区原来的 4,096 字节。回退流程基于此台样机原始 OTA 布局。不同设备先核对实际布局和原始选择记录。
-
-```powershell
-$backup = '.pio/xuesu-device-backups/2026-11-10/txt-test/stock-otadata-sector.bin'
-& .\.pio\.platformio\penv\Scripts\esptool.exe --chip esp32s3 --port COM12 --before default-reset --after hard-reset write-flash 0x10000 $backup
-```
+该参考设备回退时，恢复试机前备份的 `0x10000` 扇区原始 4,096 字节并复位。其他设备先核对自己的实际分区布局和 OTA 选择记录，使用自己的备份。
 
 ## 验证状态
 
@@ -140,12 +188,7 @@ $backup = '.pio/xuesu-device-backups/2026-11-10/txt-test/stock-otadata-sector.bi
 
 `xuesu_300` 从常规 CrossMux 启动入口构建。板卡配置和驱动注册基于固定的 FreeInk SDK `d9a1304cd234b0536136302f629304b609f62b32`，以[项目内补丁](../../scripts/xuesu_freeink_sdk.patch)记录，便于在干净检出上重现。补丁在 SDK 根目录应用一次。按键沿用 FreeInk 的短按确认、长按返回，GPIO46 和 GPIO45 为高有效的方向键。
 
-```powershell
-git -C freeink-sdk apply --check ../scripts/xuesu_freeink_sdk.patch
-git -C freeink-sdk apply ../scripts/xuesu_freeink_sdk.patch
-& .\.venv\Scripts\python.exe scripts/prepare_xuesu_panel_lut.py .pio/xuesu-device-backups/2026-11-10/ota0-app.bin
-& .\.venv\Scripts\pio.exe run -e xuesu_300
-```
+当前构建步骤见[从源码构建](#从源码构建)。
 
 最早的 UC8276C 试机驱动通过 FreeInk 的 EpdBus 发送全帧，当时快刷请求也走全刷。驱动在传输时转 180° 以匹配 CrossMux 的竖屏坐标，保留 15,000 字节的前一帧，BUSY 两个边沿与关电成功后才更新前帧。首次使用白色旧帧，刷新超时后清除旧帧可信状态。
 
@@ -434,7 +477,7 @@ python test/inx_navigation/test_unified_keyboard.py --xuesu
 
 `scripts/tests/test_xuesu_home_themes.py` 执行生产的菜单绘制、按键循环和设置重建代码，覆盖横竖屏、空和非空书架、有无插件入口、从两个方向找到「设置」，以及多次往返切换后保留焦点。主机回归 56 项、INX 导航 29 项及封面网格主题 ID/PSRAM 回退专项通过。`xuesu_300` 构建通过：静态 RAM 95,748 / 327,680 字节、Flash 6,391,879 / 7,536,640 字节，固件镜像 6,397,120 字节。
 
-修复版已写入雪酥·3 的 OTA1，写入后摘要校验通过，原厂分区表与 OTA0 校验一致。重启后 SD 卡挂载成功，串口帧缓冲确认进入 Classic 首页，菜单显示在 300×400 屏幕内。
+修复版已写入雪酥的 OTA1，写入后摘要校验通过，原厂分区表与 OTA0 校验一致。重启后 SD 卡挂载成功，串口帧缓冲确认进入 Classic 首页，菜单显示在 300×400 屏幕内。
 
 用户试机确认主题切换与返回设置流程可用。
 
@@ -458,7 +501,7 @@ Cover Grid 每页显示精选与最多两个其余封面，侧键仍能遍历全
 
 主机验证覆盖 1,152 个封面网格绘制状态，横竖屏可见封面均至少为 60×90 像素。缓存专项验证已有缩略图直接复用、损坏缓存回退、重新打开首页时跳过未变的失败项，以及源文件变化后重试。书库专项用内置字库测量七种主题的三个标签、排序箭头和底部提示。设置专项用内置字库验证长中文和长值换行、行边界及焦点。`xuesu_300` 构建通过，固件 6,405,488 字节，静态 RAM 95,980 / 327,680 字节，Flash 6,400,247 / 7,536,640 字节。
 
-已写入雪酥·3 的 OTA1，镜像读回摘要通过，原厂分区表和 OTA0 一致。串口确认 SD 卡挂载和 RoundedRaff 首页启动，已收到完整首页帧缓冲。
+已写入雪酥的 OTA1，镜像读回摘要通过，原厂分区表和 OTA0 一致。串口确认 SD 卡挂载和 RoundedRaff 首页启动，已收到完整首页帧缓冲。
 
 ### 2026-11-12 原厂待机流程取证
 
@@ -471,13 +514,13 @@ CrossMux 可以复用现有深睡和 GPIO17 唤醒路径，在雪酥的「休眠
 
 ### 2026-11-12 分钟刷新的休眠表盘
 
-雪酥·3 的「设置 → 显示 → 休眠画面」新增「月历网格」「报刊排印」「国庆·烟花」。三个枚举值追加到原有选项后，旧设置数值保持有效。选择表盘后，手动休眠和空闲超时都显示表盘，优先于「超时后启用快速恢复」。表盘按原厂版式重绘，温湿度显示缺失标记，电量取开始休眠时的读数。时钟未校准时回退到普通休眠画面。
+雪酥的「设置 → 显示 → 休眠画面」新增「月历网格」「报刊排印」「国庆·烟花」。三个枚举值追加到原有选项后，旧设置数值保持有效。选择表盘后，手动休眠和空闲超时都显示表盘，优先于「超时后启用快速恢复」。表盘按原厂版式重绘，温湿度显示缺失标记，电量取开始休眠时的读数。时钟未校准时回退到普通休眠画面。
 
 首次深睡走原有阅读进度、统计和外设收尾。RTC 保留绘制时间、语言、时区、版式等少量数据。定时唤醒使用嵌入字库重画上次帧作为差分基准，在现有显示缓冲上更新到新一分钟，再次深睡；每十分钟使用一次清理波形。定时分支在 SD、网络和阅读器初始化之前运行，无需在 SD 上保存帧或改写进度。确认键既可以从深睡唤醒，也可以打断正在刷新的定时路径，随后走正常阅读恢复。
 
 `xuesu_300` 构建通过，镜像 6,413,888 字节，静态 RAM 96,588 / 327,680 字节，Flash 6,408,655 / 7,536,640 字节。RTC 保留状态占 24 字节。主机专项覆盖三个选项、同一分钟提前唤醒、跨午夜、分钟对齐、按键打断和屏幕提交失败。阅读 UI 与设置回归通过。真机验收时校准时间，逐个选表盘并从阅读正文空闲超时，观察跨两次分钟更新后短按确认是否回到同一页。分别验证刷新中按确认，以及拔掉 USB 后的正常睡眠电流。
 
-已写入雪酥·3 的 OTA1。镜像和启动选择记录通过读回校验，原厂分区表和 OTA0 摘要一致。重启后收到完整的 INX 首页帧缓冲。分钟刷新和阅读页恢复等待逐表盘真机验证。
+已写入雪酥的 OTA1。镜像和启动选择记录通过读回校验，原厂分区表和 OTA0 摘要一致。重启后收到完整的 INX 首页帧缓冲。分钟刷新和阅读页恢复等待逐表盘真机验证。
 
 ### 待机显示与休眠表盘共用深睡
 
@@ -509,10 +552,51 @@ OTA1 应用及启动记录读回校验通过，原厂 OTA0 与分区表摘要一
 
 32 项微信读书协议和几何测试、6 项连接流程测试通过。内置中文字库验证无空格长书名正常换行，超过三行时仅在最后一行省略。`xuesu_300` 构建成功，镜像 6,417,008 字节。OTA1 应用和启动选择记录读回校验通过，原厂 OTA0 与分区表摘要一致。真机验收时打开微信读书书架，检查两张封面、中文书名和分页，再短按确认打开书籍详情。
 
-真机抓屏确认新版竖屏书架显示两张 112×164 像素的封面，《美丽新世界》完整显示在一行，《作为意志和表象的世界》完整换成两行。真机分页和进入详情尚未逐项验证。
+真机抓屏确认新版竖屏书架显示两张 112×164 像素的封面，短中文书名完整显示在一行，长中文书名完整换成两行。真机分页和进入详情尚未逐项验证。
 
 ### INX 首页顶部图标标签
 
 雪酥的 INX 顶部主导航去掉通栏分隔线和焦点双线框。当前图标下方保留短线。焦点位于导航栏时线条稍长、稍粗，进入内容后变短变细。绘制和侧键操作继续使用原来的主标签区域。
 
 绘制检查覆盖五个主标签、两种焦点及顶部和底部摆放。26 项阅读界面回归通过。雪酥版镜像为 6,417,040 字节，OTA1 写入和读回校验通过。重启后抓屏确认首页图标下只有当前页的短线，标签栏焦点状态由主机绘制检查覆盖。
+
+### 深睡唤醒保留当前表盘
+
+实机照片显示报刊排印的「室内气象」停在旧分钟，右下角叠了手绘数字。旧固件的表盘目标文件包含启动构造函数，每次从深睡启动都会把 RTC 记录里的 `FaceState` 写回手绘时钟默认值，并把温湿度重置为缺失。时间和校验标记仍然保留，定时分支因此用手绘图形重建错误的差分基准。
+
+RTC 记录改用无构造的字段，编译期断言禁止引入会在启动时初始化的成员。新标记使旧版本的记录失效。已检查目标文件无启动初始化入口，链接产物的 `.rtc_noinit` 为 `NOBITS`。回归覆盖休眠默认设为手绘时，在待机里切到报刊排印后的五次分钟刷新和温湿度重采样，也覆盖旧记录失效。21 项雪酥主机回归通过。
+
+雪酥版镜像为 6,417,008 字节。OTA1 写入与读回校验通过，原厂 OTA0 和分区表摘要一致，真机抓屏确认重启到 INX 首页。尚未抓到修复后的深睡定时刷新。复测时在「待机显示」选报刊排印，等待约 35 秒进入深睡，再跨两个分钟边界检查时间更新和表盘样式，短按确认应回到报刊排印。
+
+### 插图、USB 传书与原厂书库兼容
+
+- 书内插图和图片查看器在黑白面板上用有序抖动保留中间色调。图片查看器跳过用不上的灰阶遍历。雪酥为 PNG 两行解码窗口放宽到 4096 像素宽的 RGBA 输入，优先用 PSRAM 分配解码器。真机验收用同一张包含浅色渐变和透明边缘的图片，分别从 EPUB 和文件管理器打开，检查细节及翻页残影。原厂灰阶波形待移植。
+- 「文件传输 → USB 磁盘」会停止蓝牙并卸载本机 SD 文件系统，再把 SD 卡作为 U 盘交给电脑。传完先在系统中弹出，设备随后返回首页并重新挂载。真机验收复制一本书，从电脑弹出后核对文件大小并打开阅读。
+- 文件列表与书库支持 `.mobi`、`.azw3` 和 `.docx`。首次打开会在 `/.crosspoint` 的每书缓存生成 EPUB，原文件路径继续作为书籍身份。MOBI/KF8 使用 PSRAM，源文件上限 4 MiB，支持未加密的流式书籍。DOCX 提取正文和内嵌 JPEG、PNG、GIF 后重排。DOCX 主 XML 上限 32 MiB，最多处理 64 个图像关系，单张内嵌图片上限 8 MiB。Word 原版式、页眉页脚和复杂表格布局待支持。可用含目录的 MOBI、含 CJK 的 AZW3 和带嵌入图的 DOCX 验证首次打开、再次打开、翻页和进度保存。
+- 「设置 → 通用 → 导入原厂最近阅读」读取 `/.ereader/recent_books.json` 版本 1，只追加 SD 卡上仍存在且可打开的书。没有 CrossMux 进度的书首次打开时按原厂记录的百分比定位。原厂的精确位置、累计统计、字体、壁纸及设置暂未迁移。用一份有原厂阅读历史的 SD 卡验证重复导入和已读书的进度优先级。
+- 原生 SDMMC 读写出错时显示备份提示。15 秒内三次成功传输各耗时至少 150 毫秒时显示慢卡提示，每次启动同类提示最多一次。用独立测试卡复测，串口的 `SDMMC transfer failed` 可对应核查读写故障。
+- BLE 配对列表和 NimBLE 密钥各存一份带校验的雪酥专用 SD 文件，复用暂存与替换流程。用一只 BLE HID 翻页器验证配对、重启与深睡后重连、实际翻页和取消配对后重新启动。以前丢失密钥的设备需要重新配对一次。
+
+`xuesu_300` 构建成功，OTA1 应用镜像为 6,546,256 字节，通过 ESP32-S3 镜像校验。静态 RAM 129,644 / 327,680 字节，Flash 6,541,023 / 7,536,640 字节。57 项主机回归通过，另外检查了五本 MOBI/KF8 样书的资源清单、DOCX 分块解析与内嵌 PNG、原厂最近阅读去重及百分比解析。该镜像尚未刷入设备，USB、墨水屏和 BLE 翻页器验收待真机完成。
+
+### UC8276C 原生四阶灰度与 XMPIC
+
+实机 OTA0 的灰阶入口 `0x420955C4` 调用 `0x42094C1C`，用 `0x4215C8BC` 生成两组 `0x20` 至 `0x24` 波形，并由 `0x4215C91C` 写出两张选择平面。官网 1.3.3 镜像中对应的生成和编码逻辑一致。用本机校验过的 OTA0 运行 `scripts/prepare_xuesu_panel_lut.py`，重新生成带两组灰阶波形的本地头文件，再构建 `xuesu_300`。[原厂 1.3.3 镜像](https://xiaomoreader.top/XueSu_300OTA/firmware10033.bin)
+
+阅读设置的「图片 → 显示」和独立图片查看器使用全帧四阶灰度。驱动先建立已知白底，第一趟输出黑、浅灰和白，有深灰像素时再使用原厂第二趟波形。返回黑白画面用全刷恢复快刷基准。两张选择平面共 30,000 字节，单次刷新期间存于 PSRAM，每行用 50 字节栈缓冲发送。低内存时直接显示黑白预备帧。普通文字页走黑白路径，反色或有自定义阅读背景的书页用黑白抖动。
+
+官方 XMPIC 导出是无头的 1 bpp 位图。雪酥规格为 300×400，按从上到下的行序存储，每行 38 字节，最高位对应最左像素，1 为黑。文件浏览器识别大小写扩展名，校验文件为 15,200 字节后，逐行生成带正确调色板的临时 BMP，沿用现有图片查看和休眠封面功能。字节数不符或读取不完整时显示图片错误。[原厂壁纸工具](https://xiaomoreader.top/tools/XueBingWallpaper.html)
+
+`xuesu_300` 构建通过，OTA1 应用镜像为 6,548,880 字节，ESP32-S3 校验和和镜像哈希有效。静态 RAM 129,660 / 327,680 字节，Flash 6,543,639 / 7,536,640 字节。59 项主机回归通过，涵盖实驱动的 LUT 选择、平面极性和旋转、灰阶到黑白、低内存和 BUSY 超时，以及 XMPIC 的文件入口、损坏文件和休眠封面。另执行了官网 XMPIC 导出函数，生成与固件测试相同的四个角位。全仓 CI 停在其他文件的格式检查，X3/X4 默认目标停在 Windows 链接脚本生成命令过长，原生灰阶模拟器套件仍受 Windows POSIX 兼容限制。
+
+已通过 COM12 写入并选中 OTA1。应用镜像和启动记录通过独立读回摘要校验，分区表和原厂 OTA0 摘要与备份一致。重启后串口确认 SD 挂载和 SD 字体加载，完整帧缓冲显示 INX 最近阅读首页。灰阶色差、刷新残影与 XMPIC 文件打开待按下文实测。
+
+真机验收使用一张同时包含纯黑、深灰、浅灰和白色的 PNG，分别在图片查看器和 EPUB 正文打开，拍摄实体屏确认四块色调、方向和边缘。连续翻过两张灰阶图，再返回纯文字页和菜单，检查黑白快刷恢复、刷新闪烁与残影。用官方工具导出的 300×400 XMPIC 检查四角方向、文件列表的相邻图片切换和休眠封面。
+
+### EPUB 灰阶插图空白
+
+真机上「图片 → 显示」时插图区域空白，同一页切到「黑白」可见。雪酥的阅读器开启了黑白预备帧抖动，`DirectPixelWriter` 也据此跳过灰阶写入，导致全帧灰阶的两张位平面在插图区域保持白色。像素写入器现在区分完整的灰阶位平面和文字抗锯齿叠加，完整灰阶位平面始终写入插图像素。
+
+回归测试用白底复现旧实现的空白，修复后确认四个灰度值在两张位平面的编码正确。测试同时覆盖黑白图像模式下跳过文字抗锯齿叠加的行为。真机可用出现问题的同一页切回「图片 → 显示」验证。
+
+`xuesu_300` 构建通过，修正版 OTA1 镜像为 6,548,864 字节，ESP32-S3 镜像校验和与哈希有效。55 项主机测试通过。设备暂未连接，修正版尚未刷入。

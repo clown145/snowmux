@@ -35,6 +35,9 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   // Returns whether the updated list was persisted; the in-memory list is updated even on failure.
   bool addBook(const std::string& path, const std::string& title, const std::string& author,
                const std::string& coverBmpPath);
+#if FREEINK_DEVICE_XUESU_300
+  bool appendImportedBooks(std::vector<RecentBook>&& books);
+#endif
 
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
                   const std::string& coverBmpPath);

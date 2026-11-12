@@ -74,9 +74,9 @@ MainTabLayout Activity::mainTabLayout() const {
   const int topTabHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight : metrics.headerHeight;
   const bool statusAboveTopTabs = false;
 #endif
-  MainTabLayout layout = MainTabs::layout(safe, metrics.topPadding,
-                                         tabsAtBottom ? MainTabs::bottomBarHeight : topTabHeight, tabsAtBottom,
-                                         showStatus ? BaseTheme::headerStatusHeight() : 0, statusAboveTopTabs);
+  MainTabLayout layout =
+      MainTabs::layout(safe, metrics.topPadding, tabsAtBottom ? MainTabs::bottomBarHeight : topTabHeight, tabsAtBottom,
+                       showStatus ? BaseTheme::headerStatusHeight() : 0, statusAboveTopTabs);
   // Status chrome shares subpage header coordinates; only content inherits the safe-area top.
   if (showStatus) layout.statusBar.y = metrics.topPadding;
   return layout;

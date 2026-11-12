@@ -136,6 +136,46 @@ bool hasHeapForPngDecoder(const char* operation) {
   return false;
 }
 
+class PngAllocation {
+ public:
+  explicit PngAllocation(const char* operation, uint8_t* scratch = nullptr) : scratch(scratch) {
+    if (scratch) {
+      LOG_DBG("PNG", "Using framebuffer scratch for cache-only decode");
+      decoder = ::new (static_cast<void*>(scratch)) PNG();
+      return;
+    }
+#if FREEINK_DEVICE_XUESU_300 && defined(BOARD_HAS_PSRAM)
+    // The two source rows for a 4096px RGBA image are part of PNG itself.
+    // Keep the enlarged decoder workspace in PSRAM when its reserve permits.
+    if (memory::psramHasHeadroom(PNG_DECODER_SIZE, PNG_DECODER_SIZE, 16 * 1024)) {
+      psram = memory::makePsramByteBufferUninitializedNoThrow(PNG_DECODER_SIZE);
+      if (psram) {
+        decoder = ::new (static_cast<void*>(psram.get())) PNG();
+        return;
+      }
+    }
+#endif
+    if (hasHeapForPngDecoder(operation)) {
+      heap = makeUniqueNoThrow<PNG>();
+      decoder = heap.get();
+    }
+  }
+
+  ~PngAllocation() {
+    if (decoder && !heap) decoder->~PNG();
+    if (scratch) buildscratch::release(scratch);
+  }
+  PNG* get() const { return decoder; }
+
+ private:
+  uint8_t* scratch;
+  PNG* decoder = nullptr;
+  std::unique_ptr<PNG> heap;
+#if FREEINK_DEVICE_XUESU_300 && defined(BOARD_HAS_PSRAM)
+  memory::ByteBuffer psram;
+#endif
+};
+
 // PNGdec keeps TWO scanlines in its internal ucPixels buffer (current + previous)
 // and each scanline includes a leading filter byte.
 // Required storage is therefore approximately: 2 * (pitch + 1) + alignment slack.
@@ -482,9 +522,8 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 }  // namespace
 
 bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  if (!hasHeapForPngDecoder("dimensions")) return false;
-
-  std::unique_ptr<PNG> png(new (std::nothrow) PNG());
+  PngAllocation allocation("dimensions");
+  auto* png = allocation.get();
   if (!png) {
     LOG_ERR("PNG", "Failed to allocate PNG decoder for dimensions");
     return false;
@@ -492,7 +531,7 @@ bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath
 
   int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
                      nullptr);
-  const ScopedCleanup cleanup{[&png]() { png->close(); }};
+  const ScopedCleanup cleanup{[png]() { png->close(); }};
 
   if (rc != 0) {
     LOG_ERR("PNG", "Failed to open PNG for dimensions: %d", rc);
@@ -516,27 +555,13 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     return false;
   }
 
-  uint8_t* decoderScratch = cacheOnly ? buildscratch::claim(PNG_DECODER_SIZE) : nullptr;
-  if (!decoderScratch && !hasHeapForPngDecoder("decode")) return false;
-
-  std::unique_ptr<PNG> heapPng;
-  PNG* png = nullptr;
-  if (decoderScratch) {
-    LOG_DBG("PNG", "Using framebuffer scratch for cache-only decode");
-    png = ::new (static_cast<void*>(decoderScratch)) PNG();
-  } else {
-    heapPng = makeUniqueNoThrow<PNG>();
-    png = heapPng.get();
-  }
+  PngAllocation allocation("decode", cacheOnly ? buildscratch::claim(PNG_DECODER_SIZE) : nullptr);
+  auto* png = allocation.get();
   if (!png) {
     LOG_ERR("PNG", "Failed to allocate PNG decoder");
+    if (config.error) *config.error = ImageRenderError::OutOfMemory;
     return false;
   }
-  const ScopedCleanup releaseDecoderScratch{[png, decoderScratch]() {
-    if (!decoderScratch) return;
-    png->~PNG();
-    buildscratch::release(decoderScratch);
-  }};
   memory::ByteBuffer compressed;
   const ScopedCleanup closePng{[png]() { png->close(); }};
 

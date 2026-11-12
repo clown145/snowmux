@@ -15,8 +15,9 @@ class FileBrowserImagesTest(unittest.TestCase):
         theme = (ROOT / 'src/components/UITheme.cpp').read_text()
         helpers = '\n'.join(method(fs, name) for name in (
             'bool checkFileExtension(', 'bool hasJpgExtension(', 'bool hasPngExtension(',
-            'bool hasBmpExtension(', 'bool hasImageExtension(', 'bool hasEpubExtension(',
+            'bool hasBmpExtension(', 'bool hasXmpicExtension(', 'bool hasImageExtension(', 'bool hasEpubExtension(',
             'bool hasXtcExtension(', 'bool hasTxtExtension(', 'bool hasMarkdownExtension(',
+            'bool hasImportedBookExtension(', 'bool hasReflowableBookExtension(',
             'bool naturalLess(', 'void sortFileList(', 'std::string extractFolderPath(',
             'bool isProtectedPathComponent(', 'bool isSameOrDescendantPath('))
         cover_source = (ROOT / 'src/util/SleepCover.cpp').read_text()
@@ -34,7 +35,7 @@ class FileBrowserImagesTest(unittest.TestCase):
                 'bool ImageViewerActivity::preparePreview()',
                 'void ImageViewerActivity::showSleepCoverOptions()',
                 'void ImageViewerActivity::doSetSleepCover('))))
-        run_cpp(r'''
+        program = r'''
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -51,6 +52,7 @@ namespace FsHelpers {
 }
 constexpr size_t NAME_BUFFER_SIZE = 500;
 constexpr char MOVE_HERE_ENTRY[] = "\x01";
+constexpr char CANCEL_MOVE_ENTRY[] = "\x02";
 constexpr const char* IMAGE_PREVIEW_PATH = "/.crosspoint/image_preview.bmp";
 constexpr const char* TRANSPARENT_PREVIEW_PATH = "/.crosspoint/image_preview.transparent.bmp";
 constexpr const char* SLEEP_IMAGE_PATH = "/sleep.bmp";
@@ -100,6 +102,13 @@ struct StorageMock {
    data[to] = data[from]; data.erase(from); return true;
  }
 } Storage;
+namespace xuesu_xmpic {
+bool writeBmpPreview(const char* source, const char* destination) {
+  if (!Storage.exists(source) || Storage.writeFails) return false;
+  Storage.data[destination] = "XMPIC-BMP";
+  return true;
+}
+}
 struct CrossPointSettings {
  enum SLEEP_SCREEN_MODE { CUSTOM, TRANSPARENT, COVER_TRANSPARENT, SLEEP_SCREEN_MODE_COUNT };
  bool showHiddenFiles = false; uint8_t sleepScreen = CUSTOM;
@@ -307,8 +316,27 @@ int main() {
  assert(!viewer.preparePreview()); assert(Storage.data[IMAGE_PREVIEW_PATH] == "stale-preview");
  Storage.removeFails = false; Storage.writeFails = true; viewer.filePath = "/AirPage/3.PNG";
  assert(!viewer.preparePreview()); assert(!Storage.exists(IMAGE_PREVIEW_PATH));
+#if FREEINK_DEVICE_XUESU_300
+ Storage.writeFails = false;
+ entries = {{"Wall.XMPIC"}, {"book.epub"}};
+ FileBrowserActivity browser; browser.loadFiles();
+ assert(browser.findEntry("Wall.XMPIC") < browser.files.size());
+ ActivityManager manager; manager.goToReader("/Wall.XMPIC");
+ assert(manager.image && !manager.reader && UITheme::getFileIcon("/Wall.XMPIC") == Image);
+ viewer.filePath = "/Wall.XMPIC";
+ Storage.data[viewer.filePath] = "original-xmpic";
+ assert(viewer.preparePreview());
+ viewer.imageReady = true; viewer.showSleepCoverOptions();
+ assert(Storage.data[SLEEP_IMAGE_PATH] == "XMPIC-BMP");
+ assert(Storage.data[viewer.filePath] == "original-xmpic");
+#else
+ assert(!FsHelpers::hasImageExtension("/Wall.XMPIC"));
+#endif
 }
-''')
+'''
+        for device in (0, 1):
+            with self.subTest(xuesu=bool(device)):
+                run_cpp(program, defines=(f'FREEINK_DEVICE_XUESU_300={device}',))
 
 
 if __name__ == '__main__':

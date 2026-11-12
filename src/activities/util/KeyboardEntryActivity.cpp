@@ -821,8 +821,7 @@ void KeyboardEntryActivity::loop() {
     return;
   }
   const auto* key = selectedKey();
-  if (key && key->value == fui::QWERTY_KEY_BACKSPACE &&
-      mappedInput.wasLongPressed(Button::Down, DEL_LONG_PRESS_MS)) {
+  if (key && key->value == fui::QWERTY_KEY_BACKSPACE && mappedInput.wasLongPressed(Button::Down, DEL_LONG_PRESS_MS)) {
     activateValue(key->value, true);
     requestUpdate();
     return;

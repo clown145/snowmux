@@ -28,7 +28,7 @@ index 0003b7b..b18375c 100644
      // Newer X4 / X4 Pro batches swap the SSD1677 for an UltraChip part.
      // Which silicon a unit carries is decided before begin() by the boot-time
 diff --git a/libs/hardware/BoardConfig/include/BoardConfig.h b/libs/hardware/BoardConfig/include/BoardConfig.h
-index 31adca2..a765eaa 100644
+index 31adca2..0dbfea0 100644
 --- a/libs/hardware/BoardConfig/include/BoardConfig.h
 +++ b/libs/hardware/BoardConfig/include/BoardConfig.h
 @@ -95,6 +95,13 @@
@@ -148,7 +148,7 @@ index 31adca2..a765eaa 100644
 +              xuesu300::sdPins.d1, xuesu300::sdPins.d2, xuesu300::sdPins.d3, 4},
 +    .batteryGauge = NO_GAUGE,
 +    .sensors = {.i2cSda = 13, .i2cScl = 12, .i2cHz = 100000, .rtcAddr = 0, .tempHumidityAddr = 0x38, .imuAddr = 0},
-+    .grayscaleLevels = 2,
++    .grayscaleLevels = 4,
 +};
 +static_assert(panelBytes(XUESU_300) == 15000);
 +constexpr uint32_t XUESU_300_FRAMEBUFFER_BYTES = panelBytes(XUESU_300);
@@ -373,6 +373,55 @@ index 34de790..1a4f54b 100644
      state |= (1 << BTN_DOWN);
    // Power reads at its declared polarity (isDigitalPressed assumes active-low).
    if (isPowerButtonPhysicallyPressed() &&
+diff --git a/libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp b/libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp
+index 7db5e4a..35aa69e 100644
+--- a/libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp
++++ b/libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp
+@@ -31,6 +31,11 @@ BleKeyboardHost& BleKeyboardHost::getInstance() {
+
+ #include "HidKeymap.h"
+
++#if FREEINK_DEVICE_XUESU_300
++uint8_t loadXuesuHidBonds(freeink::PairedHidDevice* bonds);
++void saveXuesuHidBonds(const freeink::PairedHidDevice* bonds, uint8_t count);
++#endif
++
+ namespace freeink {
+ namespace {
+
+@@ -1441,12 +1446,16 @@ bool BleKeyboardHost::takePairingPasskey(uint32_t& out) {
+
+ // --- NVS persistence ---------------------------------------------------------
+ void BleKeyboardHost::loadBonds() {
++#if FREEINK_DEVICE_XUESU_300
++  bondCount_ = loadXuesuHidBonds(bonds_);
++#else
+   Preferences p;
+   if (!p.begin("freeink-hid", true)) return;
+   bondCount_ = p.getUChar("n", 0);
+   if (bondCount_ > kMaxBonds) bondCount_ = kMaxBonds;
+   if (bondCount_ > 0) p.getBytes("b", bonds_, bondCount_ * sizeof(PairedHidDevice));
+   p.end();
++#endif
+   bool cleaned = false;
+   for (uint8_t i = 0; i < bondCount_; ++i) {
+     if (bonds_[i].name[0] && strcmp(bonds_[i].name, bonds_[i].addr) == 0) {
+@@ -1458,11 +1467,15 @@ void BleKeyboardHost::loadBonds() {
+ }
+
+ void BleKeyboardHost::persistBonds() {
++#if FREEINK_DEVICE_XUESU_300
++  saveXuesuHidBonds(bonds_, bondCount_);
++#else
+   Preferences p;
+   if (!p.begin("freeink-hid", false)) return;
+   p.putUChar("n", bondCount_);
+   if (bondCount_ > 0) p.putBytes("b", bonds_, bondCount_ * sizeof(PairedHidDevice));
+   p.end();
++#endif
+ }
+
+ }  // namespace freeink
 diff --git a/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h b/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h
 index 18f0773..31edc60 100644
 --- a/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h

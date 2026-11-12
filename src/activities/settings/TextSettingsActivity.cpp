@@ -1083,5 +1083,7 @@ TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(int visibleIndex
 }
 
 int TextSettingsActivity::styleRowCount() const {
-  return static_cast<int>(StyleRow::Count) - (SETTINGS.readingGuideLineEnabled ? 0 : HIDDEN_GUIDE_ROW_COUNT);
+  // Anti-aliasing is the last style row and requires a grayscale panel path.
+  const int supportedCount = static_cast<int>(StyleRow::Count) - FREEINK_DEVICE_XUESU_300;
+  return supportedCount - (SETTINGS.readingGuideLineEnabled ? 0 : HIDDEN_GUIDE_ROW_COUNT);
 }

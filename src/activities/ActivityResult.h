@@ -91,10 +91,10 @@ struct FilePathResult {
 
 enum class QuickPanelResult : uint8_t { Sleep, ContextAction };
 
-using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
-                                   IntervalResult, ChapterRangeResult, PageResult, TxtOffsetResult, ClippingResult,
-                                   ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult,
-                                   QuickPanelResult>;
+using ResultVariant =
+    std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
+                 ChapterRangeResult, PageResult, TxtOffsetResult, ClippingResult, ProgressChangeResult,
+                 NetworkModeResult, FootnoteResult, FilePathResult, QuickPanelResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

@@ -30,6 +30,16 @@ class Epub {
   std::string tocNavItem;
   // where is the EPUBfile?
   std::string filepath;
+#if FREEINK_DEVICE_XUESU_300
+  std::string importedArchive;
+  bool prepareArchive(bool buildIfMissing) const;
+#endif
+  const std::string& archivePath() const {
+#if FREEINK_DEVICE_XUESU_300
+    if (!importedArchive.empty()) return importedArchive;
+#endif
+    return filepath;
+  }
   // the base path for items in the EPUB file
   std::string contentBasePath;
   // Uniq cache key based on filepath

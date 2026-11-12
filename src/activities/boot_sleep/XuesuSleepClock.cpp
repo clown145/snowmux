@@ -11,6 +11,8 @@
 #include <Logging.h>
 #include <sys/time.h>
 
+#include <type_traits>
+
 #include "CrossPointSettings.h"
 #include "XuesuSleepClockTiming.h"
 #include "components/UITheme.h"
@@ -20,7 +22,7 @@
 namespace xuesu_sleep_clock {
 namespace {
 
-constexpr uint32_t kFrameMagic = 0x58534333;  // XSC3
+constexpr uint32_t kFrameMagic = 0x58534334;  // XSC4
 constexpr uint8_t kFirstMode = CrossPointSettings::CLOCK_MONTH_GRID;
 constexpr uint8_t kModeCount = static_cast<uint8_t>(Layout::Count);
 static_assert(kFirstMode + kModeCount - 1 == CrossPointSettings::CLOCK_ALMANAC);
@@ -28,60 +30,67 @@ static_assert(kFirstMode + kModeCount - 1 == CrossPointSettings::CLOCK_ALMANAC);
 // ESP32-S3 RTC RAM keeps the inputs needed to reconstruct the old plane. The
 // panel driver already owns that plane, so a timer wake needs no SD cache or
 // additional framebuffer. Only mark a frame after the panel commits it.
+// No default member initializers: C++ startup runs again on every timer wake.
 struct RetainedFrame {
   time_t epoch;
   uint32_t magic;
-  FaceState face;
+  uint32_t styleSeed;
+  int32_t pinnedDay;
+  Layout layout;
   Language language;
   uint8_t timezone;
   uint8_t dstMode;
   uint8_t battery;
   bool twelveHour;
+  bool inverse;
   bool fromStandby;
   time_t environmentSampledAt;
-  hal_environment::Reading environment;
+  int16_t temperature;
+  uint16_t humidity;
 };
+static_assert(std::is_trivial_v<RetainedFrame>, "RTC no-init state must survive C++ startup without construction");
 RTC_NOINIT_ATTR RetainedFrame retained;
 
 bool hasRetainedFrame() {
   return retained.magic == kFrameMagic && retained.epoch > 0 && retained.language < Language::_COUNT &&
-         retained.face.layout < Layout::Count;
+         retained.layout < Layout::Count;
 }
 
 bool makeFrame(const time_t epoch, const RetainedFrame& params, Frame& frame) {
   frame = {.date = {},
-           .layout = params.face.layout,
+           .layout = params.layout,
            .battery = params.battery,
            .twelveHour = params.twelveHour,
-           .styleSeed = params.face.styleSeed,
-           .environment = params.environment};
+           .styleSeed = params.styleSeed,
+           .environment = {params.temperature, params.humidity}};
   if (epoch == 0 || !localtime_r(&epoch, &frame.date)) return false;
-  if (params.face.layout == Layout::Almanac && params.face.pinnedDay >= 0) {
+  if (params.layout == Layout::Almanac && params.pinnedDay >= 0) {
     int year;
     unsigned month, day;
-    if (!TimeUtils::getDateFromDayOrdinal(params.face.pinnedDay, year, month, day)) return false;
+    if (!TimeUtils::getDateFromDayOrdinal(params.pinnedDay, year, month, day)) return false;
     frame.date.tm_year = year - 1900;
     frame.date.tm_mon = static_cast<int>(month) - 1;
     frame.date.tm_mday = static_cast<int>(day);
-    frame.date.tm_wday = (params.face.pinnedDay + 4) % 7;
+    frame.date.tm_wday = (params.pinnedDay + 4) % 7;
   }
   return true;
 }
 
 void refreshEnvironment(RetainedFrame& params, Frame& frame) {
-  if (!showsEnvironment(params.face.layout)) return;
+  if (!showsEnvironment(params.layout)) return;
   if (params.environmentSampledAt && params.epoch - params.environmentSampledAt < environmentIntervalSeconds) return;
-  params.environment = hal_environment::sample();
+  frame.environment = hal_environment::sample();
+  params.temperature = frame.environment.temperature;
+  params.humidity = frame.environment.humidity;
   params.environmentSampledAt = params.epoch;
-  frame.environment = params.environment;
 }
 
 uint64_t timerDelay() {
   timeval now{};
   gettimeofday(&now, nullptr);
   const auto nowUs = static_cast<uint64_t>(now.tv_sec) * 1'000'000 + now.tv_usec;
-  if (retained.face.layout != Layout::Almanac) return nextWakeDelayUs(retained.epoch, nowUs);
-  if (retained.face.pinnedDay >= 0) return 0;
+  if (retained.layout != Layout::Almanac) return nextWakeDelayUs(retained.epoch, nowUs);
+  if (retained.pinnedDay >= 0) return 0;
 
   std::tm painted{};
   if (!localtime_r(&retained.epoch, &painted)) return 0;
@@ -90,17 +99,17 @@ uint64_t timerDelay() {
 }
 
 bool frameChanged(const time_t epoch) {
-  if (retained.face.layout != Layout::Almanac) return epoch / 60 != retained.epoch / 60;
-  if (retained.face.pinnedDay >= 0) return false;
+  if (retained.layout != Layout::Almanac) return epoch / 60 != retained.epoch / 60;
+  if (retained.pinnedDay >= 0) return false;
 
   std::tm previous{}, current{};
   return localtime_r(&retained.epoch, &previous) && localtime_r(&epoch, &current) &&
          (current.tm_year != previous.tm_year || current.tm_yday != previous.tm_yday);
 }
 
-void drawFrame(GfxRenderer& renderer, const Frame& frame, const FaceState& face) {
+void drawFrame(GfxRenderer& renderer, const Frame& frame, const bool inverse) {
   UITheme::drawXuesuSleepClock(renderer, frame);
-  if (face.inverse) renderer.invertScreen();
+  if (inverse) renderer.invertScreen();
 }
 
 }  // namespace
@@ -119,23 +128,32 @@ void clear() { retained.magic = 0; }
 std::optional<FaceState> takeStandbyResume(const bool sleepWake) {
   const bool resume = sleepWake && hasRetainedFrame() && retained.fromStandby;
   clear();
-  return resume ? std::optional(retained.face) : std::nullopt;
+  if (!resume) return std::nullopt;
+  return FaceState{.layout = retained.layout,
+                   .styleSeed = retained.styleSeed,
+                   .pinnedDay = retained.pinnedDay,
+                   .inverse = retained.inverse};
 }
 
 bool drawBeforeSleep(GfxRenderer& renderer, const std::optional<FaceState>& standby) {
   const auto selected = layoutForMode(SETTINGS.sleepScreen);
   if (!standby && !selected) return false;
+  const FaceState face = standby ? *standby : FaceState{.layout = *selected};
   RetainedFrame params{.epoch = halClock.nowUtc(),
                        .magic = kFrameMagic,
-                       .face = standby ? *standby : FaceState{.layout = *selected},
+                       .styleSeed = face.styleSeed,
+                       .pinnedDay = face.pinnedDay,
+                       .layout = face.layout,
                        .language = I18N.getLanguage(),
                        .timezone = timezones::activeIndex(),
                        .dstMode = SETTINGS.clockDst,
                        .battery = static_cast<uint8_t>(powerManager.getBatteryPercentage()),
                        .twelveHour = SETTINGS.clockFormat == 1,
+                       .inverse = face.inverse,
                        .fromStandby = standby.has_value(),
                        .environmentSampledAt = 0,
-                       .environment = {}};
+                       .temperature = 0,
+                       .humidity = hal_environment::Reading::missing};
   Frame frame{};
   if (!makeFrame(params.epoch, params, frame)) {
     LOG_INF("SLC", "No valid clock; entering key-only sleep");
@@ -145,7 +163,7 @@ bool drawBeforeSleep(GfxRenderer& renderer, const std::optional<FaceState>& stan
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   renderer.setRenderMode(GfxRenderer::BW);
   display.setInverted(false);
-  drawFrame(renderer, frame, params.face);
+  drawFrame(renderer, frame, params.inverse);
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   if (display.displayCommitted()) retained = params;
   return true;
@@ -155,7 +173,7 @@ void armFirstTimer() {
   if (!hasRetainedFrame()) return;
   const uint64_t delay = timerDelay();
   if (delay && powerManager.armXuesuClockTimer(delay)) {
-    LOG_INF("SLC", "Clock sleep started, face=%u", static_cast<unsigned>(retained.face.layout));
+    LOG_INF("SLC", "Clock sleep started, face=%u", static_cast<unsigned>(retained.layout));
   }
 }
 
@@ -185,12 +203,12 @@ void refreshAfterTimerWake(GfxRenderer& renderer) {
     display.begin(true);
     renderer.begin();
     renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-    drawFrame(renderer, previous, retained.face);
+    drawFrame(renderer, previous, retained.inverse);
     display.seedXuesuSleepClockBaseline();
-    drawFrame(renderer, current, retained.face);
+    drawFrame(renderer, current, next.inverse);
     // Clean ghosting periodically while using the original differential LUT
     // for routine minute changes. The old plane matches the visible frame.
-    const bool clean = retained.face.layout == Layout::Almanac || current.date.tm_min % 10 == 0;
+    const bool clean = next.layout == Layout::Almanac || current.date.tm_min % 10 == 0;
     renderer.displayBuffer(clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
     display.deepSleep();
     if (!display.displayCommitted()) {
@@ -198,7 +216,8 @@ void refreshAfterTimerWake(GfxRenderer& renderer) {
       return;
     }
     retained = next;
-    LOG_INF("SLC", "Clock refreshed at %02d:%02d", current.date.tm_hour, current.date.tm_min);
+    LOG_INF("SLC", "Clock refreshed, face=%u at %02d:%02d", static_cast<unsigned>(retained.layout),
+            current.date.tm_hour, current.date.tm_min);
   }
 
   const uint64_t delay = timerDelay();

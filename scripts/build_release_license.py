@@ -49,8 +49,8 @@ def source_reference(directory: Path) -> str:
             f"{name}/{version}/{name}-{version}.tar.gz"
         )
     # Git dependencies keep their exact URL and revision in platformio.ini.
-    if directory.name == "JPEGDEC":
-        return "See the JPEGDEC URL and commit in platformio.ini."
+    if directory.name in {"JPEGDEC", "libmobi"}:
+        return f"See the {directory.name} URL and commit in platformio.ini."
     raise ValueError(f"Missing source package metadata: {directory}")
 
 
@@ -59,6 +59,7 @@ def build_license(environment: str, repository: str, packages_dir: Path) -> str:
     sdk_revision = git("rev-parse", "HEAD:freeink-sdk")
     if git("-C", "freeink-sdk", "rev-parse", "HEAD") != sdk_revision:
         raise ValueError("The SDK checkout differs from the recorded source revision.")
+    sdk_url = git("config", "--file", ".gitmodules", "--get", "submodule.freeink-sdk.url").removesuffix(".git")
     source_url = f"https://github.com/{repository}"
     text = (
         "CrossPoint Reader firmware licenses\n\n"
@@ -69,7 +70,7 @@ def build_license(environment: str, repository: str, packages_dir: Path) -> str:
         f"Notice collection environment: {environment}\n"
         f"Source archive: {source_url}/archive/{revision}.tar.gz\n"
         f"Source and patches: {source_url}/tree/{revision}\n"
-        f"SDK source: https://github.com/Free-Ink/freeink-sdk/tree/{sdk_revision}\n"
+        f"SDK source: {sdk_url}/tree/{sdk_revision}\n"
         f"Build instructions: {source_url}/blob/{revision}/licenses/README.md\n\n"
         "GitHub's source archive omits SDK contents and downloaded libraries.\n"
         "Use the SDK revision and library source packages listed in this file.\n"
@@ -82,7 +83,10 @@ def build_license(environment: str, repository: str, packages_dir: Path) -> str:
 
     dependencies = PROJECT_DIR / ".pio" / "libdeps" / environment
     dependency_sources = []
-    for name, filenames in LIBRARY_NOTICES.items():
+    notices = dict(LIBRARY_NOTICES)
+    if environment == "xuesu_300":
+        notices["libmobi"] = ("COPYING", "AUTHORS")
+    for name, filenames in notices.items():
         directory = dependencies / name
         dependency_sources.extend(
             path for path in (directory / "src").rglob("*")

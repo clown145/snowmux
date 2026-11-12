@@ -325,8 +325,8 @@ int FrontlightPanelActivity::computePanelBottom() const {
   const auto& metrics = uiThemeMetrics(true);
   const int16_t lineHeight = uiTarget.lineHeight(tokens.smallText.font);
   // Slim battery band + the air around it (mirrors buildPanelScreen).
-  const int y0 = std::max<int>(FREEINK_DEVICE_XUESU_300 ? BaseTheme::headerStatusHeight() : metrics.batteryHeight,
-                               lineHeight);
+  const int y0 =
+      std::max<int>(FREEINK_DEVICE_XUESU_300 ? BaseTheme::headerStatusHeight() : metrics.batteryHeight, lineHeight);
   int y = tokens.spaceMd + y0 + tokens.spaceMd;
   if (Frontlight.present()) {
     // Screen::sliderRow reserves caption + spaceMd + control band, then a

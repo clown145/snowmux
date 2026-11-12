@@ -39,6 +39,7 @@ inline bool hasPngExtension(const String& fileName) {
 
 // Check for .bmp extension (case-insensitive)
 bool hasBmpExtension(std::string_view fileName);
+bool hasXmpicExtension(std::string_view fileName);
 
 // Images supported by the file browser and image viewer.
 bool hasImageExtension(std::string_view fileName);
@@ -66,6 +67,7 @@ inline bool hasTxtExtension(const String& fileName) {
 
 // Check for .md extension (case-insensitive)
 bool hasMarkdownExtension(std::string_view fileName);
+bool hasImportedBookExtension(std::string_view fileName);
 
 bool hasReflowableBookExtension(std::string_view fileName);
 

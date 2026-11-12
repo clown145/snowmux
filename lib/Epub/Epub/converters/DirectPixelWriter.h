@@ -19,7 +19,7 @@ struct DirectPixelWriter {
   uint8_t* fb;
   GfxRenderer::RenderMode mode;
   bool absolute = false;
-  bool ditherBw = false;       // images on a B/W-only page: dither in BW, skip the gray planes
+  bool ditherBw = false;       // Dither in B/W and omit images from text-only grayscale overlays.
   uint16_t displayWidthBytes;  // Runtime framebuffer stride (X4: 100, X3: 99)
   // Active write target: for tiled grayscale, fb is the band scratch, originY is
   // the band's top physical row, and clipRows is the band height. Off-band
@@ -153,7 +153,8 @@ struct DirectPixelWriter {
   // No bounds checking — caller guarantees coordinates are valid.
   inline void writePixel(int logicalX, uint8_t pixelValue, bool writeWhiteInBw = false) const {
     auto pixel = GfxRenderer::mapTwoBitPixel(mode, pixelValue, absolute);
-    if (ditherBw) {
+    // An absolute pass carries the full image even when its B/W fallback is dithered.
+    if (ditherBw && !absolute) {
       if (mode != GfxRenderer::BW) return;
       const bool black = GfxRenderer::ditherTwoBitPixel(pixelValue, logicalX, rowLogicalY);
       pixel = {writeWhiteInBw || black, black};

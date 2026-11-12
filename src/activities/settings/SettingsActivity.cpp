@@ -1,5 +1,9 @@
 #include "SettingsActivity.h"
 
+#if FREEINK_DEVICE_XUESU_300
+#include "bringup/XuesuLegacyData.h"
+#endif
+
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -199,6 +203,7 @@ void SettingsActivity::rebuildSettingsLists() {
 #if FREEINK_DEVICE_XUESU_300
   addAction(SettingsSection::General, StrId::STR_SLEEP, SettingAction::Sleep);
   addAction(SettingsSection::General, StrId::STR_BATTERY_CALIBRATION, SettingAction::BatteryCalibration);
+  addAction(SettingsSection::General, StrId::STR_IMPORT_STOCK_RECENTS, SettingAction::ImportStockRecents);
 #endif
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts);
@@ -254,7 +259,7 @@ void SettingsActivity::rebuildSettingsLists() {
                                 })
                                 .withManagedEnumPicker());
 #endif
-#if !FREEINK_DEVICE_PICCO
+#if !FREEINK_DEVICE_PICCO && !FREEINK_DEVICE_XUESU_300
   addAction(SettingsSection::General, StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates);
   addAction(SettingsSection::General, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
 #endif
@@ -782,6 +787,17 @@ void SettingsActivity::toggleSetting(const SettingInfo& setting) {
       case SettingAction::TapZones:
         startActivityForResultWith<TapZoneSettingsActivity>(resultHandler);
         break;
+      case SettingAction::ImportStockRecents:
+#if FREEINK_DEVICE_XUESU_300
+      {
+        const int added = xuesu_legacy::importRecentBooks();
+        const auto status =
+            added < 0 ? StrId::STR_IMPORT_STOCK_FAILED : (added == 0 ? StrId::STR_IMPORT_STOCK_EMPTY : StrId::STR_DONE);
+        optionPopup.show(status, OK_OPTION, 1, 0, [](int) {});
+        requestUpdate();
+      }
+#endif
+      break;
       case SettingAction::Sleep:
         activityManager.requestSleep();
         break;

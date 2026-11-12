@@ -1,10 +1,13 @@
-# CrossMux
+# SnowMux
 
 [English](./README.md) | **简体中文**
 
+**SnowMux** 是基于 [CrossMux](https://github.com/0x1abin/crossmux) 的雪酥社区固件。
+[雪酥在线刷机](https://clown145.github.io/snowmux/) · [雪酥固件发布](https://github.com/clown145/snowmux/releases) · [雪酥设备指南](./docs/engineering/xuesu-300-port.md)
+
 **CrossMux** 是面向 ESP32 墨水屏设备的 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) 社区 fork。以阅读为核心，同时提供轻量应用、阅读分析、待机表盘和按需联网服务。
 
-[固件发布](https://github.com/0x1abin/crossmux/releases) · [用户指南](./USER_GUIDE.md) · [参与贡献](./docs/contributing/README.md)
+[上游 CrossMux 固件发布](https://github.com/0x1abin/crossmux/releases) · [用户指南](./USER_GUIDE.md) · [参与贡献](./docs/contributing/README.md)
 
 ![CrossMux 运行在 Xteink 设备上](./docs/images/cover.jpg)
 
@@ -37,6 +40,9 @@
 正式版仅发布 X3/X4、Sticky、X4 Pro 和 Metalio E-Ink 4 四个目标；Nightly 发布九个目标。本地 Stable 构建模式不代表具备正式发布资格，实际可下载版本以所选区域目录为准。配置支持不代表实机验收完成。每个 S3 目标使用独立固件。X4 Classic（`x4c`）、[LilyGo T5 S3 4.7 PRO/Lite](./docs/engineering/lilygo-t5s3.md)（`lilygo_t5s3`）和 BOOX Picco（`picco`）仅提供开发构建。各设备限制见[设备变体说明](./docs/engineering/device-variants.md)。
 
 正式版本使用 [Stable](https://github.com/0x1abin/crossmux/releases/tag/stable)，开发版本使用 [Nightly](https://github.com/0x1abin/crossmux/releases/tag/nightly)，两渠道采用相同的打包规则，发布目标名单分别维护。[目标表](./scripts/nightly_targets.py) 定义渠道与产物名称；[发布架构](./docs/engineering/firmware-release.md) 说明打包与 OTA。当前源码版本及构建环境以 [platformio.ini](./platformio.ini) 为准。
+
+[雪酥](./docs/engineering/xuesu-300-port.md) 提供 ESP32-S3 源码开发构建 `xuesu_300`。设备指南包含 SDK 补丁、原厂波形生成和 OTA1 安装验证记录。
+仓库维护者可按[社区刷机站与发版](./docs/engineering/xuesu-300-port.md#社区刷机站与发版)部署到 GitHub Pages。
 
 ## 安装固件
 
@@ -81,7 +87,7 @@ pio run -e gh_release
 pio run -e gh_release -t upload
 ```
 
-应用固件位于 `.pio/build/<环境>/firmware.bin`。仓库配置共 36 个构建入口：九个硬件目标各有本地 Dev、Stable、Nightly 模式，另有三个仅开发板型和六个模拟器；只有上表四个目标具备正式发布资格。版本与 Git 哈希自动生成：Stable 为 `<基础版本>`，Nightly 为 `<基础版本>-rc+<7位SHA>`，Dev 为 `<基础版本>-dev-<分支>-<7位SHA>`。其它板型见[构建文档](./docs/engineering/build-system.md)。
+应用固件位于 `.pio/build/<环境>/firmware.bin`。九个发布目标各有本地 Dev、Stable、Nightly 模式。仓库也提供仅供开发的设备和模拟器入口。上表四个目标具备正式发布资格。版本与 Git 哈希自动生成，Stable 为 `<基础版本>`，Nightly 为 `<基础版本>-rc+<7位SHA>`，Dev 为 `<基础版本>-dev-<分支>-<7位SHA>`。其它板型见[构建文档](./docs/engineering/build-system.md)。
 
 X4 Pro 与 Metalio E-Ink 4 构建命令：
 

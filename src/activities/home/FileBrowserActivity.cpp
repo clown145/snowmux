@@ -104,8 +104,7 @@ void FileBrowserActivity::loadFiles() {
       std::string_view filename{fileNameBuffer.get()};
       switch (mode) {
         case Mode::Books:
-          if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-              FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+          if (FsHelpers::hasReflowableBookExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
               FsHelpers::hasImageExtension(filename)) {
             files.emplace_back(filename);
           }
@@ -182,9 +181,10 @@ void FileBrowserActivity::drawIconGrid(UiScreen& screen, const fui::Rect rect) {
     provideRow(this, static_cast<uint16_t>(index), item);
     text.color = selected ? fui::Color::White : fui::Color::Black;
     const int labelY = iconY + (iconSize > 0 ? iconSize + InxGridGeometry::iconLabelGap : 0);
-    screen.target().text(fui::Rect{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(labelY),
-                                   static_cast<int16_t>(std::max(1, cell.width - 8)), static_cast<int16_t>(labelHeight)},
-                         item.label, text);
+    screen.target().text(
+        fui::Rect{static_cast<int16_t>(cell.x + 4), static_cast<int16_t>(labelY),
+                  static_cast<int16_t>(std::max(1, cell.width - 8)), static_cast<int16_t>(labelHeight)},
+        item.label, text);
     screen.frame().hit(fui::Rect{static_cast<int16_t>(cell.x), static_cast<int16_t>(cell.y),
                                  static_cast<int16_t>(cell.width), static_cast<int16_t>(cell.height)},
                        ACTION_ROW, static_cast<int16_t>(index), fui::InputTouch | fui::InputLongPress);
