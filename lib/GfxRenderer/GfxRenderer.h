@@ -38,6 +38,7 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 class GfxRenderer {
  public:
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
+  enum class AbsoluteGrayText { Monochrome, Antialiased };
 
   struct TwoBitPixel {
     bool draw;
@@ -79,6 +80,7 @@ class GfxRenderer {
   mutable uint8_t* grayscale16Buffer = nullptr;
   RenderMode renderMode;
   mutable bool absoluteGrayPlanes = false;
+  mutable AbsoluteGrayText absoluteGrayText = AbsoluteGrayText::Monochrome;
   bool ditherImagesInBw = false;
   Orientation orientation;
   // The loop updates this flag while the render task reads refresh policy.
@@ -492,13 +494,16 @@ class GfxRenderer {
   // `fallback`).
   void displayGrayscaleBase(HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH,
                             DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
-  bool displayGrayscaleBase(HalDisplay::GrayscaleMode mode,
-                            HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
+  bool displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH,
+                            AbsoluteGrayText text = AbsoluteGrayText::Monochrome) const;
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
   // Active input encoding, used when drawing monochrome overlays into planes.
   bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
+  bool antialiasesAbsoluteGrayText() const {
+    return absoluteGrayPlanes && absoluteGrayText == AbsoluteGrayText::Antialiased;
+  }
   // B/W pass: draw 2-bit image pixels as a 2x2 ordered dither instead of
   // "any ink is black". Only for pages that get no image grayscale pass,
   // because overlay gray planes expect every gray pixel black in the base.

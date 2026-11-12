@@ -8,6 +8,103 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class AirPageDisplayRetryTest(unittest.TestCase):
+    def test_absolute_airpage_uses_both_planes_and_recovers_a_failed_refresh(self):
+        source = (ROOT / 'src/activities/apps/airpage/AirPageImageRenderer.cpp').read_text(encoding='utf-8')
+        run_cpp(r'''
+#include <cassert>
+#include <cstdint>
+#include <initializer_list>
+#include <optional>
+struct Rect { int x, y, width, height; };
+struct HalDisplay {
+ enum class GrayscaleMode { Overlay, Absolute };
+ enum RefreshMode { FAST_REFRESH, HALF_REFRESH };
+};
+struct GfxRenderer {
+ enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB } mode = BW;
+ bool dither = false, committed = false, failGray = false, failBegin = false, absolute = false;
+ bool white = false;
+ int begins = 0, bwRefreshes = 0, grayRefreshes = 0, planes = 0;
+ struct Caps { bool enabled; bool supported() const { return enabled; } };
+ Caps grayscaleCapabilities(HalDisplay::GrayscaleMode requested = HalDisplay::GrayscaleMode::Overlay) {
+   return {requested == HalDisplay::GrayscaleMode::Absolute};
+ }
+ int getGrayscaleLevels() const { return 4; }
+ bool imagesDitheredInBw() const { return dither; }
+ void setDitherImagesInBw(bool value) { dither = value; }
+ void setRenderMode(RenderMode next) { mode = next; }
+ void cancelGrayscale16() {}
+ bool beginGrayscale16() { assert(false); return false; }
+ bool commitGrayscale16() { return false; }
+ bool displayCommitted() const { return committed; }
+ void clearScreen(uint8_t color = 0xff) { white = color == 0xff; }
+ void displayBuffer(HalDisplay::RefreshMode) { ++bwRefreshes; committed = true; }
+ bool displayGrayscaleBase(HalDisplay::GrayscaleMode requested, HalDisplay::RefreshMode) {
+   assert(requested == HalDisplay::GrayscaleMode::Absolute && mode == BW && dither && white);
+   ++begins; return absolute = !failBegin;
+ }
+ void copyGrayscaleLsbBuffers() { assert(absolute && mode == GRAYSCALE_LSB && white); planes |= 1; }
+ void copyGrayscaleMsbBuffers() { assert(absolute && mode == GRAYSCALE_MSB && white); planes |= 2; }
+ void displayGrayBuffer() { assert(planes == 3); ++grayRefreshes; committed = !failGray; }
+ void cleanupGrayscaleWithFrameBuffer() { assert(mode == BW); absolute = false; }
+ template<class T> bool drawBitmapGrayscale16(T&, int, int, int, int) { return false; }
+};
+enum class ImageFormat { None, Bmp, Jpeg };
+enum class ImageRenderError { Failed, OutOfMemory };
+struct SelectedImage {
+ const char* path = "book.bmp";
+ struct { ImageFormat format = ImageFormat::Bmp; int width = 300, height = 400; bool hasGrayscale = true; } image;
+};
+struct ImageBlock {
+ ImageBlock(const char*, const char*, int, int) {}
+ static void releaseRenderCache() {}
+};
+struct HalFile {};
+enum class BmpReaderError { Ok };
+struct Bitmap {
+ Bitmap(HalFile&, bool) {}
+ BmpReaderError parseHeaders() { return BmpReaderError::Ok; }
+ int getWidth() { return 300; }
+ int getHeight() { return 400; }
+};
+struct { bool openFileForRead(const char*, const char*, HalFile&) { return true; } } Storage;
+enum class DecodeOutput { NativeGrayscale16 };
+struct RenderConfig {
+ int x, y, maxWidth, maxHeight;
+ bool useExactDimensions, useDithering;
+ DecodeOutput output;
+ ImageRenderError* error;
+};
+struct JpegToFramebufferConverter {
+ bool decodeToFramebuffer(const char*, GfxRenderer&, const RenderConfig&) { return false; }
+};
+bool renderPass(GfxRenderer&, const Rect&, const SelectedImage&, ImageBlock*, ImageRenderError*) { return true; }
+struct AirPageImageRenderer {
+ enum class Result { Failed, OutOfMemory, Success };
+ static Rect fittedBounds(Rect viewport, auto) { return viewport; }
+ static void cleanScreen(GfxRenderer&) { assert(false); }
+ static Result render(GfxRenderer&, const Rect&, const SelectedImage&, bool);
+};
+''' + method(source, 'AirPageImageRenderer::Result AirPageImageRenderer::render(') + r'''
+int main() {
+ const Rect viewport{0, 0, 300, 400};
+ const SelectedImage image;
+ using Result = AirPageImageRenderer::Result;
+ GfxRenderer normal;
+ assert(AirPageImageRenderer::render(normal, viewport, image, false) == Result::Success);
+ assert(normal.begins == 1 && normal.grayRefreshes == 1 && normal.bwRefreshes == 0);
+ assert(!normal.dither && !normal.absolute && normal.mode == GfxRenderer::BW);
+ GfxRenderer busy;
+ busy.failGray = true;
+ assert(AirPageImageRenderer::render(busy, viewport, image, false) == Result::Success);
+ assert(busy.begins == 1 && busy.grayRefreshes == 1 && busy.bwRefreshes == 1);
+ GfxRenderer noPlanes;
+ noPlanes.failBegin = true;
+ assert(AirPageImageRenderer::render(noPlanes, viewport, image, false) == Result::Success);
+ assert(noPlanes.begins == 1 && noPlanes.grayRefreshes == 0 && noPlanes.bwRefreshes == 1);
+}
+''')
+
     def test_monochrome_image_dither_preserves_both_midtones(self):
         source = (ROOT / 'lib/GfxRenderer/GfxRenderer.h').read_text()
         run_cpp(r'''

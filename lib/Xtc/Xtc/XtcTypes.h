@@ -99,6 +99,12 @@ struct PageInfo {
   uint8_t padding;   // Alignment padding
 };
 
+// Convert XTH's white, dark, light, black order to increasing luminance.
+constexpr uint8_t xthGrayLevel(const uint8_t pixel) {
+  constexpr uint8_t levels[] = {3, 1, 2, 0};
+  return levels[pixel];
+}
+
 struct ChapterInfo {
   std::string name;
   uint16_t startPage;

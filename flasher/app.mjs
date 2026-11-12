@@ -131,8 +131,8 @@ connectButton.addEventListener('click', () =>
       session = { port, usbDevice, transport, loader, bootPlan };
       message(
         bootPlan.mode === 'install'
-          ? '已识别雪酥，可以刷机。建议先保存一份 Flash 备份。'
-          : '已识别雪酥，可以更新 OTA1。',
+          ? `已识别雪酥，将写入 ${bootPlan.target.label}。建议先保存一份 Flash 备份。`
+          : `已识别雪酥，可以更新 ${bootPlan.target.label}。`,
       );
     } catch (error) {
       await close(transport, usbDevice);
@@ -169,7 +169,8 @@ backupDownload.addEventListener('click', () => {
 
 installButton.addEventListener('click', () => {
   const current = session;
-  if (!window.confirm(`将 v${release.version} 写入 OTA1。开始后请保持 USB 连接。`)) return;
+  if (!current || !release) return;
+  if (!window.confirm(`将 v${release.version} 写入 ${current.bootPlan.target.label}。开始后请保持 USB 连接。`)) return;
   operation(async () => {
     message('正在下载并校验固件…');
     progress('下载固件', 0);

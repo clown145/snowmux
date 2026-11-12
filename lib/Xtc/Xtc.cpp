@@ -227,8 +227,6 @@ bool Xtc::generateCoverBmp() const {
     const uint8_t* plane1 = pageBuffer;              // Bit1 plane
     const uint8_t* plane2 = pageBuffer + planeSize;  // Bit2 plane
 
-    // XTH value -> BMP palette index (palette: 0=black, 1=dark, 2=light, 3=white)
-    static constexpr uint8_t kXthToBmp[4] = {3, 1, 2, 0};
     for (uint16_t y = 0; y < pageInfo.height; y++) {
       memset(rowBuffer, 0x00, rowSize2);
 
@@ -243,7 +241,7 @@ bool Xtc::generateCoverBmp() const {
         const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
         const uint8_t pixelValue = (bit1 << 1) | bit2;
 
-        const uint8_t bmpVal = kXthToBmp[pixelValue];
+        const uint8_t bmpVal = xtc::xthGrayLevel(pixelValue);
         rowBuffer[(x * 2) / 8] |= bmpVal << (6 - ((x * 2) % 8));
       }
 
@@ -432,10 +430,7 @@ bool Xtc::generateThumbBmp(int height) const {
                 const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
                 const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
                 const uint8_t pixelValue = (bit1 << 1) | bit2;
-                // pixelValue: 0=white, 1=dark gray, 2=light gray, 3=black —
-                // same semantics as the cover's kXthToBmp mapping above
-                static constexpr uint8_t kXthToGray[4] = {255, 85, 170, 0};
-                grayValue = kXthToGray[pixelValue];
+                grayValue = xtc::xthGrayLevel(pixelValue) * 85;
               }
             }
           } else {
@@ -514,6 +509,10 @@ uint8_t Xtc::getBitDepth() const {
     return 1;  // Default to 1-bit
   }
   return parser->getBitDepth();
+}
+
+bool Xtc::getPageInfo(const uint32_t pageIndex, xtc::PageInfo& info) const {
+  return loaded && parser && parser->getPageInfo(pageIndex, info);
 }
 
 size_t Xtc::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) const {

@@ -18,7 +18,7 @@ FONTS = ROOT / "lib/EpdFont/builtinFonts"
 CHARACTERS = "0123456789 +-×÷.%=e�"
 CJK_ADDED_CODEPOINTS = {0x0401, 0x0451, 0x2116} | set(range(0x0410, 0x0450))
 # Only the 14/16/18pt i18n subsets gain these already-common Chinese glyphs.
-CJK_TRANSLATION_CODEPOINTS = set(map(ord, "买仍仓代便借序忙核满组购"))
+CJK_TRANSLATION_CODEPOINTS = set(map(ord, "买仍仓代便借刊华印厂响好室序庆忙核槽民湿满灭灯烟熄盖组覆购"))
 REGENERATE = "--regenerate" in sys.argv
 if REGENERATE:
     sys.argv.remove("--regenerate")

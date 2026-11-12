@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -150,12 +151,130 @@ assert.equal(reserveAvailableUploadFilename('cafe\u0301.epub',names),'café (2).
 assert.equal(reserveAvailableUploadFilename('another.epub',names),'another.epub');
 ''')
 
+    def test_epub_target_waits_for_connected_screen_and_honors_manual_choice(self):
+        profiles = (HTML / 'shared/FileTransferProfiles.js.inc').read_text(encoding='utf-8')
+        run_node(r'''
+const assert = require('node:assert/strict');
+const XUESU_DEVICE_LABEL = 'Xuesu 3';
+const summary = {dataset: {maxLabel: 'Max', unknown: 'No screen size'}};
+const auto = {dataset: {label: 'Auto'}};
+const document = {
+  getElementById: id => ({convertSizeSummary: summary, deviceAutoLabel: auto})[id],
+  querySelectorAll: () => [],
+};
+const image = {width: 390, height: 500};
+const epubImagesCache = [image];
+const isImagePickerVisible = () => true;
+const renderImageGrid = () => {};
+let isUploadInProgress = false;
+const updateUploadSettingsPersistence = () => {};
+let respond, requests = 0;
+const fetch = url => {
+  assert.equal(url, '/api/status');
+  ++requests;
+  return new Promise(resolve => { respond = data => resolve({ok: true, json: async () => data}); });
+};
+''' + profiles + r'''
+(async () => {
+  const initial = fetchVersion();
+  const upload = ensureDeviceTarget();
+  assert.equal(requests, 1);
+  assert.equal(MAX_WIDTH, 0);
+  respond({device: 'xuesu-300-std', screenWidth: 300, screenHeight: 400});
+  await initial;
+  assert.equal(await upload, true);
+  assert.equal(auto.textContent, 'Auto (Xuesu 3)');
+  assert.equal(summary.textContent, 'Max 300×400 px');
+  assert.deepEqual([image.fitsScreen, image.canHSplit, image.canVSplit], [false, false, true]);
+
+  setDeviceTarget('X4');
+  assert.equal(summary.textContent, 'Max 480×800 px');
+  assert.deepEqual([image.fitsScreen, image.canHSplit, image.canVSplit], [true, false, false]);
+  const refresh = fetchVersion();
+  respond({device: 'xuesu-300-std'});
+  await refresh;
+  assert.equal(summary.textContent, 'Max 480×800 px');
+  setDeviceTarget('auto');
+  assert.equal(summary.textContent, 'Max 300×400 px');
+
+  const unknown = fetchVersion();
+  respond({device: 'unknown-board'});
+  await unknown;
+  assert.equal(summary.textContent, 'No screen size');
+  const retry = ensureDeviceTarget();
+  respond({device: 'unknown-board'});
+  assert.equal(await retry, false);
+  setDeviceTarget('Xuesu');
+  assert.equal(await ensureDeviceTarget(), true);
+  assert.equal(summary.textContent, 'Max 300×400 px');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+''')
+
+    def test_xmpic_preview_preserves_orientation_download_and_cancellation(self):
+        preview = (HTML / 'shared/FileImagePreview.js.inc').read_text(encoding='utf-8')
+        run_node(r'''
+const assert = require('node:assert/strict');
+const img = {removeAttribute() { delete this.src; }, dataset: {loadError: 'Invalid wallpaper'}};
+const download = {}, title = {};
+let rgba, toasts = [], resolve;
+const document = {
+  getElementById: id => ({imagePreviewImg: img, imagePreviewName: title, imagePreviewDownload: download})[id],
+  createElement(type) {
+    assert.equal(type, 'canvas');
+    return {getContext: () => ({
+      createImageData(w, h) {
+        assert.deepEqual([w, h], [300, 400]);
+        return {data: new Uint8ClampedArray(w * h * 4)};
+      },
+      putImageData(image) { rgba = image.data; },
+    }), toDataURL: () => 'data:image/png;base64,preview'};
+  },
+};
+const openWebModal = () => {}, closeWebModal = () => {};
+const showWebToast = (...args) => toasts.push(args);
+const fetch = () => new Promise(r => { resolve = r; });
+const reply = (bytes, length = bytes.length) => resolve({ok: true,
+  headers: {get: () => String(length)}, arrayBuffer: async () => bytes.buffer});
+''' + preview + r'''
+(async () => {
+  const bytes = new Uint8Array(38 * 400);
+  bytes[0] = 0x80;
+  bytes[38 * 399 + 37] = 0x10;
+  assert(isImageFile('Wall.XMPIC'));
+  const ready = openImagePreview('/download?path=Wall.XMPIC', 'Wall.XMPIC');
+  reply(bytes);
+  await ready;
+  assert.equal(title.textContent, 'Wall.XMPIC');
+  assert.equal(download.href, '/download?path=Wall.XMPIC');
+  assert.equal(img.src, 'data:image/png;base64,preview');
+  const pixel = (x, y) => [...rgba.slice((y * 300 + x) * 4, (y * 300 + x) * 4 + 4)];
+  assert.deepEqual(pixel(0, 0), [0, 0, 0, 255]);
+  assert.deepEqual(pixel(299, 399), [0, 0, 0, 255]);
+  assert.deepEqual(pixel(299, 0), [255, 255, 255, 255]);
+  assert.deepEqual(pixel(0, 399), [255, 255, 255, 255]);
+
+  const bad = openImagePreview('/bad', 'bad.xmpic');
+  reply(bytes.subarray(0, 20));
+  await bad;
+  assert.deepEqual(toasts, [['Invalid wallpaper', true]]);
+  assert.equal(download.href, '/bad');
+  assert.equal(img.src, undefined);
+
+  const stale = openImagePreview('/stale', 'stale.xmpic');
+  closeImagePreview();
+  await openImagePreview('/new', 'new.png');
+  reply(bytes);
+  await stale;
+  assert.equal(img.src, '/new');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+''')
+
     def test_build_assets_include_localized_helpers_and_valid_scripts(self):
         with tempfile.TemporaryDirectory(prefix="web-source-parity-") as directory:
             temp=Path(directory)
             target=temp/"src/network/html"
             shutil.copytree(HTML,target,ignore=shutil.ignore_patterns("*.generated.h"))
-            result=subprocess.run(["python3",str(ROOT/"scripts/build_html.py")],cwd=temp,text=True,capture_output=True)
+            result=subprocess.run([sys.executable,str(ROOT/"scripts/build_html.py")],cwd=temp,text=True,capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
             for locale in ["en","zh-CN"]:
                 for name in ["FilesPage","FontsPage","HomePage","SettingsPage"]:
@@ -164,6 +283,8 @@ assert.equal(reserveAvailableUploadFilename('another.epub',names),'another.epub'
                     raw=gzip.decompress(bytes(int(token,16) for token in re.findall(r"0x([0-9a-f]{2})",array))).decode()
                     self.assertNotIn("<!--#include",raw)
                     self.assertIn("function showWebConfirm(",raw)
+                    if name == "FilesPage":
+                        self.assertIn("function xmpicPreviewUrl(",raw)
                     if locale=="zh-CN":
                         self.assertIn("确认操作",raw)
                         self.assertNotIn("'Confirm action'",raw)

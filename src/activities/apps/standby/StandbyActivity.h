@@ -69,10 +69,6 @@ class StandbyActivity final : public Activity {
   void processFaceTick(bool waitForUpdate);
   bool tryLightSleep(uint32_t idleMs);
 
-  // Layer a 4-level grayscale refresh on top of the BW image just committed by
-  // displayBuffer(): re-render the LSB then MSB planes and composite via the
-  // gray LUT waveform. Used by passive faces in Immersive mode (gated on
-  // wantsGrayscale, e.g. the 老黄历 calendar). The face's render() must be
-  // idempotent across the three passes.
-  void applyGrayscalePass(const Rect& viewport);
+  // The face must render the same content for the BW baseline and both planes.
+  bool applyGrayscalePass(const Rect& viewport, bool absolute);
 };

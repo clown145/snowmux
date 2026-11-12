@@ -94,10 +94,8 @@ AirPageImageRenderer::Result AirPageImageRenderer::render(GfxRenderer& renderer,
       ImageBlock::releaseRenderCache();
     }
   } cleanup{renderer, renderer.imagesDitheredInBw()};
-  const bool monochrome = renderer.getGrayscaleLevels() != 16 && !renderer.grayscaleCapabilities().supported();
-  renderer.setDitherImagesInBw(monochrome);
-
   if (renderer.getGrayscaleLevels() == 16) {
+    renderer.setDitherImagesInBw(false);
     if (cleanBeforeDisplay) cleanScreen(renderer);
     if (!renderer.beginGrayscale16()) return failure();
     bool decoded = false;
@@ -139,22 +137,35 @@ AirPageImageRenderer::Result AirPageImageRenderer::render(GfxRenderer& renderer,
   }
   ImageBlock* jpeg = jpegBlock ? &*jpegBlock : nullptr;
 
-  renderer.setRenderMode(GfxRenderer::BW);
-  renderer.clearScreen();
-  if (!renderPass(renderer, bounds, selected, jpeg, &error)) return failure();
+  const bool overlay = renderer.grayscaleCapabilities().supported();
+  const auto absoluteMode = HalDisplay::GrayscaleMode::Absolute;
+  const bool absolute = !overlay && renderer.grayscaleCapabilities(absoluteMode).supported();
+  const bool useAbsolute = absolute && selected.image.hasGrayscale;
+  renderer.setDitherImagesInBw(!overlay);
+  const auto drawBw = [&] {
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.clearScreen();
+    return renderPass(renderer, bounds, selected, jpeg, &error);
+  };
+  if (!drawBw()) return failure();
 
   if (cleanBeforeDisplay) {
     cleanScreen(renderer);
-  } else {
+    if (!drawBw()) return failure();
+  } else if (!useAbsolute) {
     renderer.clearScreen();
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    if (!drawBw()) return failure();
   }
 
-  renderer.setRenderMode(GfxRenderer::BW);
-  if (!renderPass(renderer, bounds, selected, jpeg, &error)) return failure();
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-
-  if (monochrome || !selected.image.hasGrayscale) return Result::Success;
+  if (!useAbsolute) {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    if (!renderer.displayCommitted()) return failure();
+    if (!overlay || !selected.image.hasGrayscale) return Result::Success;
+  } else if (!renderer.displayGrayscaleBase(absoluteMode, HalDisplay::HALF_REFRESH)) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return renderer.displayCommitted() ? Result::Success : failure();
+  }
 
   const auto abortGrayscale = [&renderer] {
     renderer.setRenderMode(GfxRenderer::BW);
@@ -163,32 +174,33 @@ AirPageImageRenderer::Result AirPageImageRenderer::render(GfxRenderer& renderer,
     renderer.cleanupGrayscaleWithFrameBuffer();
   };
 
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  renderer.clearScreen(0x00);
-  if (!renderPass(renderer, bounds, selected, jpeg, &error)) {
-    abortGrayscale();
-    return failure();
+  for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+    renderer.setRenderMode(mode);
+    renderer.clearScreen(useAbsolute ? 0xff : 0x00);
+    if (!renderPass(renderer, bounds, selected, jpeg, &error)) {
+      abortGrayscale();
+      return failure();
+    }
+    if (mode == GfxRenderer::GRAYSCALE_LSB) {
+      renderer.copyGrayscaleLsbBuffers();
+    } else {
+      renderer.copyGrayscaleMsbBuffers();
+    }
   }
-  renderer.copyGrayscaleLsbBuffers();
 
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  renderer.clearScreen(0x00);
-  if (!renderPass(renderer, bounds, selected, jpeg, &error)) {
-    abortGrayscale();
-    return failure();
-  }
-  renderer.copyGrayscaleMsbBuffers();
-
-  renderer.setRenderMode(GfxRenderer::BW);
   renderer.displayGrayBuffer();
+  const bool grayCommitted = renderer.displayCommitted();
 
-  renderer.clearScreen();
-  if (!renderPass(renderer, bounds, selected, jpeg, &error)) {
+  if (!drawBw()) {
     abortGrayscale();
     return failure();
   }
   renderer.cleanupGrayscaleWithFrameBuffer();
-  return Result::Success;
+  if (useAbsolute && !grayCommitted) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return renderer.displayCommitted() ? Result::Success : failure();
+  }
+  return grayCommitted ? Result::Success : failure();
 }
 
 }  // namespace airpage

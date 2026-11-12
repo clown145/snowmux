@@ -53,7 +53,7 @@
             <div class="step">
               <div>
                 <h3>写入社区固件</h3>
-                <p>校验 OTA1 后重启设备</p>
+                <p>校验写入的应用后重启设备</p>
               </div>
               <button id="install" class="button light" disabled>开始刷机</button>
             </div>
@@ -75,10 +75,6 @@
             <div>
               <dt>设备</dt>
               <dd>雪酥</dd>
-            </div>
-            <div>
-              <dt>写入槽</dt>
-              <dd><code>OTA1</code></dd>
             </div>
             <div>
               <dt>发布日期</dt>
@@ -112,8 +108,8 @@
           <details>
             <summary>刷机会写到哪里</summary>
             <p>
-              本站检查芯片、分区、原厂应用和启动记录，仅将应用写到
-              OTA1。首次安装在读回校验成功后切换启动槽，保留原厂 OTA0、原厂分区表和 NVS。
+              本站检查芯片、分区、当前应用和启动记录。原厂系统在 OTA0 时写入 OTA1。
+              机内升级过的设备根据当前启动槽选择写入位置，刷机前会显示目标槽。
             </p>
           </details>
           <details>

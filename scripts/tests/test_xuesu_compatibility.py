@@ -7,6 +7,56 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class XuesuCompatibilityTest(unittest.TestCase):
+    def test_usb_drive_persists_library_marker_before_unmount(self):
+        drive = (ROOT / 'src/activities/network/UsbDriveActivity.cpp').read_text(encoding='utf-8')
+        run_cpp(r'''
+#include <cassert>
+bool mounted = true, dirtyMarker = false;
+namespace bleinput {
+bool allowed = true;
+bool stop() { return allowed; }
+}
+namespace library {
+bool markLibraryIndexDirty() {
+  assert(mounted);
+  return dirtyMarker = true;
+}
+}
+struct {
+  bool beginUsbDrive() {
+    assert(mounted && dirtyMarker);
+    mounted = false;
+    return true;
+  }
+} Storage;
+struct Activity { void onEnter() {} };
+struct UsbDriveActivity : Activity {
+  enum class State { IoError, WaitingForHost } state{};
+  bool preparing = true, startFailed = false;
+  int startFailureStartedAt = 0, hostWaitStartedAt = 0;
+  struct { void setScreen(int*, UsbDriveActivity*) {} } app;
+  static inline int driveScreen = 0;
+  void resetUi() {}
+  void requestUpdateAndWait() {}
+  void requestUpdate() {}
+  void onEnter();
+};
+int millis() { return 0; }
+#define LOG_ERR(...)
+''' + method(drive, 'void UsbDriveActivity::onEnter()') + r'''
+int main() {
+  UsbDriveActivity rejected;
+  bleinput::allowed = false;
+  rejected.onEnter();
+  assert(rejected.startFailed && mounted && !dirtyMarker);
+
+  UsbDriveActivity drive;
+  bleinput::allowed = true;
+  drive.onEnter();
+  assert(drive.state == UsbDriveActivity::State::WaitingForHost && !mounted && dirtyMarker);
+}
+''')
+
     def test_sd_warning_uses_repeated_latency_and_prioritizes_errors(self):
         run_cpp(r'''
 #include <cassert>

@@ -54,7 +54,9 @@ Response:
   "rssi": -45,
   "freeHeap": 123456,
   "uptime": 3600,
-  "device": "X4"
+  "device": "X4",
+  "screenWidth": 480,
+  "screenHeight": 800
 }
 ```
 
@@ -70,7 +72,13 @@ Response:
 | `freeHeap` | number | Free heap in bytes |
 | `uptime` | number | Seconds since boot |
 | `deviceId` | string | With `?plugin=<name>`: 64 hex chars, stable per device and plugin (SHA-256 of an on-device NVS secret and the name); omitted if NVS is unavailable |
-| `device` | string | `"X3"` or `"X4"` hardware detection |
+| `device` | string | `"X3"` or `"X4"` for the shared image, otherwise the active board name, such as `"xuesu-300-std"` |
+| `screenWidth`, `screenHeight` | number | Panel dimensions in portrait pixels, independent of the current reader orientation |
+
+The File Manager's EPUB optimizer uses these dimensions for Auto, including
+image previews, split estimates and JPEG output. Older status responses can
+use a known device preset. A manual target overrides Auto. If Auto cannot
+resolve the screen size, EPUB optimization asks for a manual target.
 
 ## File Management
 

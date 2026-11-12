@@ -437,6 +437,12 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
     return 0;
   }
 
+  if (pageHeader.width != page.width || pageHeader.height != page.height) {
+    LOG_ERR("XTC", "Page %u dimensions disagree with its page table entry", pageIndex);
+    m_lastError = XtcError::CORRUPTED_HEADER;
+    return 0;
+  }
+
   // Calculate bitmap size based on bit depth
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
   // XTH (2-bit): Two column-major bit planes; each column occupies ceil(height/8) bytes

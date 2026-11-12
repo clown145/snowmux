@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
 
 #include "BleInput.h"
 #include "MappedInputManager.h"
@@ -21,6 +22,9 @@ void UsbDriveActivity::onEnter() {
 
   // Show the safety instructions before giving the raw SD card to the USB host.
   requestUpdateAndWait();
+  // The host writes raw sectors, so the library cannot observe file changes.
+  // Persist the marker while the filesystem is mounted, before any host writes.
+  if (bluetoothStopped) library::markLibraryIndexDirty();
   if (!bluetoothStopped || !Storage.beginUsbDrive()) {
     LOG_ERR("USB", "Unable to start USB Drive");
     preparing = false;

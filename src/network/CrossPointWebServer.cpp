@@ -6,6 +6,7 @@
 #include <Crypto.h>
 #include <DeviceSecret.h>
 #include <FsHelpers.h>
+#include <HalDisplay.h>
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
 #include <HalMemory.h>
@@ -892,6 +893,10 @@ void CrossPointWebServer::handleStatus() const {
 #else
   doc["device"] = BoardConfig::ACTIVE.name;
 #endif
+  const auto panelWidth = display.getDisplayWidth();
+  const auto panelHeight = display.getDisplayHeight();
+  doc["screenWidth"] = std::min(panelWidth, panelHeight);
+  doc["screenHeight"] = std::max(panelWidth, panelHeight);
 
   char snBuf[33] = {0};
   bool valid = false;

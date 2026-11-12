@@ -183,141 +183,140 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
 }
 
 void XtcReaderActivity::renderPage() {
-  const uint16_t pageWidth = xtc->getPageWidth();
-  const uint16_t pageHeight = xtc->getPageHeight();
-  const uint8_t bitDepth = xtc->getBitDepth();
-
-  size_t pageBufferSize;
-  if (bitDepth == 2) {
-    pageBufferSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8) * 2;
-  } else {
-    pageBufferSize = ((pageWidth + 7) / 8) * pageHeight;
+  const auto showError = [this](const char* message) {
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, message, true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+  };
+  xtc::PageInfo page{};
+  if (!xtc->getPageInfo(currentPage, page) || page.width == 0 || page.height == 0) {
+    LOG_ERR("XTR", "Failed to read dimensions for page %lu", currentPage);
+    showError(tr(STR_PAGE_LOAD_ERROR));
+    return;
   }
 
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(pageBufferSize));
+  const size_t colBytes = (page.height + 7) / 8;
+  const size_t planeSize = page.width * colBytes;
+  const size_t rowBytes = (page.width + 7) / 8;
+  const size_t pageBufferSize = page.bitDepth == 2 ? planeSize * 2 : rowBytes * page.height;
+  // One packed source page can exceed the task stack (30,000 B for 300x400 XTCH).
+  // Release it after drawing so paused readers and menus do not retain it.
+  auto pageBuffer = makeUniqueNoThrow<uint8_t[]>(pageBufferSize);
   if (!pageBuffer) {
-    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes)", pageBufferSize);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
+    LOG_ERR("XTR", "Failed to allocate page buffer (%zu bytes)", pageBufferSize);
+    showError(tr(STR_MEMORY_ERROR));
+    return;
+  }
+  if (xtc->loadPage(currentPage, pageBuffer.get(), pageBufferSize) != pageBufferSize) {
+    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%zu bitDepth=%u error=%s", currentPage, pageBufferSize,
+            page.bitDepth, xtc::errorToString(xtc->getLastError()));
+    showError(tr(STR_PAGE_LOAD_ERROR));
     return;
   }
 
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
-  if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, pageBufferSize,
-            bitDepth, xtc::errorToString(xtc->getLastError()));
-    free(pageBuffer);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
-    return;
+  const int screenWidth = renderer.getScreenWidth();
+  const int screenHeight = renderer.getScreenHeight();
+  int drawWidth = page.width;
+  int drawHeight = page.height;
+  int drawX = 0;
+  int drawY = 0;
+  if (drawWidth > screenWidth || drawHeight > screenHeight) {
+    if (drawWidth * screenHeight > drawHeight * screenWidth) {
+      drawHeight = std::max(1, drawHeight * screenWidth / drawWidth);
+      drawWidth = screenWidth;
+    } else {
+      drawWidth = std::max(1, drawWidth * screenHeight / drawHeight);
+      drawHeight = screenHeight;
+    }
+    drawX = (screenWidth - drawWidth) / 2;
+    drawY = (screenHeight - drawHeight) / 2;
   }
-
+  // Sample the source at each destination pixel's center. Both formats can
+  // use the decoded page directly, with no extra scaled framebuffer.
+  const auto sourceX = [&](int x) { return (x * page.width + page.width / 2) / drawWidth; };
+  const auto sourceY = [&](int y) { return (y * page.height + page.height / 2) / drawHeight; };
   renderer.clearScreen();
 
-  const uint16_t maxSrcY = pageHeight;
-
-  if (bitDepth == 2) {
-    const size_t planeSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8);
-    const uint8_t* plane1 = pageBuffer;
-    const uint8_t* plane2 = pageBuffer + planeSize;
-    const size_t colBytes = (pageHeight + 7) / 8;
-
-    auto getPixelValue = [&](uint16_t x, uint16_t y) -> uint8_t {
-      const size_t colIndex = pageWidth - 1 - x;
-      const size_t byteInCol = y / 8;
-      const size_t bitInByte = 7 - (y % 8);
-      const size_t byteOffset = colIndex * colBytes + byteInCol;
-      const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
-      const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
-      return (bit1 << 1) | bit2;
+  if (page.bitDepth == 2) {
+    const uint8_t* lsb = pageBuffer.get() + planeSize;
+    const auto grayLevel = [&](const int x, const int y) {
+      const size_t byte = (page.width - 1 - x) * colBytes + y / 8;
+      const int bit = 7 - y % 8;
+      const uint8_t value = (((pageBuffer[byte] >> bit) & 1) << 1) | ((lsb[byte] >> bit) & 1);
+      return xtc::xthGrayLevel(value);
     };
-
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) >= 1) {
-          renderer.drawPixel(x, y, true);
+    const auto overlay = renderer.grayscaleCapabilities();
+    const bool absolute =
+        !overlay.supported() && renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
+    const auto drawBw = [&] {
+      renderer.clearScreen();
+      for (int y = 0; y < drawHeight; ++y) {
+        const int sy = sourceY(y);
+        for (int x = 0; x < drawWidth; ++x) {
+          const auto level = grayLevel(sourceX(x), sy);
+          if (overlay.supported() ? level < 3 : GfxRenderer::ditherTwoBitPixel(level, drawX + x, drawY + y)) {
+            renderer.drawPixel(drawX + x, drawY + y, true);
+          }
         }
       }
-    }
+    };
+    drawBw();
 
-    if (pagesUntilFullRefresh <= 1) {
-      // Periodic ghost cleanup: scrub via the normal path, then run the
-      // settle flavor of the grayscale base pass (DTM planes are equal after
-      // the display sync, so only the gentle reinforcement cells fire).
-      // Combined-base panels (Paper Mono) instead defer the base so the gray
-      // planes below join it in one waveform.
-      if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined) {
-        renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
-      } else {
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    const bool clean = pagesUntilFullRefresh <= 1;
+    const auto refresh = clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+    bool grayStarted = false;
+    if (absolute) {
+      grayStarted = renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, refresh);
+    } else if (overlay.supported()) {
+      if (clean && overlay.base != HalDisplay::GrayscaleBase::Combined) {
+        renderer.displayBuffer(refresh);
         renderer.preconditionGrayscale();
+      } else {
+        renderer.displayGrayscaleBase(refresh, DisplayRefreshContext::ContinuousReading);
       }
-      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
-    } else {
-      renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH, DisplayRefreshContext::ContinuousReading);
-      pagesUntilFullRefresh--;
+      grayStarted = true;
     }
 
-    renderer.clearScreen(0x00);
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) == 1) {
-          renderer.drawPixel(x, y, false);
+    if (grayStarted) {
+      for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+        renderer.clearScreen(absolute ? 0xff : 0x00);
+        for (int y = 0; y < drawHeight; ++y) {
+          const int sy = sourceY(y);
+          for (int x = 0; x < drawWidth; ++x) {
+            const auto pixel = GfxRenderer::mapTwoBitPixel(mode, grayLevel(sourceX(x), sy), absolute);
+            if (pixel.draw) renderer.drawPixel(drawX + x, drawY + y, pixel.state);
+          }
+        }
+        if (mode == GfxRenderer::GRAYSCALE_LSB) {
+          renderer.copyGrayscaleLsbBuffers();
+        } else {
+          renderer.copyGrayscaleMsbBuffers();
         }
       }
+      renderer.displayGrayBuffer();
+      drawBw();
+      renderer.cleanupGrayscaleWithFrameBuffer();
     }
-    renderer.copyGrayscaleLsbBuffers();
-
-    renderer.clearScreen(0x00);
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        const uint8_t pv = getPixelValue(x, y);
-        if (pv == 1 || pv == 2) {
-          renderer.drawPixel(x, y, false);
-        }
-      }
+    if (!grayStarted || !renderer.displayCommitted()) {
+      renderer.displayBuffer(grayStarted ? HalDisplay::HALF_REFRESH : refresh);
     }
-    renderer.copyGrayscaleMsbBuffers();
-
-    renderer.displayGrayBuffer();
-
-    renderer.clearScreen();
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) >= 1) {
-          renderer.drawPixel(x, y, true);
-        }
-      }
+    if (renderer.displayCommitted()) {
+      pagesUntilFullRefresh = clean ? SETTINGS.getRefreshFrequency() : pagesUntilFullRefresh - 1;
+      markPageRendered();
     }
-
-    renderer.cleanupGrayscaleWithFrameBuffer();
-
-    free(pageBuffer);
-
-    LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
-    markPageRendered();
     return;
-  } else {
-    const size_t srcRowBytes = (pageWidth + 7) / 8;
+  }
 
-    for (uint16_t srcY = 0; srcY < maxSrcY; srcY++) {
-      const size_t srcRowStart = srcY * srcRowBytes;
-
-      for (uint16_t srcX = 0; srcX < pageWidth; srcX++) {
-        const size_t srcByte = srcRowStart + srcX / 8;
-        const size_t srcBit = 7 - (srcX % 8);
-        const bool isBlack = !((pageBuffer[srcByte] >> srcBit) & 1);
-
-        if (isBlack) {
-          renderer.drawPixel(srcX, srcY, true);
-        }
+  for (int y = 0; y < drawHeight; ++y) {
+    const size_t row = sourceY(y) * rowBytes;
+    for (int x = 0; x < drawWidth; ++x) {
+      const int sx = sourceX(x);
+      if (!(pageBuffer[row + sx / 8] & (0x80 >> (sx % 8)))) {
+        renderer.drawPixel(drawX + x, drawY + y, true);
       }
     }
   }
-
-  free(pageBuffer);
+  pageBuffer.reset();
 
   if (SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(renderer, StatusBarOverlayPosition::Top);
@@ -326,8 +325,7 @@ void XtcReaderActivity::renderPage() {
   }
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-
-  LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
+  LOG_DBG("XTR", "Rendered page %lu/%lu (1-bit)", currentPage + 1, xtc->getPageCount());
   if (renderer.displayCommitted()) markPageRendered();
 }
 

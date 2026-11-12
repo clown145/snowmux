@@ -4,10 +4,45 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from test_reading_ui_regressions import ROOT, run_cpp
+from test_reading_ui_regressions import ROOT, method, run_cpp
 
 
 class XuesuDisplayTest(unittest.TestCase):
+    def test_almanac_absolute_planes_preserve_antialias_and_reversed_text(self):
+        gfx = ROOT / 'lib/GfxRenderer'
+        source = (gfx / 'GfxRenderer.cpp').read_text(encoding='utf-8')
+        header = (gfx / 'GfxRenderer.h').read_text(encoding='utf-8')
+        run_cpp(r'''
+#include <BitmapHelpers.h>
+#include <cassert>
+#include <initializer_list>
+struct GfxRenderer {
+  enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
+  struct TwoBitPixel { bool draw; bool state; };
+  mutable bool ink = false;
+  bool grayPlanesAreAbsolute() const { return true; }
+  bool antialiasesAbsoluteGrayText() const { return true; }
+  void drawPixel(int, int, bool state) const { ink = state; }
+''' + method(header, 'static constexpr TwoBitPixel mapTwoBitPixel(') +
+            method(header, 'static constexpr TwoBitPixel mapTwoBitGlyphCoverage(') + r'''
+};
+''' + method(source, 'static void draw2BitGlyphPixel(') + r'''
+int main() {
+  GfxRenderer renderer;
+  for (const bool blackText : {false, true}) {
+    for (uint8_t coverage = 0; coverage < 4; ++coverage) {
+      renderer.ink = !blackText;
+      draw2BitGlyphPixel(renderer, GfxRenderer::GRAYSCALE_LSB, 0, 0, blackText, coverage);
+      const int lsb = !renderer.ink;
+      renderer.ink = !blackText;
+      draw2BitGlyphPixel(renderer, GfxRenderer::GRAYSCALE_MSB, 0, 0, blackText, coverage);
+      const int msb = !renderer.ink;
+      assert((msb * 2 + lsb) == (blackText ? 3 - coverage : coverage));
+    }
+  }
+}
+''', include_dirs=[gfx])
+
     def test_gray_plane_encoding_and_bw_recovery(self):
         display = ROOT / 'freeink-sdk/libs/display/FreeInkDisplay'
         with TemporaryDirectory(prefix='xuesu-panel-') as directory:

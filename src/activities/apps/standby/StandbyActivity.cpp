@@ -740,15 +740,20 @@ void StandbyActivity::render(RenderLock&&) {
   }
 
   if (mode_ != DisplayMode::Normal) {
+    // Keep interactive navigation and the inverted face on the BW waveform.
+    if (clockValid && currentFace_->wantsGrayscale() && !inverseMode_) {
+      if (renderer.grayscaleCapabilities().supported()) {
+        renderer.displayBuffer();
+        applyGrayscalePass(drawing, false);
+        return;
+      }
+      if (renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported() &&
+          applyGrayscalePass(drawing, true)) {
+        return;
+      }
+    }
     if (inverseMode_) renderer.invertScreen();
     renderer.displayBuffer();
-    // Opt-in faces (老黄历) get a 4-level gray LUT enhancement layered on the BW
-    // image. Only fires in Immersive — Normal-mode navigation needs the
-    // ~300-500ms FAST_REFRESH and can't afford the ~2s gray LUT. inverseMode_
-    // short-circuits because invertScreen is BW-only and mixes poorly with gray.
-    if (currentFace_->wantsGrayscale() && !inverseMode_ && renderer.grayscaleCapabilities().supported()) {
-      applyGrayscalePass(faceViewport);
-    }
     return;
   }
 
@@ -783,33 +788,30 @@ void StandbyActivity::render(RenderLock&&) {
   renderer.displayBuffer();
 }
 
-// Two extra renders (LSB then MSB) into scratch buffers, composited with the BW
-// backup by the gray LUT waveform. Mirrors EpubReaderActivity.cpp:813-837. The
-// caller gates invocation (passive Immersive vs interactive on-demand); this
-// just runs the pass unconditionally.
-void StandbyActivity::applyGrayscalePass(const Rect& viewport) {
+bool StandbyActivity::applyGrayscalePass(const Rect& viewport, bool absolute) {
   if (!renderer.storeBwBuffer()) {
     LOG_ERR("STANDBY", "Grayscale pass skipped: storeBwBuffer failed");
-    return;
+    return false;
   }
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  {
+  if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, HalDisplay::HALF_REFRESH,
+                                                 GfxRenderer::AbsoluteGrayText::Antialiased)) {
+    renderer.restoreBwBuffer(false);
+    return false;
+  }
+  for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+    renderer.clearScreen(absolute ? 0xff : 0x00);
+    renderer.setRenderMode(mode);
     const GfxRenderer::ClipScope clip(renderer, viewport.x, viewport.y, viewport.width, viewport.height);
     currentFace_->render(renderer, viewport);
+    if (mode == GfxRenderer::GRAYSCALE_LSB) {
+      renderer.copyGrayscaleLsbBuffers();
+    } else {
+      renderer.copyGrayscaleMsbBuffers();
+    }
   }
-  renderer.copyGrayscaleLsbBuffers();
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  {
-    const GfxRenderer::ClipScope clip(renderer, viewport.x, viewport.y, viewport.width, viewport.height);
-    currentFace_->render(renderer, viewport);
-  }
-  renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.restoreBwBuffer();
+  return renderer.displayCommitted();
 }

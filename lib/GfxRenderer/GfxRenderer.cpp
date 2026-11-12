@@ -543,6 +543,14 @@ static_assert(dilate2BitCoverage(0, 3, 3, 3, 0) == 0);  // Off preserves the ori
 
 static void draw2BitGlyphPixel(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode, const int x,
                                const int y, const bool pixelState, const uint8_t coverage) {
+  if (renderMode != GfxRenderer::BW && renderer.antialiasesAbsoluteGrayText()) {
+    if (coverage == 0) return;
+    // Calendar text uses solid backgrounds: black on white, or white on black.
+    const uint8_t level = pixelState ? 3 - coverage : coverage;
+    const auto pixel = GfxRenderer::mapTwoBitPixel(renderMode, level, true);
+    renderer.drawPixel(x, y, pixel.state);
+    return;
+  }
   const auto pixel = GfxRenderer::mapTwoBitGlyphCoverage(renderMode, coverage, renderer.grayPlanesAreAbsolute());
   if (!pixel.draw) return;
   renderer.drawPixel(x, y, renderMode == GfxRenderer::BW ? pixelState : pixel.state);
@@ -679,7 +687,7 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
                            const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                            const bool pixelState, const EpdFontFamily::Style style,
                            const uint8_t syntheticBoldPixels = 0) {
-  if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
+  if (renderer.grayPlanesAreAbsolute() && !renderer.antialiasesAbsoluteGrayText()) renderMode = GfxRenderer::BW;
   EpdGlyph solidFallback;
   const EpdGlyph* glyph = fontFamily.getGlyphMetrics(cp, solidFallback, style);
   const EpdFontData* fontData = fontFamily.getData(style);
@@ -2950,12 +2958,14 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback, Display
 #endif
 }
 
-bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback) const {
+bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback,
+                                       AbsoluteGrayText text) const {
   absoluteGrayPlanes = false;
   if (!display.displayGrayscaleBase(mode, nextRefreshOverridePending ? nextRefreshOverride : fallback, fadingFix))
     return false;
   nextRefreshOverridePending = false;
   absoluteGrayPlanes = mode != HalDisplay::GrayscaleMode::Overlay;
+  absoluteGrayText = text;
   return true;
 }
 

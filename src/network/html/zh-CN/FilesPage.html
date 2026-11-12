@@ -1586,6 +1586,7 @@
     .log-summary-table .increased {
       color: var(--warning-color);
     }
+    #deviceSettingRow .rotation-buttons { flex-wrap: wrap; }
   </style>
   <link rel="stylesheet" href="/assets/web.css" />
   <link rel="icon" type="image/svg+xml" href="/assets/crosspoint-icon.svg" />
@@ -1670,7 +1671,7 @@
 
           <div class="convert-settings" id="convertSettings" style="display:block;">
             <span>⚫ 真灰度</span>
-          <span id="convertSizeSummary">📏 最大 480×800px</span>
+          <span id="convertSizeSummary" data-max-label="最大" data-unknown="屏幕尺寸未识别">屏幕尺寸未识别</span>
           <span>📦 JPEG 85%</span>
           <span>🔧 修复 SVG</span>
         </div>
@@ -1724,10 +1725,11 @@
             <div class="setting-controls">
               <div class="rotation-buttons">
                 <button class="rotation-btn device-btn active" data-value="auto" onclick="setDeviceTarget('auto')">
-                  <span id="deviceAutoLabel">自动</span>
+                  <span id="deviceAutoLabel" data-label="自动">自动</span>
                 </button>
                 <button class="rotation-btn device-btn" data-value="X4" onclick="setDeviceTarget('X4')">X4</button>
                 <button class="rotation-btn device-btn" data-value="X3" onclick="setDeviceTarget('X3')">X3</button>
+                <button class="rotation-btn device-btn" data-value="Xuesu" onclick="setDeviceTarget('Xuesu')">雪酥·3</button>
               </div>
             </div>
           </div>
@@ -1919,7 +1921,7 @@
     <div class="folder-form">
       <p class="file-info"><strong id="imagePreviewName"></strong></p>
       <div class="image-preview-stage">
-        <img id="imagePreviewImg" alt="">
+        <img id="imagePreviewImg" alt="" data-load-error="无法预览此 XMPIC 文件。">
       </div>
       <a id="imagePreviewDownload" class="move-btn-confirm" rel="noopener noreferrer" target="_blank" href="#">下载</a>
     </div>
@@ -2205,10 +2207,7 @@
     }
   }
 
-  // Image preview
-  function isImageFile(name) {
-    return /\.(png|jpe?g|bmp|gif|webp)$/i.test(name);
-  }
+  <!--#include file="../shared/FileImagePreview.js.inc" -->
 
   function downloadUrl(filePath) {
     return `/download?path=${encodeURIComponent(filePath)}`;
@@ -2222,21 +2221,6 @@
   function closeWebModal(id) {
     const modal = document.getElementById(id);
     if (modal.open) modal.close();
-  }
-
-  function openImagePreview(url, name) {
-    const img = document.getElementById('imagePreviewImg');
-    document.getElementById('imagePreviewName').textContent = name;
-    img.src = url;
-    img.alt = name;
-    document.getElementById('imagePreviewDownload').href = url;
-    openWebModal('imagePreviewModal');
-  }
-
-  function closeImagePreview() {
-    closeWebModal('imagePreviewModal');
-    // Clear src to free the decoded image and avoid showing the stale one on reopen.
-    document.getElementById('imagePreviewImg').src = '';
   }
 
   // Modal functions
@@ -2709,15 +2693,6 @@
         }
       }
 
-      // Images that fit screen can only rotate, not split
-      const fitsScreen = (dims.width <= MAX_WIDTH && dims.height <= MAX_HEIGHT);
-
-      // Split capability - no upscaling allowed
-      // H-Split scales width to MAX_HEIGHT (long edge), so needs width >= MAX_HEIGHT
-      // V-Split scales height to MAX_HEIGHT, so needs height >= MAX_HEIGHT
-      const canHSplit = dims.width >= MAX_HEIGHT;
-      const canVSplit = dims.height >= MAX_HEIGHT;
-
       images.push({
         path: path,
         name: filename,
@@ -2727,9 +2702,7 @@
         height: dims.height,
         isCover: isCover,
         isSeparator: isSeparator || isTiny,
-        fitsScreen: fitsScreen,
-        canHSplit: canHSplit,
-        canVSplit: canVSplit
+        ...imageTargetFlags(dims)
       });
     }
 
@@ -2864,6 +2837,7 @@
     pendingConversionFile = file;
 
     // Extract images
+    await ensureDeviceTarget();
     try {
       const images = await extractImagesForPreview(file);
       epubImagesCache = images;
@@ -3436,19 +3410,9 @@ const WS_CHUNK_SIZE = 4096; // 4KB chunks - smaller for ESP32 stability
 // EPUB Image Conversion Functions (from Baseline JPEG Converter)
 // ============================================================================
 
-// Device profiles (short edge × long edge in portrait orientation)
-const DEVICE_PROFILES = {
-  X4: { width: 480, height: 800, label: 'X4' },
-  X3: { width: 528, height: 792, label: 'X3' },
-  A4: { width: 552, height: 768, label: 'eego A4' },
-  M4: { width: 480, height: 800, label: 'Murphy M4' },
-};
-const STATUS_DEVICE_MAP = { xteink_x4: 'X4', xteink_x3: 'X3', xteink_x3_uc8279: 'X3', eego_a4: 'A4', murphy_m4: 'M4' };
+const XUESU_DEVICE_LABEL = '雪酥·3';
+<!--#include file="../shared/FileTransferProfiles.js.inc" -->
 
-// Default conversion settings
-const DEFAULT_DEVICE = 'X4';
-const DEFAULT_MAX_WIDTH = DEVICE_PROFILES[DEFAULT_DEVICE].width;
-const DEFAULT_MAX_HEIGHT = DEVICE_PROFILES[DEFAULT_DEVICE].height;
 const DEFAULT_JPEG_QUALITY = 85;
 const DEFAULT_ENABLE_GRAYSCALE = true;
 const DEFAULT_ENABLE_AUTO_CROP = false;
@@ -3464,11 +3428,6 @@ const MIN_CROP_DIMENSION = 240;
 // Note: Overlap is now always centered distribution (min 5%)
 
 // Dynamic conversion settings (updated by UI)
-let DEVICE_TARGET = 'auto';      // 'auto' | 'X4' | 'X3'
-let DETECTED_DEVICE = null;      // populated from /api/status
-let ACTIVE_DEVICE = DEFAULT_DEVICE;
-let MAX_WIDTH = DEFAULT_MAX_WIDTH;
-let MAX_HEIGHT = DEFAULT_MAX_HEIGHT;
 let JPEG_QUALITY = DEFAULT_JPEG_QUALITY;
 let ENABLE_GRAYSCALE = DEFAULT_ENABLE_GRAYSCALE;
 let ENABLE_AUTO_CROP = DEFAULT_ENABLE_AUTO_CROP;
@@ -3511,7 +3470,7 @@ function applyUploadSettings(settings = {}) {
     document.getElementById('rememberUploadSettings').checked = !!settings.rememberSettings;
 
     setQualityPreset(Math.max(1, Math.min(95, parseInt(merged.quality, 10) || DEFAULT_JPEG_QUALITY)));
-    setDeviceTarget(['auto', 'X3', 'X4'].includes(merged.deviceTarget) ? merged.deviceTarget : 'auto');
+    setDeviceTarget(merged.deviceTarget);
     setHandedness(merged.handedness === 'left' ? 'left' : 'right');
     setOverlap([5, 10, 15].includes(Number(merged.overlap)) ? Number(merged.overlap) : 5);
     toggleConvertOptions();
@@ -3562,67 +3521,6 @@ let conversionStats = { images: 0, splits: 0, splitParts: 0, fixes: 0, skipped: 
 const logSection = document.getElementById('log-section');
 const logContainer = document.getElementById('log-container');
 const exportLogCheckbox = document.getElementById('export-log-checkbox');
-
-// CrossPoint version (fetched from API)
-let crosspointVersion = 'Unknown';
-
-// Fetch version from API
-async function fetchVersion() {
-  try {
-    const response = await fetch('/api/status');
-    if (response.ok) {
-      const data = await response.json();
-      crosspointVersion = data.version || 'Unknown';
-      const detected = STATUS_DEVICE_MAP[data.device] || data.device;
-      if (DEVICE_PROFILES[detected]) {
-        DETECTED_DEVICE = detected;
-        applyDeviceTarget();
-      }
-    }
-  } catch (e) {
-    console.error('Failed to fetch version:', e);
-  }
-}
-
-// Resolve DEVICE_TARGET ('auto' | 'X4' | 'X3') to a concrete profile and update UI.
-function applyDeviceTarget() {
-  const resolved = DEVICE_TARGET === 'auto' ? (DETECTED_DEVICE || DEFAULT_DEVICE) : DEVICE_TARGET;
-  const profile = DEVICE_PROFILES[resolved] || DEVICE_PROFILES[DEFAULT_DEVICE];
-  ACTIVE_DEVICE = resolved;
-  MAX_WIDTH = profile.width;
-  MAX_HEIGHT = profile.height;
-
-  const summary = document.getElementById('convertSizeSummary');
-  if (summary) {
-    summary.textContent = `📏 最大 ${profile.width}×${profile.height}px`;
-  }
-  document.querySelectorAll('.device-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.value === DEVICE_TARGET);
-  });
-  const autoLabel = document.getElementById('deviceAutoLabel');
-  if (autoLabel) {
-    autoLabel.textContent = DETECTED_DEVICE ? `自动（${DETECTED_DEVICE}）` : '自动';
-  }
-
-  // Recompute picker classification with new dimensions, then refresh grid.
-  if (Array.isArray(epubImagesCache) && epubImagesCache.length > 0) {
-    for (const img of epubImagesCache) {
-      img.fitsScreen = (img.width <= MAX_WIDTH && img.height <= MAX_HEIGHT);
-      img.canHSplit = img.width >= MAX_HEIGHT;
-      img.canVSplit = img.height >= MAX_HEIGHT;
-    }
-    const pickerSection = document.getElementById('imagePickerSection');
-    if (pickerSection && pickerSection.style.display !== 'none' && typeof renderImageGrid === 'function') {
-      renderImageGrid();
-    }
-  }
-}
-
-function setDeviceTarget(value) {
-  DEVICE_TARGET = value;
-  applyDeviceTarget();
-  updateUploadSettingsPersistence();
-}
 
 // Batch logging system for multiple files
 let batchLogEntries = [];
@@ -5117,7 +5015,7 @@ async function convertEpubFile(file, progressCallback) {
   clearLog();
   showLog();
   log(`<strong>${file.name}</strong> <span class="log-detail">(${formatBytes(originalSize)})</span>`, '', 'INFO');
-  log(`质量：${JPEG_QUALITY}% | 重叠：${OVERLAP_PERCENT}% | 旋转：${HANDEDNESS === 'right' ? '顺时针' : '逆时针'} | 灰度：${ENABLE_GRAYSCALE ? '开' : '关'} | 自动裁切：${ENABLE_AUTO_CROP ? '开' : '关'}`, '', 'INFO');
+  log(`目标：${MAX_WIDTH}×${MAX_HEIGHT} px | 质量：${JPEG_QUALITY}% | 重叠：${OVERLAP_PERCENT}% | 旋转：${HANDEDNESS === 'right' ? '顺时针' : '逆时针'} | 灰度：${ENABLE_GRAYSCALE ? '开' : '关'} | 自动裁切：${ENABLE_AUTO_CROP ? '开' : '关'}`, '', 'INFO');
 
   const zip = await JSZip.loadAsync(file);
   const renamed = {};
@@ -5634,6 +5532,15 @@ async function uploadFile() {
   }
 
   isUploadInProgress = true;
+  if (convertEnabled && files.some(file => file.name.toLowerCase().endsWith('.epub'))) {
+    const targetReady = await ensureDeviceTarget();
+    if (operationCancelled) { restoreAfterCancel(); return; }
+    if (!targetReady) {
+      isUploadInProgress = false;
+      showWebAlert('无法识别屏幕尺寸，请在高级选项中选择目标设备。');
+      return;
+    }
+  }
   let usedFileNames;
   try {
     usedFileNames = await fetchExistingUploadNames();
