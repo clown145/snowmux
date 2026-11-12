@@ -553,7 +553,7 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
   auto captionRect = fui::Rect{rect.x, rect.y, rect.width, captionHeight};
   const int secondaryCount = std::max(0, static_cast<int>(books->size()) - 1);
   if (secondaryCount > SECONDARY_COVERS_PER_PAGE) {
-    char page[12];
+    char page[24];
     snprintf(page, sizeof(page), "%d/%d", grid.topIndex / SECONDARY_COVERS_PER_PAGE + 1,
              (secondaryCount + SECONDARY_COVERS_PER_PAGE - 1) / SECONDARY_COVERS_PER_PAGE);
     const int16_t pageWidth = screen.target().measureText(captionStyle.font, page, captionStyle).width;
