@@ -3,6 +3,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <HiddenItems.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 
 #include "ClippingStore.h"
@@ -403,6 +404,7 @@ void WebDAVHandler::handlePut(WebServer& s) {
   }
 
   clearBookCache(path.c_str());
+  if (library::isLibraryBookFile(path.c_str())) library::markLibraryIndexDirty();
   s.send(_putExisted ? 204 : 201);
   LOG_DBG("DAV", "PUT complete: %s", path.c_str());
 }

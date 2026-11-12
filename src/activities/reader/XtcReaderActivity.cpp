@@ -138,19 +138,17 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
                        static_cast<int>(chapterIt->endPage - chapterIt->startPage) + 1, std::move(title)};
 }
 
-void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const StatusBarOverlayPosition position) const {
+Rect XtcReaderActivity::renderStatusBarOverlay() const {
   const auto sb = SETTINGS.statusBarSpec();
-  const bool drawBottom = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_BOTTOM &&
-                          position == StatusBarOverlayPosition::Bottom;
-  const bool drawTop = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP &&
-                       position == StatusBarOverlayPosition::Top;
+  const bool drawBottom = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_BOTTOM;
+  const bool drawTop = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP;
   if (!drawBottom && !drawTop) {
-    return;
+    return Rect{};
   }
 
   const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
   if (statusBarHeight <= 0) {
-    return;
+    return Rect{};
   }
 
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
@@ -159,7 +157,7 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
 
   int clearY;
   int paddingBottom = 0;
-  if (position == StatusBarOverlayPosition::Bottom) {
+  if (drawBottom) {
     clearY = renderer.getScreenHeight() - orientedMarginBottom - statusBarHeight - 4;
     if (clearY < 0) {
       clearY = 0;
@@ -168,18 +166,17 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
     clearY = orientedMarginTop;
     paddingBottom = renderer.getScreenHeight() - statusBarHeight - orientedMarginBottom - orientedMarginTop - 4;
   }
-  const int clearHeight = position == StatusBarOverlayPosition::Bottom
-                              ? renderer.getScreenHeight() - orientedMarginBottom - clearY
-                              : statusBarHeight + 4;
-  if (clearHeight > 0) {
-    renderer.fillRect(0, clearY, renderer.getScreenWidth(), clearHeight, false);
-  }
+  const int clearHeight = drawBottom ? renderer.getScreenHeight() - orientedMarginBottom - clearY : statusBarHeight + 4;
+  renderer.fillRect(0, clearY, renderer.getScreenWidth(), clearHeight, false);
 
   const int pageCount = static_cast<int>(xtc->getPageCount());
   const int displayPage = static_cast<int>(currentPage) + 1;
   const float progress = pageCount > 0 ? (static_cast<float>(displayPage) * 100.0f) / pageCount : 0.0f;
-  const auto pageInfo = getStatusBarInfo();
-  GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
+  auto pageInfo = getStatusBarInfo();
+  GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, std::move(pageInfo.title),
+                    paddingBottom);
+  // The theme can extend its progress bar into the oriented bottom margin.
+  return Rect{0, clearY, renderer.getScreenWidth(), clearHeight + orientedMarginBottom};
 }
 
 void XtcReaderActivity::renderPage() {
@@ -235,8 +232,6 @@ void XtcReaderActivity::renderPage() {
   // use the decoded page directly, with no extra scaled framebuffer.
   const auto sourceX = [&](int x) { return (x * page.width + page.width / 2) / drawWidth; };
   const auto sourceY = [&](int y) { return (y * page.height + page.height / 2) / drawHeight; };
-  renderer.clearScreen();
-
   if (page.bitDepth == 2) {
     const uint8_t* lsb = pageBuffer.get() + planeSize;
     const auto grayLevel = [&](const int x, const int y) {
@@ -248,9 +243,20 @@ void XtcReaderActivity::renderPage() {
     const auto overlay = renderer.grayscaleCapabilities();
     const bool absolute =
         !overlay.supported() && renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
-    const auto drawBw = [&] {
-      renderer.clearScreen();
+    const auto clearOutsideStatusBar = [&](const Rect& preserved) {
+      if (preserved.height == 0) {
+        renderer.clearScreen();
+        return;
+      }
+      const int bottom = preserved.y + preserved.height;
+      renderer.fillRect(0, 0, screenWidth, preserved.y, false);
+      renderer.fillRect(0, bottom, screenWidth, screenHeight - bottom, false);
+    };
+    const auto drawBw = [&](const Rect& preserved) {
+      clearOutsideStatusBar(preserved);
       for (int y = 0; y < drawHeight; ++y) {
+        const int py = drawY + y;
+        if (py >= preserved.y && py < preserved.y + preserved.height) continue;
         const int sy = sourceY(y);
         for (int x = 0; x < drawWidth; ++x) {
           const auto level = grayLevel(sourceX(x), sy);
@@ -260,7 +266,8 @@ void XtcReaderActivity::renderPage() {
         }
       }
     };
-    drawBw();
+    drawBw(Rect{});
+    const Rect statusBar = renderStatusBarOverlay();
 
     const bool clean = pagesUntilFullRefresh <= 1;
     const auto refresh = clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
@@ -279,8 +286,16 @@ void XtcReaderActivity::renderPage() {
 
     if (grayStarted) {
       for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
-        renderer.clearScreen(absolute ? 0xff : 0x00);
+        // Absolute planes encode black and white just like the B/W frame. An
+        // overlay uses zero bits in the bar to leave the base frame visible.
+        if (absolute) {
+          clearOutsideStatusBar(statusBar);
+        } else {
+          renderer.clearScreen(0x00);
+        }
         for (int y = 0; y < drawHeight; ++y) {
+          const int py = drawY + y;
+          if (py >= statusBar.y && py < statusBar.y + statusBar.height) continue;
           const int sy = sourceY(y);
           for (int x = 0; x < drawWidth; ++x) {
             const auto pixel = GfxRenderer::mapTwoBitPixel(mode, grayLevel(sourceX(x), sy), absolute);
@@ -294,7 +309,8 @@ void XtcReaderActivity::renderPage() {
         }
       }
       renderer.displayGrayBuffer();
-      drawBw();
+      drawBw(absolute ? statusBar : Rect{});
+      if (!absolute) renderStatusBarOverlay();
       renderer.cleanupGrayscaleWithFrameBuffer();
     }
     if (!grayStarted || !renderer.displayCommitted()) {
@@ -307,6 +323,7 @@ void XtcReaderActivity::renderPage() {
     return;
   }
 
+  renderer.clearScreen();
   for (int y = 0; y < drawHeight; ++y) {
     const size_t row = sourceY(y) * rowBytes;
     for (int x = 0; x < drawWidth; ++x) {
@@ -318,11 +335,7 @@ void XtcReaderActivity::renderPage() {
   }
   pageBuffer.reset();
 
-  if (SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
-    renderStatusBarOverlay(renderer, StatusBarOverlayPosition::Top);
-  } else {
-    renderStatusBarOverlay(renderer, StatusBarOverlayPosition::Bottom);
-  }
+  renderStatusBarOverlay();
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   LOG_DBG("XTR", "Rendered page %lu/%lu (1-bit)", currentPage + 1, xtc->getPageCount());

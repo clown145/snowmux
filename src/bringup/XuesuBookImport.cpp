@@ -294,6 +294,8 @@ class DocxText final : public DocxXml {
       sink.emit("<br/>");
     } else if (local == "tab") {
       sink.emit("&#160; ");
+    } else if (local == "noBreakHyphen") {
+      sink.emit("&#8209;");
     } else if (std::string_view(name) == "http://schemas.openxmlformats.org/drawingml/2006/main|blip" ||
                std::string_view(name) == "http://purl.oclc.org/ooxml/drawingml/main|blip") {
       sink.emitImage(attrs);

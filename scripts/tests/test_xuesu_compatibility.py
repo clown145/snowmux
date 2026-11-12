@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 
 from test_reading_ui_regressions import method, run_cpp
@@ -7,6 +9,106 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class XuesuCompatibilityTest(unittest.TestCase):
+    def test_webdav_put_marks_index_for_successful_book_writes(self):
+        dav = (ROOT / 'src/network/WebDAVHandler.cpp').read_text(encoding='utf-8')
+        run_cpp(r'''
+#include <cassert>
+#include <string>
+#include <string_view>
+
+#define LOG_DBG(...)
+struct WebServer {
+  int status = 0;
+  void send(int code, const char* = "", const char* = "") { status = code; }
+};
+using String = std::string;
+struct WebDAVHandler {
+  String path;
+  bool _putOk;
+  bool _putExisted;
+  String getRequestPath(WebServer&) const { return path; }
+  bool isProtectedPath(const String& value) const { return value.starts_with("/."); }
+  void handlePut(WebServer&);
+};
+struct {
+  void remove(const char*) {}
+} Storage;
+int cacheClears = 0;
+int indexMarks = 0;
+void clearBookCache(const char*) { ++cacheClears; }
+namespace library {
+bool isLibraryBookFile(std::string_view path) { return path.ends_with(".txt"); }
+void markLibraryIndexDirty() { ++indexMarks; }
+}
+''' + method(dav, 'void WebDAVHandler::handlePut(') + r'''
+int main() {
+  WebServer server;
+  WebDAVHandler newBook{"/Books/New book.txt", true, false};
+  newBook.handlePut(server);
+  assert(server.status == 201 && indexMarks == 1 && cacheClears == 1);
+
+  WebDAVHandler replacedBook{"/Books/New book.txt", true, true};
+  replacedBook.handlePut(server);
+  assert(server.status == 204 && indexMarks == 2 && cacheClears == 2);
+
+  WebDAVHandler image{"/cover.png", true, false};
+  image.handlePut(server);
+  assert(server.status == 201 && indexMarks == 2);
+
+  WebDAVHandler failedBook{"/Books/Another book.txt", false, false};
+  failedBook.handlePut(server);
+  assert(server.status == 500 && indexMarks == 2);
+}
+''')
+
+    def test_docx_reflow_preserves_nonbreaking_hyphens(self):
+        source = (ROOT / 'src/bringup/XuesuBookImport.cpp').read_text(encoding='utf-8')
+        write_text = method(source, 'bool writeText(') + method(source, 'bool writeEscaped(')
+        parser = source[source.index('std::string_view wordElement('):source.index('class DocxRelationships')]
+        parser += source[source.index('class DocxText final'):source.index('bool convertDocx(')]
+        expat = ROOT / 'lib/expat'
+        defines = ('XML_STATIC', 'XML_CONTEXT_BYTES=0', 'XML_GE=0')
+        with TemporaryDirectory(prefix='docx-reader-') as directory:
+            objects = []
+            for name in ('xmlparse', 'xmlrole', 'xmltok'):
+                obj = Path(directory) / f'{name}.o'
+                subprocess.run(['cc', '-std=gnu11', *('-D' + flag for flag in defines),
+                                '-c', str(expat / f'{name}.c'), '-o', str(obj)], check=True)
+                objects.append(obj)
+            run_cpp(r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <string_view>
+#include <expat.h>
+struct Print {
+  virtual size_t write(uint8_t) = 0;
+  virtual size_t write(const uint8_t*, size_t) = 0;
+  virtual ~Print() = default;
+};
+struct HalFile {
+  std::string bytes;
+  size_t write(const char* data, size_t length) { bytes.append(data, length); return length; }
+};
+uint32_t millis() { return 0; }
+void delay(int) {}
+''' + write_text + parser + r'''
+int main() {
+  auto parser = XML_ParserCreateNS(nullptr, '|');
+  assert(parser);
+  HalFile file;
+  DocxText body(parser, file, nullptr, 0);
+  constexpr std::string_view xml = R"(<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+    <w:body><w:p><w:r><w:t>Wi</w:t><w:noBreakHyphen/><w:t>Fi &amp; text</w:t><w:br/><w:t>next</w:t></w:r></w:p>
+    </w:body></w:document>)";
+  for (const uint8_t byte : xml) assert(body.write(byte) == 1);
+  assert(body.finish());
+  assert(file.bytes == "<p>Wi&#8209;Fi &amp; text<br/>next</p>\n");
+  XML_ParserFree(parser);
+}
+''', include_dirs=[expat], defines=defines, extra_sources=objects)
+
     def test_usb_drive_persists_library_marker_before_unmount(self):
         drive = (ROOT / 'src/activities/network/UsbDriveActivity.cpp').read_text(encoding='utf-8')
         run_cpp(r'''

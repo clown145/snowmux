@@ -97,7 +97,8 @@ Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::mo
   if (FsHelpers::hasImportedBookExtension(this->filepath)) {
     auto file = Storage.open(this->filepath.c_str());
     if (file && !file.isDirectory()) {
-      importedArchive = cachePath + "/import-x1-" + std::to_string(file.fileSize64()) + "-" +
+      const char* version = FsHelpers::checkFileExtension(this->filepath, ".docx") ? "/import-x2-" : "/import-x1-";
+      importedArchive = cachePath + version + std::to_string(file.fileSize64()) + "-" +
                         std::to_string(file.modificationTime()) + ".epub";
     } else {
       importedArchive = cachePath + "/missing-source.epub";

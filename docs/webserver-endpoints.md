@@ -569,6 +569,8 @@ OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, MKCOL, MOVE, COPY, LOCK, UNLOCK
 Notes:
 
 - `PUT` writes to a temporary `.davtmp` file first, then renames it into place.
+  A successful book upload marks the Library index stale. The Library picks up
+  the book the next time it opens.
 - Protected paths are rejected.
 - `LOCK` and `UNLOCK` are accepted for client compatibility only. The server
   does not implement full WebDAV Class 2 locking semantics such as persistent
