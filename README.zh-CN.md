@@ -2,157 +2,71 @@
 
 [English](./README.md) | **简体中文**
 
-**SnowMux** 是基于 [CrossMux](https://github.com/0x1abin/crossmux) 的雪酥社区固件。
-[雪酥在线刷机](https://clown145.github.io/snowmux/) · [雪酥固件发布](https://github.com/clown145/snowmux/releases) · [雪酥设备指南](./docs/engineering/xuesu-300-port.md)
+**SnowMux** 是面向 **雪酥·3**（板型 `xuesu-300-std`）的社区阅读固件，基于 [CrossMux](https://github.com/0x1abin/crossmux)。它适配了雪酥的 300×400 墨水屏、三个实体按键和原厂分区布局。
 
-**CrossMux** 是面向 ESP32 墨水屏设备的 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) 社区 fork。以阅读为核心，同时提供轻量应用、阅读分析、待机表盘和按需联网服务。
+[雪酥网页刷机](https://clown145.github.io/snowmux/) · [SnowMux 固件发布](https://github.com/clown145/snowmux/releases) · [设备与构建指南](./docs/engineering/xuesu-300-port.md)
 
-[上游 CrossMux 固件发布](https://github.com/0x1abin/crossmux/releases) · [用户指南](./USER_GUIDE.md) · [参与贡献](./docs/contributing/README.md)
+## 安装与更新
 
-![CrossMux 运行在 Xteink 设备上](./docs/images/cover.jpg)
+1. 备份 SD 卡中的书籍和数据。用电脑上的 Chrome 或 Edge 打开[雪酥网页刷机](https://clown145.github.io/snowmux/)，用支持数据传输的 USB 线连接设备，按确认键唤醒。
+2. 按网页提示连接串口、检查设备。首次安装前，先在网页下载并保留本机的 16 MiB Flash 备份，再安装 SnowMux。
+3. 已安装带在线更新功能的 SnowMux 后，可在「设置 → 系统 → 检查更新」联网更新。旧版没有这个入口时，使用网页刷机。
 
-## 核心功能
+首次通过网页安装会保留原厂应用槽。如果所用版本支持设备内更新，请留意确认提示：更新可能覆盖原厂应用所在槽位。若菜单提供「恢复原厂固件」，可联网安装原厂应用；需要恢复整片 Flash 时使用首次保存的本机备份。详见[网页刷机与发布说明](./docs/engineering/xuesu-300-port.md#社区刷机站与发版)。
 
-- **阅读与书库**：EPUB、TXT、XTC/XTCH 和图片，章节导航、书签、词典、自定义字体、阅读背景，以及 KOReader 进度同步。
-- **无线功能**：浏览器传书与设置、Calibre 无线连接、OPDS 下载、WebDAV 和设备 OTA 更新。
-- **Apps 应用中心**：数独、五子棋、中国象棋、扫雷、2048、电子木鱼、Ugly Avatar 等轻量游戏与工具。[应用说明](./src/activities/apps/README.md)。
-- **AirPage**：扫码上传内容，通过手动刷新或前台实时投送显示 BMP/JPEG 图片，也可将图片设为休眠画面。[操作与联网行为](./src/activities/apps/README.md#airpage)。
-- **微信读书**：扫码登录、浏览书架、下载 EPUB 离线阅读和同步进度，在 China 内容区显示。[微信读书说明](./src/activities/apps/weread/README.md)。
-- **阅读分析与待机**：阅读统计、热力图、档案与成就，以及时钟和老黄历表盘。[阅读分析说明](./src/activities/apps/reading-stats/README.md)。
-- **语言与开发**：每个硬件目标使用包含全部 UI 语言的统一固件，并提供桌面模拟器辅助开发。
+## 三键与快捷操作
 
-> **微信读书安全提示**：非公开 Web 协议可能变化。真机传输经过加密，但客户端不验证服务器证书与主机名，请仅在可信网络中使用。原生模拟器通过主机信任库验证证书，详见[传输说明](./docs/engineering/chinese-build.md#weread-transport)。
+| 操作 | 用途 |
+| --- | --- |
+| 上键、下键 | 在列表移动；阅读时翻页。 |
+| 短按确认 | 打开选中项；在正文中打开阅读菜单；休眠后唤醒。 |
+| 长按确认 | 通常返回上一层或取消。在带标签栏的主页面可返回标签栏，用上下键换标签。 |
+| 双击确认 | 在主标签页或阅读正文打开悬浮快捷栏。上下选择，短按执行，长按关闭。 |
 
-## 设备与发布渠道
+快捷栏提供休眠、夜间模式、刷新屏幕和阅读方向；在文件、书库、书签、剪藏、OPDS 分页目录及待机显示等页面，还可操作当前条目。
 
-| 设备 | 芯片 | 配置支持的渠道 |
-|---|---|---|
-| Xteink X3 / X4（共用固件） | ESP32-C3 | Stable、Nightly |
-| [Seeed Sticky](https://www.seeedstudio.com/sticky/?utm_source=partner&utm_medium=crossmux&utm_campaign=readme) | ESP32-S3 | Stable、Nightly |
-| Xteink X4 Pro | ESP32-S3 | Stable、Nightly |
-| M5Stack Paper Mono | ESP32-S3 | Nightly |
-| eego A4 | ESP32-S3 | Nightly |
-| Murphy M4 | ESP32-S3 | Nightly |
-| Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
-| [Metalio E-Ink 4](./docs/engineering/metalio-eink4.md) | ESP32-S3 | Stable、Nightly |
-| [Read Pico（小纸 Pico）](./docs/engineering/read-pico.md) | ESP32-S3 | Nightly |
+首次使用新 SD 卡时，首页会自动添加《SnowMux 使用说明书》；简体中文界面使用中文版，其他界面语言使用英文版。已用过的卡升级后不会自动替换旧手册。
 
-正式版仅发布 X3/X4、Sticky、X4 Pro 和 Metalio E-Ink 4 四个目标；Nightly 发布九个目标。本地 Stable 构建模式不代表具备正式发布资格，实际可下载版本以所选区域目录为准。配置支持不代表实机验收完成。每个 S3 目标使用独立固件。X4 Classic（`x4c`）、[LilyGo T5 S3 4.7 PRO/Lite](./docs/engineering/lilygo-t5s3.md)（`lilygo_t5s3`）和 BOOX Picco（`picco`）仅提供开发构建。各设备限制见[设备变体说明](./docs/engineering/device-variants.md)。
+## 阅读与传书
 
-正式版本使用 [Stable](https://github.com/0x1abin/crossmux/releases/tag/stable)，开发版本使用 [Nightly](https://github.com/0x1abin/crossmux/releases/tag/nightly)，两渠道采用相同的打包规则，发布目标名单分别维护。[目标表](./scripts/nightly_targets.py) 定义渠道与产物名称；[发布架构](./docs/engineering/firmware-release.md) 说明打包与 OTA。当前源码版本及构建环境以 [platformio.ini](./platformio.ini) 为准。
+- **阅读和书库**：支持 EPUB、TXT、XTC/XTCH，以及无 DRM 且源文件不超过 4 MiB 的 MOBI/AZW3。DOCX 会重排正文与支持的内嵌图片。支持书签、剪藏、离线词典、SD 卡字体和 KOReader 进度同步。原厂系统的最近阅读可从「设置 → 系统 → 导入原厂最近阅读」导入。
+- **USB 与无线传书**：进入「应用 → 文件传输」。选「USB 磁盘」可把 SD 卡交给电脑，复制完先在电脑安全弹出；也可使用 Wi-Fi 网页传书或 Calibre 无线。文件页看到新书但书库还没收录时，从悬浮快捷栏进入「书库操作 → 刷新书库」。
+- **用手机配网和输入**：进入「设置 → 连接 → 热点配网」，手机扫码加入临时热点，在网页选择并填写 2.4 GHz Wi-Fi。配置 OPDS、KOReader 账号与地址、输入目录搜索词等也可按屏幕提示在手机网页完成。
+- **翻页器、统计与表盘**：在「设置 → 连接 → 蓝牙翻页器」配对 BLE HID 翻页器。设备提供阅读统计和热力图。进入「应用 → 待机显示」预览表盘，双击确认可把当前表盘设为休眠画面。
 
-[雪酥](./docs/engineering/xuesu-300-port.md) 提供 ESP32-S3 源码开发构建 `xuesu_300`。设备指南包含 SDK 补丁、原厂波形生成和 OTA1 安装验证记录。
-仓库维护者可按[社区刷机站与发版](./docs/engineering/xuesu-300-port.md#社区刷机站与发版)部署到 GitHub Pages。
+书籍、设置和进度建议随 SD 卡一起备份。`/.crosspoint/` 中有阅读进度和设置，清理单本书时不要删除整个目录。
 
-## 安装固件
+## 应用与可见性
 
-1. 打开[全球网页工具](https://crossmux.com)或[中国网页工具](https://crossmux.cn)，进入固件烧录工具，选择准确型号和可用的 Stable 或 Nightly 版本。部署后的工具从所在区域的发布目录发现选项。X3/X4 共用固件，S3 必须按板型选择。
-2. 更换固件前备份 SD 卡数据；设备首次安装或恢复说明要求时，还须保留完整 Flash 备份。遵循对应[设备文档](./docs/engineering/device-variants.md)和工具中的确认提示。
-3. 离线安装可从 [CrossMux Releases](https://github.com/0x1abin/crossmux/releases) 下载。新发布链路上线后，两渠道均提供 `crossmux-<版本>-<deviceSlug>.zip`，内含完整安装段、清单和 SHA-256 校验文件。只有应用部分的 `firmware.bin` 不是完整的首次安装镜像。历史 Release 保留原有文件与说明。
+下表对应当前源码的新设置。以前保存过的显示选项会保留。
 
-从源码构建可使用下方的[开发命令](#开发快速开始)。已安装 CrossMux 时，设备 OTA 按型号、内容区和渠道选择已发布的可用固件。
+| 状态 | 雪酥·3 的应用 |
+| --- | --- |
+| 默认显示 | 书库、文件传输、微信读书、AirPage、阅读统计、待机显示。 |
+| 配置后显示 | OPDS 浏览器需要先在「设置 → 连接 → OPDS 服务器」添加服务器。 |
+| 默认隐藏，可打开 | 丑丑头像、Buddy、电子木鱼。 |
+| 雪酥菜单不提供 | 数独、五子棋、推箱子、中国象棋、扫雷、2048、像素大战、计算器。这些应用目前依赖触屏或独立左右键，雪酥版的「隐藏应用」里也没有对应开关。 |
 
-X4 Pro 安装包使用标识 `x4pro`；Metalio E-Ink 4 使用 `metalio-eink4`，型号与板型标签为 `metalio_eink4`。每个设备的两种语言入口指向同一多语言固件。网页工具仅在目录包含匹配安装包时提供对应渠道。首次安装、接线和实机验收状态见 [Metalio 设备指南](./docs/engineering/metalio-eink4.md)。
+在「设置 → 系统 → 隐藏应用」中，选中应用并短按确认切换显示状态；显示为「开」即在应用菜单显示，长按确认退出并保存。微信读书的入口不受界面语言限制，使用方式见[微信读书说明](./src/activities/apps/weread/README.md)。
 
-### USB 锁定的 Xteink 设备
+## 文档与构建
 
-部分设备可能限制 USB 刷写。[上游 Xteink Unlocker](https://crosspointreader.com/#unlock-tool) 是独立工具，使用前请阅读其当前兼容性与恢复说明。不能从 CrossPoint 兼容性推断 CrossMux 可用于锁定设备；刷入不受支持的固件可能导致无法恢复。串口未出现时，也应检查数据线、端口和浏览器权限。
+- [雪酥设备指南](./docs/engineering/xuesu-300-port.md)：设备限制、源码构建、发布流程及真机验收记录。
+- [应用开发](./src/activities/apps/README.md) · [Web 传书](./docs/webserver.md) · [Web API](./docs/webserver-endpoints.md) · [SD 卡字体](./docs/sd-card-fonts.md)
+- [内置说明书源文件](./docs/user-guide/xuesu/) · [工程文档](./docs/engineering/index.md) · [贡献指南](./docs/contributing/README.md)
 
-## 中文字体与内容区
-
-每个硬件目标只构建一个统一语言固件。简体中文选择 China 内容区（`crossmux.cn`），其它 UI 语言选择 Global 内容区（`crossmux.com`）。切换 UI 语言会同步内容区和区域应用，包括微信读书与中国象棋。
-
-UI 内置精简的 8/10/12pt 简体中文回退字体。内置阅读字体选项共用 12pt 离线回退；完整字族、其它字号、粗斜体和更广的 Unicode 覆盖使用 SD 卡 `.cpfont` 字体。内嵌字库是子集，生僻字或繁体字可能需要覆盖相应字形的 SD 字体。
-
-可从 **设置 > 阅读器 > 管理字体** 下载字体，或将转换好的字体复制到 SD 卡。安装与转换见 [SD 卡字体](./docs/sd-card-fonts.md)，内嵌字体工具链见[中文支持](./docs/engineering/chinese-build.md)。常规构建无需重新生成字体。
-
-## 开发快速开始
-
-安装 PlatformIO Core（`pio`）和 Python 3；仓库已固定 pioarduino 平台版本。完整代码检查还需要 clang-format 21+、CMake 和 Ninja。环境设置见[开发入门](./docs/contributing/getting-started.md)。
+递归克隆 [SnowMux 仓库](https://github.com/clown145/snowmux)，安装 pioarduino Core 和 Python，并按[源码构建步骤](./docs/engineering/xuesu-300-port.md#从源码构建)应用 FreeInk SDK 补丁、生成屏幕波形头文件。准备完成后，在 Bash 中运行：
 
 ```bash
-git clone --recursive https://github.com/0x1abin/crossmux.git
-cd crossmux
-
-# 如果尚未初始化子模块：
-git submodule update --init --recursive
-
-# X3/X4 开发构建
-pio run -e default
-
-# X3/X4 统一语言稳定版构建
-pio run -e gh_release
-
-# 构建并烧录到已连接的 X3/X4
-pio run -e gh_release -t upload
+PYTHONUTF8=1 pio run -e xuesu_300
 ```
 
-应用固件位于 `.pio/build/<环境>/firmware.bin`。九个发布目标各有本地 Dev、Stable、Nightly 模式。仓库也提供仅供开发的设备和模拟器入口。上表四个目标具备正式发布资格。版本与 Git 哈希自动生成，Stable 为 `<基础版本>`，Nightly 为 `<基础版本>-rc+<7位SHA>`，Dev 为 `<基础版本>-dev-<分支>-<7位SHA>`。其它板型见[构建文档](./docs/engineering/build-system.md)。
+应用镜像位于 `.pio/build/xuesu_300/firmware.bin`。安装时请使用雪酥刷机流程；PlatformIO 生成的 `firmware.factory.bin` 不能用于雪酥首次安装。
 
-X4 Pro 与 Metalio E-Ink 4 构建命令：
-
-```bash
-# X4 Pro：Dev / Stable / Nightly
-pio run -e x4pro
-pio run -e x4pro-gh_release
-pio run -e x4pro_nightly
-
-# Metalio E-Ink 4：Dev / Stable / Nightly
-pio run -e metalio_eink4
-pio run -e metalio_eink4-gh_release
-pio run -e metalio_eink4_nightly
-```
-
-Stable ZIP 名为 `crossmux-<版本>-x4pro.zip` 和 `crossmux-<版本>-metalio-eink4.zip`。首次安装还需要匹配的引导程序和分区布局，请使用完整安装包并遵循设备指南。
-
-Read Pico（小纸 Pico）构建命令：
-
-递归检出包含固定版本的 SDK 驱动，实现细节见[设备指南](./docs/engineering/read-pico.md#current-implementation--2026-09-30)。
-
-```bash
-pio run -e readpico
-```
-
-Windows 上运行 `pio` 前请先设置 `PYTHONIOENCODING=utf-8`，否则 PlatformIO 打印阿拉伯语 i18n 语言行时可能编码崩溃、构建静默卡住。
-
-应用固件位于 `.pio/build/readpico/firmware.bin`。首次安装为**整表烧录**——`bootloader@0x0`、`partitions@0x8000`、`boot_app0@0xe000`、`app@0x10000`——且须先有一份已核验的整片（16 MiB）备份，因为本仓库分区表与板厂出厂 `partitions_16M.csv` 在 `0xE000` 冲突且 app 槽大小不同。Read Pico 仅发布 Nightly；本地 Stable 构建入口不代表正式发布资格或实机验收完成。引脚表、冻结的构建参数与待办验收清单见 [Read Pico 设备指南](./docs/engineering/read-pico.md)。
-
-### 桌面模拟器
-
-安装 SDL2 与 curl（Linux 还需 OpenSSL 开发头文件），将 EPUB 放入 `fs_/books/`，然后运行：
-
-```bash
-pio run -e simulator -t run_simulator           # X4
-pio run -e simulator_x3 -t run_simulator        # X3
-pio run -e simulator_eego_a4 -t run_simulator   # eego A4
-pio run -e simulator_murphy_m4 -t run_simulator # Murphy M4
-pio run -e simulator_readpico -t run_simulator  # Read Pico，竖屏 684x1216
-```
-
-[CrossMux 模拟器 fork](https://github.com/0x1abin/crosspoint-simulator) 的版本固定在 `platformio.ini` 中。它用于预览 UI 和输入流程，不能验证显示波形、耗电或实际硬件时序。
-
-Read Pico 窗口自动适应桌面大小，BMP 截图保留原始分辨率。鼠标支持点按、长按和滑动；上箭头/Escape/下箭头对应三个电容键，睡眠后仅电源键 `P` 可以唤醒。原生十六级灰阶图片和 SD 界面字体使用 Read Pico 的处理路径。验证详情见[设备指南](./docs/engineering/read-pico.md#desktop-simulator)。
-
-### 检查与调试
-
-```bash
-./bin/ci-check       # 完整代码检查，不改写源文件
-pio device monitor  # 已连接设备的串口日志
-```
-
-针对性检查和增强串口监视器见[测试与调试](./docs/contributing/testing-debugging.md)。纯文档修改检查链接、命令和空白即可，无需构建固件。
-
-## 文档与贡献
-
-- [用户指南](./USER_GUIDE.md) · [Web 传书](./docs/webserver.md) · [Web API](./docs/webserver-endpoints.md)
-- [项目范围](./SCOPE.md) · [社区治理](./GOVERNANCE.md) · [贡献指南](./docs/contributing/README.md)
-- [Agent 指南](./AGENTS.md) · [工程文档](./docs/engineering/index.md) · [触屏与 UI](./docs/contributing/touch-and-ui.md)
-- [缓存管理](./docs/engineering/cache-management.md) · [文件格式](./docs/file-formats.md)
-
-请在 [CrossMux Issues](https://github.com/0x1abin/crossmux/issues) 反馈问题和提出改进，贡献 PR 以 **`0x1abin/crossmux:main`** 为目标，每个 PR 聚焦一件事并说明验证方式。代码中保留的 CrossPoint 类名和 SD 卡上的 `/.crosspoint` 数据目录是兼容细节，不代表应向上游仓库提交。该目录也保存设置与阅读进度，不要为了清理某本书的缓存而直接删除整个目录。
+其他设备的说明请参考[上游 CrossMux](https://github.com/0x1abin/crossmux)、[通用用户指南](./USER_GUIDE.md)和[设备变体说明](./docs/engineering/device-variants.md)。CrossMux Stable 和 Nightly 的固件不适用于雪酥·3。
 
 ## 致谢
 
-感谢 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)、[Inx](https://github.com/obijuankenobiii/inx)、[cpr-vcodex](https://github.com/franssjz/cpr-vcodex) 及其贡献者，以及带来最初启发的 [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader)。
+感谢 [CrossMux](https://github.com/0x1abin/crossmux)、[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)、[Inx](https://github.com/obijuankenobiii/inx)、[cpr-vcodex](https://github.com/franssjz/cpr-vcodex) 及其贡献者，以及带来最初启发的 [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader)。
 
-CrossMux 与 Xteink 及任何设备厂商均无隶属关系。上游工具与社区独立于本 fork。仓库许可证见 [LICENSE](./LICENSE)。
+SnowMux 是独立社区项目。仓库许可证见 [LICENSE](./LICENSE)，固件依赖与二进制发布许可见[固件许可说明](./licenses/README.md)。

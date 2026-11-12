@@ -21,13 +21,15 @@ class UserGuideEpubTest(unittest.TestCase):
             header = output / 'guide.generated.h'
             generator.build_bundled(ROOT / 'docs/user-guide', output, header)
             before = header.read_bytes()
-            total = 0
-            for language, filename, title in (
-                ('zh-CN', 'CrossMux用户手册.epub', 'CrossMux用户手册'),
-                ('en', 'CrossMux User Guide.epub', 'CrossMux User Guide'),
+            sizes = {'CrossMux': 0, 'SnowMux': 0}
+            for creator, language, title, chapter_count in (
+                ('CrossMux', 'zh-CN', 'CrossMux用户手册', 11),
+                ('CrossMux', 'en', 'CrossMux User Guide', 11),
+                ('SnowMux', 'zh-CN', 'SnowMux 使用说明书', 8),
+                ('SnowMux', 'en', 'SnowMux User Guide', 8),
             ):
-                data = (output / filename).read_bytes()
-                total += len(data)
+                data = (output / f'{title}.epub').read_bytes()
+                sizes[creator] += len(data)
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     self.assertIsNone(archive.testzip())
                     first = archive.infolist()[0]
@@ -42,6 +44,7 @@ class UserGuideEpubTest(unittest.TestCase):
                     opf_path = container.find('c:rootfiles/c:rootfile', ns).get('full-path')
                     opf = ET.fromstring(archive.read(opf_path))
                     self.assertEqual(opf.find('o:metadata/dc:title', ns).text, title)
+                    self.assertEqual(opf.find('o:metadata/dc:creator', ns).text, creator)
                     self.assertEqual(opf.find('o:metadata/dc:language', ns).text, language)
                     items = {item.get('id'): item for item in opf.findall('o:manifest/o:item', ns)}
                     for item in items.values():
@@ -49,7 +52,7 @@ class UserGuideEpubTest(unittest.TestCase):
                         self.assertIn('OEBPS/' + item.get('href'), archive.namelist())
                         self.assertNotIn('font', item.get('media-type'))
                     spine = [item.get('idref') for item in opf.findall('o:spine/o:itemref', ns)]
-                    self.assertEqual(len(spine), 11)
+                    self.assertEqual(len(spine), chapter_count)
                     self.assertNotIn('nav', spine)
                     self.assertNotIn('style', spine)
                     self.assertTrue(all(item in items for item in spine))
@@ -60,18 +63,21 @@ class UserGuideEpubTest(unittest.TestCase):
                     self.assertNotIn('OEBPS/cover.png', archive.namelist())
                     self.assertNotIn('OEBPS/cover.xhtml', archive.namelist())
                     self.assertIn('OEBPS/' + spine[0] + '.xhtml', archive.namelist())
-                    section = ET.fromstring(archive.read('OEBPS/' + spine[5] + '.xhtml'))
-                    self.assertEqual(len(section.findall('.//x:h3', ns)), 2)
-                    self.assertTrue(section.findall('.//x:blockquote', ns))
-                    self.assertTrue(section.findall('.//x:link[@rel="stylesheet"]', ns))
-                    fonts = ET.fromstring(archive.read('OEBPS/' + spine[6] + '.xhtml'))
-                    font_text = ''.join(fonts.itertext())
-                    self.assertIn('字体文件已损坏' if language == 'zh-CN' else 'Damaged font file', font_text)
-                    self.assertIn('.cpfont', font_text)
-                    troubleshooting = ET.fromstring(archive.read('OEBPS/' + spine[9] + '.xhtml'))
-                    self.assertEqual(len(troubleshooting.findall('.//x:h3', ns)), 4)
-                    self.assertTrue(any((p.text or '').startswith('1. ') for p in
-                                        troubleshooting.findall('.//x:p', ns)))
+                    if creator == 'CrossMux':
+                        section = ET.fromstring(archive.read('OEBPS/' + spine[5] + '.xhtml'))
+                        self.assertEqual(len(section.findall('.//x:h3', ns)), 2)
+                        self.assertTrue(section.findall('.//x:blockquote', ns))
+                        fonts = ET.fromstring(archive.read('OEBPS/' + spine[6] + '.xhtml'))
+                        font_text = ''.join(fonts.itertext())
+                        self.assertIn('字体文件已损坏' if language == 'zh-CN' else 'Damaged font file', font_text)
+                        self.assertIn('.cpfont', font_text)
+                        troubleshooting = ET.fromstring(archive.read('OEBPS/' + spine[9] + '.xhtml'))
+                        self.assertEqual(len(troubleshooting.findall('.//x:h3', ns)), 4)
+                        self.assertTrue(any((p.text or '').startswith('1. ') for p in
+                                            troubleshooting.findall('.//x:p', ns)))
+                    for chapter in spine:
+                        section = ET.fromstring(archive.read('OEBPS/' + items[chapter].get('href')))
+                        self.assertTrue(section.findall('.//x:link[@rel="stylesheet"]', ns))
                     for name in archive.namelist():
                         if name.endswith(('.xml', '.opf', '.xhtml')):
                             document = ET.fromstring(archive.read(name))
@@ -84,8 +90,10 @@ class UserGuideEpubTest(unittest.TestCase):
                                         target = posixpath.normpath(posixpath.join(posixpath.dirname(name), link))
                                         self.assertIn(target.split('#')[0], archive.namelist())
                     nav = ET.fromstring(archive.read('OEBPS/nav.xhtml'))
-                    self.assertEqual(len(nav.findall('.//x:nav/x:ol/x:li', ns)), len(spine))
-            self.assertLessEqual(total, generator.BUNDLED_BUDGET)
+                    self.assertEqual([link.get('href') for link in nav.findall('.//x:nav/x:ol/x:li/x:a', ns)],
+                                     [items[chapter].get('href') for chapter in spine])
+            for total in sizes.values():
+                self.assertLessEqual(total, generator.BUNDLED_BUDGET)
             generator.build_bundled(ROOT / 'docs/user-guide', output, header)
             self.assertEqual(before, header.read_bytes())
 

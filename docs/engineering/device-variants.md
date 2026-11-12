@@ -68,11 +68,13 @@ Build/host checks do not establish physical display, power or recovery acceptanc
 
 ### Xuesu development target
 
-`xuesu_300` builds an ESP32-S3 application for Xuesu. The
-pinned SDK needs the repository's board patch, and the build uses a local waveform
-header generated from the factory 1.3.3 app. The vendor bootloader, partition
-table and OTA0 app are retained during the verified OTA1 installation. See the
-[Xuesu guide](xuesu-300-port.md) for setup, capabilities and hardware checks.
+`xuesu_300` builds SnowMux for the Xuesu 3 ESP32-S3 reader. The pinned SDK
+needs the repository's board patch, and the build uses a local waveform header
+generated from the factory 1.3.3 app. Initial installation writes OTA1 and
+retains the vendor bootloader, partition table, and OTA0 app. Builds that support
+on-device updates can overwrite the inactive OTA0 app slot. See the
+[SnowMux README](../../README.md) for user instructions and the
+[Xuesu guide](xuesu-300-port.md) for the release workflow and hardware checks.
 
 ## Standby-display light sleep
 

@@ -14,7 +14,7 @@ The startup guide and later UI-language changes apply the same rule.
 | UI fonts | International 8/10/12pt faces are primary; Simplified-Chinese subsets remain the built-in fallback. PSRAM-equipped S3 devices additionally use the selected SD family at matching sizes for multilingual missing glyphs. |
 | Reader fonts | Only the 12pt CJK subset is an offline fallback. Complete families and other sizes use the existing `.cpfont` download/SD loader, one reader size resident at a time, plus optional S3 UI sizes. |
 | EPUB/TXT | Unicode CJK parsing, line breaking and missing-glyph detection are always compiled and trigger from text content. |
-| Apps | App visibility is independent of language and content profile. WeRead is visible by default in every language; Chinese Chess is hidden by default. Language changes preserve app visibility choices. |
+| Apps | App visibility is independent of language and content profile. WeRead is visible by default in every language; Chinese Chess is hidden by default on devices that offer it and absent from the Xuesu launcher. Language changes preserve app visibility choices. |
 | Services | China uses `crossmux.cn`, OTA variant `cn`, and China NTP servers; Global uses `crossmux.com`, variant `global`, and international NTP servers. Initial onboarding alone sets the default UTC offset. |
 
 **S3 UI fallback residency**

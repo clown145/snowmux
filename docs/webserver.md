@@ -20,7 +20,7 @@ networks or in hotspot mode when you control who is connected.
 
 ## Starting File Transfer
 
-1. From the Home screen, select **File Transfer**.
+1. From Home, select **File Transfer**. On Xuesu 3, it is also under **Apps → File Transfer**.
 2. Choose one of the available modes:
 
 | Mode | Use when |
@@ -28,6 +28,11 @@ networks or in hotspot mode when you control who is connected.
 | **Join Network** | You want the reader to join an existing Wi-Fi network. |
 | **Calibre Wireless** | You want to receive books from the CrossPoint Calibre plugin workflow. |
 | **Create Hotspot** | You want the reader to create its own open Wi-Fi network. |
+| **USB Drive** (supported devices, including Xuesu 3) | You want to copy files directly to the SD card over USB. This mode does not start the web server; safely eject the drive on your computer when finished. |
+
+On Xuesu 3, **Settings → Connectivity → Wi-Fi Setup** is a separate temporary
+hotspot for configuring the reader's router connection from a phone. Use
+**File Transfer** when you want to upload books.
 
 ## Join Network Mode
 

@@ -1,5 +1,10 @@
 # CrossMux User Guide
 
+This general guide uses Xteink controls in its examples. For SnowMux on the
+Xuesu 3, see [three-button controls](./README.md#buttons-and-shortcuts),
+[the Xuesu app list](./README.md#apps-and-visibility), and the **SnowMux User
+Guide** bundled with the firmware.
+
 Welcome to the **CrossMux** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
 
 - [CrossMux User Guide](#crossmux-user-guide)
@@ -111,7 +116,7 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, the **[Browse Files](#33-browse-files-screen)** screen, the **[Recent Books](#34-recent-books-screen)** screen, the **[File Transfer](#35-file-transfer-screen)** screen, or **[Settings](#36-settings)**.
 
-With the optional **Inx** theme, Recent becomes the home screen and the top bar switches between **Recent**, **Library**, **Apps**, **Settings**, and **Statistics**. Apps contains the existing File Transfer and OPDS Browser entries; Inx does not add a Sync screen or new transfer protocols. The Recent screen supports Flow, Grid, List, Icons, and Cover layouts, while Library and Apps can independently use Icons or List layouts. Inx Settings shows the existing four settings categories as expandable sections on one page.
+With the **Inx** theme, Recent becomes the home screen and the tab bar switches between **Recent**, **Library**, **Apps**, **Settings**, and **Statistics**. The Recent screen supports Flow, Grid, List, Icons, and Cover layouts; Library and Apps can independently use Icons or List layouts. Settings uses the same six groups across themes. The Apps catalog varies by device and user settings. OPDS Browser appears after a server is configured.
 
 ### 3.2 Reading Mode
 
@@ -247,7 +252,6 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
   - "Cover Grid" - A grid of library covers on devices with PSRAM; other pages use Lyra
 
   Non-Inx themes retain upstream page styling, with an additional Apps entry and shared CrossMux settings. Boolean settings use checkboxes; multi-value settings retain their selectors. All themes share the same keyboard keys.
-  - "Inx" - A five-tab e-ink interface with a Recent home screen, icon/list Library and Apps layouts, and expandable Settings categories
 
 - **Inx Home Layout**: Choose Flow, Grid, List, Icons, or Cover for the Inx home screen. The default is Flow.
 - **Inx Library Layout**: Choose Icons or List for the Inx Library. The default is Icons.

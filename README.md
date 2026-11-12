@@ -2,160 +2,71 @@
 
 **English** | [简体中文](./README.zh-CN.md)
 
-**SnowMux** is a community port of [CrossMux](https://github.com/0x1abin/crossmux) for the Xuesu (雪酥) e-reader.
-[Xuesu web flasher](https://clown145.github.io/snowmux/) · [Xuesu releases](https://github.com/clown145/snowmux/releases) · [Xuesu device guide](./docs/engineering/xuesu-300-port.md)
+**SnowMux** is community reading firmware for the **Xuesu 3 (雪酥·3)**, board ID `xuesu-300-std`, based on [CrossMux](https://github.com/0x1abin/crossmux). It supports the reader's 300×400 e-ink panel, three physical buttons, and factory partition layout.
 
-**CrossMux** is a community fork of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) for ESP32 e-ink devices. Reading comes first, with lightweight apps, reading analytics, standby faces, and on-demand services alongside the reader.
+[Xuesu web flasher](https://clown145.github.io/snowmux/) · [SnowMux releases](https://github.com/clown145/snowmux/releases) · [Device and build guide (Chinese)](./docs/engineering/xuesu-300-port.md)
 
-[Upstream CrossMux releases](https://github.com/0x1abin/crossmux/releases) · [User guide](./USER_GUIDE.md) · [Contributing](./docs/contributing/README.md)
+## Installation and updates
 
-![CrossMux running on an Xteink device](./docs/images/cover.jpg)
+1. Back up the books and data on your SD card. Open the [Xuesu web flasher](https://clown145.github.io/snowmux/) in Chrome or Edge on a computer. Connect the reader with a USB data cable and press OK to wake it.
+2. Follow the prompts to connect and check the device. Before the first installation, download and keep the reader's 16 MiB Flash backup from the flasher.
+3. If SnowMux already has the update menu, use **Settings → System → Check for Updates** to update over Wi-Fi. Use the web flasher for an older build without this menu.
 
-## Features
+The first web installation preserves the factory app slot. On builds that support on-device updates, an update may overwrite that slot; check the confirmation before proceeding. If the update menu offers **Restore factory firmware**, it can download and install the factory app. Use your original Flash backup for a full device restore. See the [web flasher and release notes (Chinese)](./docs/engineering/xuesu-300-port.md#社区刷机站与发版).
 
-- **Reading and library**: EPUB, TXT, XTC/XTCH and images; chapter navigation, bookmarks, dictionaries, custom fonts, reading backgrounds, and KOReader progress sync.
-- **Highlights and clippings**: select EPUB text with buttons or touch, look up words and phrases, save highlighted excerpts, and optionally sync clippings through a compatible CrossPoint Sync server. [Clippings guide](./USER_GUIDE.md#53-clippings-and-highlights).
-- **Bluetooth page turners**: connect and map tap/hold actions under **Settings → Connectivity → Bluetooth Page Turner** for pages, chapters, reader menus, and clipping selection.
-- **SD-card plugins**: enable **Settings → Connectivity → Plugins**, then open **Home → Plugins**. Install optional Plugin Hub manually or over Wi-Fi when selected; existing sideloaded plugins remain usable. Browser-side plugin JavaScript runs while its browser page stays open. [Plugin guide](./docs/sd-plugins.md).
-- **Wireless workflows**: browser file transfer and settings, Calibre wireless, OPDS downloads, WebDAV, and device OTA updates.
-- **Apps**: lightweight games and tools including Sudoku, Gomoku, Chinese Chess, Minesweeper, 2048, Electronic Woodfish, and Ugly Avatar. [Apps guide](./src/activities/apps/README.md).
-- **AirPage**: scan to upload content, then display BMP/JPEG images with manual refresh or foreground live delivery; images can become a sleep screen. [Usage and network behavior](./src/activities/apps/README.md#airpage).
-- **WeRead**: QR login, bookshelf browsing, EPUB downloads for offline reading, and progress sync. Available in the China content profile. [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
-- **Reading analytics and standby**: reading statistics, heatmaps, profiles and achievements; clock and Chinese almanac faces. [Analytics guide](./src/activities/apps/reading-stats/README.md).
-- **Languages and development**: All UI languages in one firmware per hardware target, plus desktop simulators for UI development.
+## Buttons and shortcuts
 
-> **WeRead security:** this unofficial Web protocol may change. Device traffic is encrypted, but its client does not verify the server certificate or hostname; use it only on a trusted network. The native simulator verifies certificates through the host trust store. See the [transport details](./docs/engineering/chinese-build.md#weread-transport).
+| Gesture | Action |
+| --- | --- |
+| Up or Down | Move through a list or turn pages. |
+| Press OK | Open the selected item, open the reader menu, or wake the reader. |
+| Hold OK | Usually go back or cancel. On a main tab, return focus to the tab bar and use Up or Down to switch tabs. |
+| Press OK twice | Open the shortcut panel on a main tab or reading page. Use Up or Down to move, press OK to select, and hold OK to close. |
 
-## Devices and release channels
+The panel offers Sleep, Night Mode, Refresh Screen, and Reading Orientation. Files, Library, bookmarks, clippings, paginated OPDS catalogs, and Standby also offer actions for the current item.
 
-| Device | Chip | Configured channels |
-|---|---|---|
-| Xteink X3 / X4 (shared image) | ESP32-C3 | Stable, Nightly |
-| [Seeed Sticky](https://www.seeedstudio.com/sticky/?utm_source=partner&utm_medium=crossmux&utm_campaign=readme) | ESP32-S3 | Stable, Nightly |
-| Xteink X4 Pro | ESP32-S3 | Stable, Nightly |
-| M5Stack Paper Mono | ESP32-S3 | Nightly |
-| eego A4 | ESP32-S3 | Nightly |
-| Murphy M4 | ESP32-S3 | Nightly |
-| Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
-| [Metalio E-Ink 4](./docs/engineering/metalio-eink4.md) | ESP32-S3 | Stable, Nightly |
-| [Read Pico (小纸 Pico)](./docs/engineering/read-pico.md) | ESP32-S3 | Nightly |
+On first use with a fresh SD card, SnowMux adds its user guide to the home screen. It uses the Chinese edition for Simplified Chinese and the English edition for other UI languages. An upgrade does not replace an older copy on an existing card.
 
-Stable publishes only X3/X4, Sticky, X4 Pro and Metalio E-Ink 4. All nine targets publish Nightly. Local Stable build modes do not grant release eligibility; availability follows the selected regional catalog. This configuration does not establish hardware acceptance. Each S3 target needs its own image. X4 Classic (`x4c`), [LilyGo T5 S3 4.7 PRO/Lite](./docs/engineering/lilygo-t5s3.md) (`lilygo_t5s3`), and BOOX Picco (`picco`) remain development-only. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
+## Reading and file transfer
 
-Use [Stable](https://github.com/0x1abin/crossmux/releases/tag/stable) for formal releases, or [Nightly](https://github.com/0x1abin/crossmux/releases/tag/nightly) for development builds. Both channels use the same package rules, with separate eligible target sets. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
+- **Reading and library**: EPUB, TXT, XTC/XTCH, and unencrypted MOBI/AZW3 files up to 4 MiB. DOCX text and supported inline images are reflowed. The reader offers bookmarks, clippings, offline dictionaries, SD-card fonts, and KOReader progress sync. Use **Settings → System → Import factory reading history** to import recent books from the factory firmware.
+- **USB and wireless transfer**: Open **Apps → File Transfer**. Use **USB Drive** to copy files to the SD card from a computer; safely eject the drive when finished. Wi-Fi browser transfer and Calibre wireless are also available. If a new book appears in Files but not Library, use **Library Actions → Refresh library** from the shortcut panel.
+- **Wi-Fi and phone setup**: Open **Settings → Connectivity → Wi-Fi Setup**. Scan the QR code with your phone to join the temporary hotspot, then choose and enter the password for your 2.4 GHz Wi-Fi network. OPDS and KOReader configuration, catalog search, and other text entry also use phone forms.
+- **Page turners, statistics, and clock faces**: Pair BLE HID page turners in **Settings → Connectivity → Bluetooth Page Turner**. SnowMux also offers reading statistics and heatmaps. Preview clock faces in **Apps → Standby** and press OK twice to set the current face as the sleep screen.
 
-[Xuesu (雪酥)](./docs/engineering/xuesu-300-port.md) has a separate ESP32-S3 development build, `xuesu_300`. The device guide documents the SDK patch, panel waveform generation, and OTA1 testing on the reference device.
-See [the community web flasher and release workflow](./docs/engineering/xuesu-300-port.md#社区刷机站与发版) for GitHub Pages setup.
+Back up your SD card, including `/.crosspoint/`. This folder holds reading progress and settings; clearing the cache for one book does not require deleting the whole folder.
 
-## Install firmware
+## Apps and visibility
 
-1. Open the [global Web tool](https://crossmux.com) or [China Web tool](https://crossmux.cn), enter the firmware flasher, and choose your exact device and an available Stable or Nightly version. The deployed tool discovers options from its regional release catalog. X3/X4 share an image; S3 images are board-specific.
-2. Back up your SD card data before changing firmware, and retain a complete Flash backup when the device's first-install or recovery instructions require one. Follow the matching [device documentation](./docs/engineering/device-variants.md) and the tool's confirmations.
-3. For offline installation, use [CrossMux Releases](https://github.com/0x1abin/crossmux/releases). After the new pipeline rollout, both channels publish `crossmux-<version>-<deviceSlug>.zip` with all installation segments, manifests and SHA-256 checksums. An application-only `firmware.bin` is not a complete first-install image. Historical releases retain their existing assets and instructions.
+These are the defaults for a fresh configuration in the current source. Existing visibility choices are kept.
 
-To build from source, use the [development commands](#development-quick-start) below. For an existing CrossMux installation, device OTA selects an available release by model, content profile and channel.
+| Status | Xuesu 3 apps |
+| --- | --- |
+| Shown by default | Library, File Transfer, WeRead, AirPage, Reading Stats, Standby. |
+| Shown after setup | OPDS Browser requires a server under **Settings → Connectivity → OPDS Servers**. |
+| Hidden by default, can be shown | Ugly Avatar, Buddy, Electronic Woodfish. |
+| Unavailable in the Xuesu launcher | Sudoku, Gomoku, Sokoban, Chinese Chess, Minesweeper, 2048, Pixel Switch, and Calculator. These implementations require touch or separate Left and Right controls and have no visibility toggle on Xuesu. |
 
-X4 Pro packages use slug `x4pro`; Metalio E-Ink 4 packages use `metalio-eink4` and model/board tag `metalio_eink4`. Both language entries point to the same multilingual firmware per device. The Web tool offers a channel only when its catalog contains a matching package. Follow the [Metalio guide](./docs/engineering/metalio-eink4.md) for first installation, wiring and hardware validation status.
+To show or hide a supported app, open **Settings → System → App Visibility**, select the app, and press OK to toggle it. **On** means it appears in Apps. Hold OK to leave and save. WeRead visibility is independent of UI language; see the [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
 
-### USB-locked Xteink devices
+## Documentation and building
 
-Some devices may restrict USB flashing. The [upstream Xteink Unlocker](https://crosspointreader.com/#unlock-tool) is a separate tool; consult its current compatibility and recovery instructions before use. CrossMux compatibility with a locked device must not be inferred from CrossPoint compatibility. Flashing unsupported firmware may leave the device without a recovery path. If the serial device is missing, also check the data cable, port, and browser permissions.
+- [Xuesu device guide (Chinese)](./docs/engineering/xuesu-300-port.md): build setup, device limits, release workflow, and hardware validation.
+- [Apps development](./src/activities/apps/README.md) · [Web transfer](./docs/webserver.md) · [Web API](./docs/webserver-endpoints.md) · [SD-card fonts](./docs/sd-card-fonts.md)
+- [Bundled user guide sources](./docs/user-guide/xuesu/) · [Engineering reference](./docs/engineering/index.md) · [Contributor guide](./docs/contributing/README.md)
 
-## Chinese fonts and content profiles
-
-Every hardware target builds one language-unified firmware. Simplified Chinese selects the China content profile (`crossmux.cn`); other UI languages select Global (`crossmux.com`). Changing the UI language updates the profile and regional apps, including WeRead and Chinese Chess.
-
-The UI includes compact 8/10/12pt Simplified-Chinese fallback fonts. Built-in reader font choices share a 12pt offline fallback; complete families, other sizes, style variants, and broader Unicode coverage use SD-card `.cpfont` files. Embedded fonts are a subset, so rare or Traditional Chinese characters may require an appropriate SD font.
-
-Download fonts from **Settings > Reader > Manage Fonts**, or copy converted fonts to the SD card. See [SD-card fonts](./docs/sd-card-fonts.md) for installation and conversion, and [Chinese support](./docs/engineering/chinese-build.md) for the embedded-font toolchain. Normal builds need no font regeneration.
-
-## Development quick start
-
-Install PlatformIO Core (`pio`) and Python 3; the repository pins its pioarduino platform. Full code checks also need clang-format 21+, CMake, and Ninja. See [Getting Started](./docs/contributing/getting-started.md) for setup.
+Clone the [SnowMux repository](https://github.com/clown145/snowmux) recursively, install pioarduino Core and Python, then follow the [source setup steps (Chinese)](./docs/engineering/xuesu-300-port.md#从源码构建) to apply the FreeInk SDK patch and generate the panel waveform header. After setup, run this in Bash:
 
 ```bash
-git clone --recursive https://github.com/0x1abin/crossmux.git
-cd crossmux
-
-# If submodules were not initialized:
-git submodule update --init --recursive
-
-# X3/X4 development build
-pio run -e default
-
-# X3/X4 unified-language stable build
-pio run -e gh_release
-
-# Build and flash that image to a connected X3/X4
-pio run -e gh_release -t upload
+PYTHONUTF8=1 pio run -e xuesu_300
 ```
 
-The application binary is `.pio/build/<environment>/firmware.bin`. The nine published targets each have local Dev, Stable and Nightly modes. The configuration also includes development-only boards and simulators. The four targets listed above are eligible for Stable publication. Versions and Git hashes are generated automatically. Stable uses `<base>`, Nightly uses `<base>-rc+<sha7>`, and Dev uses `<base>-dev-<branch>-<sha7>`. For other boards, see [build-system.md](./docs/engineering/build-system.md).
+The application image is `.pio/build/xuesu_300/firmware.bin`. Follow the Xuesu installation procedure; the generated `firmware.factory.bin` is unsuitable for first installation on Xuesu.
 
-For X4 Pro and Metalio E-Ink 4:
-
-```bash
-# X4 Pro: Dev / Stable / Nightly
-pio run -e x4pro
-pio run -e x4pro-gh_release
-pio run -e x4pro_nightly
-
-# Metalio E-Ink 4: Dev / Stable / Nightly
-pio run -e metalio_eink4
-pio run -e metalio_eink4-gh_release
-pio run -e metalio_eink4_nightly
-```
-
-The Stable ZIPs are `crossmux-<version>-x4pro.zip` and `crossmux-<version>-metalio-eink4.zip`. First installation also requires the matching bootloader and partition layout; use the complete installation package and the device guide.
-
-For Read Pico (小纸 Pico):
-
-The recursive checkout includes the pinned SDK drivers; see the [Read Pico guide](./docs/engineering/read-pico.md#current-implementation--2026-09-30) for implementation details.
-
-```bash
-pio run -e readpico
-```
-
-On Windows, set `PYTHONIOENCODING=utf-8` before running `pio`, otherwise the build can stall when PlatformIO prints the Arabic i18n language row.
-
-The application is `.pio/build/readpico/firmware.bin`. First installation is a **full-table flash** — `bootloader@0x0`, `partitions@0x8000`, `boot_app0@0xe000`, `app@0x10000` — after a verified full-chip (16 MiB) backup, because the repository partition table and the board's factory `partitions_16M.csv` disagree at `0xE000` and use different app-slot sizes. Read Pico is published on Nightly only. Its local Stable build mode does not enable official publication or close physical acceptance. See the [Read Pico guide](./docs/engineering/read-pico.md) for the pin map, the frozen build flags and the pending acceptance checklist.
-
-### Desktop simulator
-
-Install SDL2 and curl (plus OpenSSL development headers on Linux), place EPUBs in `fs_/books/`, then run:
-
-```bash
-pio run -e simulator -t run_simulator           # X4
-pio run -e simulator_x3 -t run_simulator        # X3
-pio run -e simulator_eego_a4 -t run_simulator   # eego A4
-pio run -e simulator_murphy_m4 -t run_simulator # Murphy M4
-pio run -e simulator_readpico -t run_simulator  # Read Pico, 684x1216 portrait
-```
-
-The [CrossMux simulator fork](https://github.com/0x1abin/crosspoint-simulator) is pinned in `platformio.ini`. It previews UI and input flows; it does not validate display waveforms, power consumption, or physical hardware timing.
-
-Read Pico fits its window to the desktop while retaining full-resolution BMP screenshots. Mouse input supports tap, hold and swipe; Up/Escape/Down represent the three capacitive keys, and only Power (`P`) wakes from sleep. Native sixteen-level images and SD UI fonts follow the Read Pico paths. See the [device guide](./docs/engineering/read-pico.md#desktop-simulator) for validation details.
-
-### Checks and debugging
-
-```bash
-./bin/ci-check       # Full code-change checks; does not rewrite sources
-pio device monitor  # Serial logs from a connected device
-```
-
-Use [Testing and Debugging](./docs/contributing/testing-debugging.md) for focused checks and the enhanced serial monitor. Documentation-only changes need link, command, and whitespace checks rather than firmware builds.
-
-## Documentation and contributing
-
-- [User guide](./USER_GUIDE.md) · [Web transfer](./docs/webserver.md) · [Web API](./docs/webserver-endpoints.md)
-- [Project scope](./SCOPE.md) · [Governance](./GOVERNANCE.md) · [Contributor guide](./docs/contributing/README.md)
-- [Agent instructions](./AGENTS.md) · [Engineering reference](./docs/engineering/index.md) · [Touch and UI](./docs/contributing/touch-and-ui.md)
-- [Cache management](./docs/engineering/cache-management.md) · [File formats](./docs/file-formats.md)
-
-Report bugs and propose changes in [CrossMux Issues](https://github.com/0x1abin/crossmux/issues). Contributions target **`0x1abin/crossmux:main`**; keep each PR focused and describe its verification. Existing CrossPoint class names and the `/.crosspoint` SD data directory remain compatibility details, not instructions to target the upstream repository. That directory also holds settings and progress; do not delete it merely to clear a book cache.
+For other devices, see [upstream CrossMux](https://github.com/0x1abin/crossmux), the [general user guide](./USER_GUIDE.md), and [device variants](./docs/engineering/device-variants.md). CrossMux Stable and Nightly images do not target the Xuesu 3.
 
 ## Credits
 
-Thanks to [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader), [Inx](https://github.com/obijuankenobiii/inx), [cpr-vcodex](https://github.com/franssjz/cpr-vcodex), and their contributors, and to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader) for the original inspiration.
+Thanks to [CrossMux](https://github.com/0x1abin/crossmux), [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader), [Inx](https://github.com/obijuankenobiii/inx), [cpr-vcodex](https://github.com/franssjz/cpr-vcodex), and their contributors, and to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader) for the original inspiration.
 
-CrossMux is not affiliated with Xteink or any device manufacturer. Upstream tools and communities are independent of this fork. See [LICENSE](./LICENSE) for the repository license.
+SnowMux is an independent community project. See [LICENSE](./LICENSE) and the [firmware licensing notes](./licenses/README.md).

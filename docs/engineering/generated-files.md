@@ -37,16 +37,20 @@
 
 `scripts/build_userguide.py` runs for firmware and simulator builds. It calls
 `scripts/generate_userguide_epub.py --bundled` to package the maintained short
-XHTML guides in `docs/user-guide/{zh-CN,en}.xhtml` with a small shared
-`docs/user-guide/style.css`. The EPUBs have no embedded
-cover image or cover page, so the home themes show their standard book fallback.
+XHTML guides in `docs/user-guide/{zh-CN,en}.xhtml` (CrossMux) and
+`docs/user-guide/xuesu/{zh-CN,en}.xhtml` (SnowMux) with a small shared
+`docs/user-guide/style.css`. The generated header selects the SnowMux pair at
+compile time for `FREEINK_DEVICE_XUESU_300`; other targets use the CrossMux pair.
+Each XHTML title is also used for the EPUB filename and recent-book title.
+The EPUBs have no embedded cover image or cover page, so the home themes show
+their standard book fallback.
 This mode has no third-party Python dependencies. The separate legacy Markdown
 export still requires Markdown, EbookLib and Pillow; it is not part of firmware builds.
 
 Outputs are ignored: `build/user-guide/*.epub` and
 `src/util/UserGuide.generated.h`. ZIP metadata is fixed for reproducible bytes;
-the two compressed archives together must stay within 128 KiB. Edit the XHTML
-sources or generator, never the generated header. Validate with
+each target's two compressed archives together must stay within 128 KiB.
+Edit the XHTML sources or generator, never the generated header. Validate with
 `python3 scripts/tests/test_userguide_epub.py` and the `UserGuideTest` host target.
 
 After SD initialization and recent-list loading, `UserGuide::prepare()` checks
@@ -70,9 +74,12 @@ does not restore/replace it. A new card or explicitly removing the marker allows
 a new check. Card filesystem corruption and removal of the whole `.crosspoint`
 directory are not distinguishable from first use. FAT writes/renames are not a
 power-loss transaction; test interruption recovery on real cards.
+On an existing SnowMux card, copy the updated EPUB from `build/user-guide/`
+manually if desired. The older CrossMux guide is kept until the user removes it.
 
-Hardware acceptance: on X3/X4, start with a backed-up fresh SD card, select each
-language and inspect ordinary, carousel and INX homes, then open all chapters.
+Hardware acceptance: on X3/X4 and Xuesu 3, start with a backed-up fresh SD card,
+select each language and check the title and edition shown in recents. Inspect
+ordinary, carousel and INX homes, then open all chapters.
 Repeat after deletion, reset and OTA. Test a full/read-only card and interrupt
 power during copy, recent-save and marker-save stages. The `GUIDE` log reports
 attempt duration and before/after free heap and largest block. Use the existing

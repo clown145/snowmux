@@ -4,6 +4,15 @@ The `apps/` directory holds all non-reader sub-applications shipped on CrossMux.
 
 The directory groups app implementations such as games, tools, reading analytics, and WeRead. The launcher also links to core workflows such as file transfer and OPDS; appearing in Apps does not require moving those implementations into this directory.
 
+## SnowMux on Xuesu 3
+
+Xuesu's launcher and **Settings → System → App Visibility** use the same
+board-filtered catalog. Ugly Avatar, Buddy, and Electronic Woodfish are
+available but hidden by default. Games and tools that require touch or separate
+Left and Right buttons are absent from both the launcher and the settings list.
+See the [SnowMux app list](../../../README.md#apps-and-visibility) for the full
+list and the OPDS setup requirement.
+
 ---
 
 ## Directory layout
@@ -80,8 +89,8 @@ enum class AppId : uint8_t {
   Gomoku = 3,
   Minesweeper = 5,
   UglyAvatar = 7,
-  MyApp = 17,  // example: use the next unused bit ID in the current catalog
-  Count = 18,
+  MyApp = 18,  // example: use the next unused bit ID in the current catalog
+  Count = 19,
 };
 
 constexpr AppEntry kAppEntries[] = {
@@ -100,8 +109,8 @@ values, and keep conditional-app IDs outside their `#ifdef`. New bits default to
 Chess, Minesweeper, 2048, Ugly Avatar, Buddy, Sokoban, Pixel Switch, and Woodfish.
 Existing masks are preserved except for the one-time Buddy migration from catalog version 0.
 The menu, launcher, and App Visibility settings all read this same table; no `switch` or `buildItems()` is needed.
-The visibility mask is 32-bit. `Calculator = 15` and `Woodfish = 16` are stable;
-IDs 17 through 31 remain available.
+The visibility mask is 32-bit. `Calculator = 15`, `Woodfish = 16`, and
+`Library = 17` are stable; IDs 18 through 31 remain available.
 
 ### 4. Add the i18n key and icon
 
@@ -133,15 +142,17 @@ AI, and persistence in the game: they are not framework concerns.
 
 ### 6. Language-independent visibility
 
-Chinese Chess and WeRead are compiled into the unified firmware. The existing
-`ENABLE_CHINESE_VERSION` compatibility guards remain enabled by the base and
-simulator profiles; do not add a separate Chinese build or source-filter split.
+The existing `ENABLE_CHINESE_VERSION` compatibility guards for WeRead and
+Chinese Chess remain enabled by the base and simulator profiles. Keep the
+unified language build; Xuesu's board filter still excludes Chinese Chess from
+its launcher.
 
 The launcher applies `effectiveHiddenMask()` to combine user visibility and
 configured OPDS servers. The settings toggle reflects the user choice even when
-OPDS is temporarily absent from the menu because no server is configured. App visibility is independent of the UI language and
-content profile. WeRead is visible by default in every language; Chinese Chess
-is hidden by default. Language changes preserve the user's app visibility choices.
+OPDS is temporarily absent from the menu because no server is configured. App
+visibility is independent of the UI language and content profile. WeRead is
+visible by default in every language; Chinese Chess is hidden by default on
+devices that offer it. Language changes preserve the user's visibility choices.
 See [Chinese support](../../../docs/engineering/chinese-build.md).
 
 ---
