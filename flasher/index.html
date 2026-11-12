@@ -37,7 +37,7 @@
             <div class="step">
               <div>
                 <h3>连接雪酥</h3>
-                <p>选择 USB 串口并检查机型</p>
+                <p>选择 USB 设备并检查机型</p>
               </div>
               <button id="connect" class="button dark" disabled>
                 连接设备 <span aria-hidden="true">↗</span>
@@ -62,6 +62,7 @@
             <label for="progress"><span id="stage"></span><span id="percent"></span></label>
             <progress id="progress" max="100" value="0"></progress>
           </div>
+          <a id="backup-download" class="download" hidden>下载 Flash 备份 <span aria-hidden="true">↓</span></a>
           <details id="diagnostics" class="diagnostics" hidden>
             <summary>串口日志</summary>
             <pre id="log"></pre>
@@ -94,10 +95,18 @@
         <h2 id="help-title">刷机帮助</h2>
         <div>
           <details>
+            <summary>安卓手机怎么刷</summary>
+            <p>
+              用安卓 Chrome 打开本页，用支持数据传输的 USB 线或 OTG 转接头连接雪酥，按确认键唤醒。
+              点「连接设备」，选择 USB JTAG/serial debug unit，并在安卓弹窗里允许访问。
+              备份和刷机期间保持页面在前台、屏幕亮着。
+            </p>
+          </details>
+          <details>
             <summary>浏览器没有发现设备</summary>
             <p>
-              在电脑上的 Chrome 或 Edge 打开本页，用支持数据传输的 USB
-              线连接雪酥，按确认键唤醒。关闭占用串口的程序，或退出设备的 USB 磁盘模式后重试。
+              确认雪酥已唤醒并退出 USB 磁盘模式。安卓手机如果有 OTG 开关，请打开后重连。
+              电脑上请用 Chrome 或 Edge，并关闭占用串口的程序。iPhone 和 iPad 可下载固件，无法直接刷机。
             </p>
           </details>
           <details>
@@ -111,7 +120,7 @@
             <summary>备份存在哪里</summary>
             <p>
               浏览器将 16 MiB Flash
-              备份保存到电脑的下载目录。备份只在本机处理，可能包含设备数据，请妥善保存。
+              备份保存到浏览器的下载目录。安卓上读取完成后，点「下载 Flash 备份」。备份可能包含设备数据，请妥善保存。
             </p>
           </details>
         </div>

@@ -162,3 +162,13 @@ export async function installFirmware(loader, bytes, release, expectedMode, repo
   }
   report('写入校验完成', 100);
 }
+
+export async function resetToFirmware(loader) {
+  // Mirror ESP32-S3 esptool's USB Serial/JTAG hard reset: clear
+  // RTC_CNTL_FORCE_DOWNLOAD_BOOT in RTC_CNTL_OPTION1_REG, then pulse RTS.
+  // esptool-js 0.7.1 HardReset only releases RTS, which is already idle.
+  await loader.writeReg(0x6000812c, 0, 1);
+  await loader.transport.setRTS(true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await loader.transport.setRTS(false);
+}

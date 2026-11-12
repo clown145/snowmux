@@ -8,7 +8,7 @@
 
 ## Installation and updates
 
-1. Back up the books and data on your SD card. Open the [Xuesu web flasher](https://clown145.github.io/snowmux/) in Chrome or Edge on a computer. Connect the reader with a USB data cable and press OK to wake it.
+1. Back up the books and data on your SD card. Open the [Xuesu web flasher](https://clown145.github.io/snowmux/) in Chrome or Edge on a computer, or Chrome on Android. Connect the reader with a USB data cable and press OK to wake it. On Android, use a phone with USB OTG support and grant USB access when prompted.
 2. Follow the prompts to connect and check the device. Before the first installation, download and keep the reader's 16 MiB Flash backup from the flasher.
 3. If SnowMux already has the update menu, use **Settings → System → Check for Updates** to update over Wi-Fi. Use the web flasher for an older build without this menu.
 

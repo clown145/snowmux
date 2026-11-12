@@ -5,14 +5,18 @@ import {
   inspectDevice,
   installFirmware,
   RELEASE_MANIFEST,
+  resetToFirmware,
   validateRelease,
 } from './flash.mjs';
+import { requestXuesuPort, usesAndroidUsb } from './ports.mjs';
 
 const byId = (id) => document.getElementById(id);
 const connectButton = byId('connect');
 const backupButton = byId('backup');
 const installButton = byId('install');
-const supported = window.isSecureContext && Boolean(navigator.serial);
+const backupDownload = byId('backup-download');
+const androidUsb = usesAndroidUsb(navigator);
+const supported = window.isSecureContext && (androidUsb || Boolean(navigator.serial));
 let release;
 let session;
 let busy = false;
@@ -51,9 +55,10 @@ async function operation(work) {
   try {
     await work();
   } catch (error) {
+    const cancelled = error?.name === 'NotFoundError';
     message(
-      error.name === 'NotFoundError' ? '已取消串口选择。' : error.message,
-      error.name !== 'NotFoundError',
+      cancelled ? '未选择设备。若列表为空，请检查数据线并唤醒雪酥。' : (error?.message ?? String(error)),
+      !cancelled,
     );
   } finally {
     busy = false;
@@ -69,9 +74,14 @@ function serialLog(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-async function close(transport) {
+async function close(transport, usbDevice) {
   try {
-    await transport.disconnect();
+    if (usbDevice) {
+      // Closing the USB handle aborts pending transfers, even if a failed write left a stream locked.
+      if (usbDevice.opened) await usbDevice.close();
+    } else {
+      await transport.disconnect();
+    }
   } catch {
     // Reset or cable removal may already have closed the serial port.
   }
@@ -80,27 +90,32 @@ async function close(transport) {
 connectButton.addEventListener('click', () =>
   operation(async () => {
     if (session) {
-    const { loader, transport } = session;
+      const { loader, transport, usbDevice } = session;
       session = undefined;
       byId('progress-panel').hidden = true;
-    try {
-      await loader.after('hard_reset');
-      message('设备已断开，正在重启。');
-    } catch {
-      message('设备已断开。若设备仍停留在刷机模式，请手动重启。');
-    } finally {
-      await close(transport);
-    }
+      try {
+        await resetToFirmware(loader);
+        message('设备已断开，已发送重启命令。');
+      } catch {
+        message('设备已断开。若屏幕没有刷新，请重新插入 USB 线，再短按确认键。');
+      } finally {
+        await close(transport, usbDevice);
+      }
       return;
     }
 
-    const port = await navigator.serial.requestPort({
-      filters: [{ usbVendorId: 0x303a, usbProductId: 0x1001 }],
-    });
+    const { port, usbDevice } = await requestXuesuPort(navigator);
+    if (!backupDownload.hidden) {
+      URL.revokeObjectURL(backupDownload.href);
+      backupDownload.removeAttribute('href');
+      backupDownload.hidden = true;
+    }
     const transport = new Transport(port);
     const loader = new ESPLoader({
       transport,
       baudrate: 115200,
+      // Read one USB packet at a time so a full CDC packet never waits for a short packet to flush it.
+      serialOptions: usbDevice ? { bufferSize: 64 } : undefined,
       terminal: {
         clean: () => {
           byId('log').textContent = '';
@@ -114,14 +129,14 @@ connectButton.addEventListener('click', () =>
     try {
       await loader.main();
       const mode = await inspectDevice(loader);
-      session = { port, transport, loader, mode, backedUp: false };
+      session = { port, usbDevice, transport, loader, mode, backedUp: false };
       message(
         mode === 'install'
           ? '已识别雪酥。请先备份 Flash。'
           : '已识别雪酥，可以更新 OTA1。',
       );
     } catch (error) {
-      await close(transport);
+      await close(transport, usbDevice);
       throw error;
     }
   }),
@@ -135,18 +150,25 @@ backupButton.addEventListener('click', () =>
     const bytes = await backupFlash(current.loader, (read, total) =>
       progress('读取 Flash', (100 * read) / total),
     );
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
-    link.download = `xuesu-flash-${new Date().toISOString().replaceAll(':', '-')}.bin`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
-    current.backedUp = true;
-    message('备份已生成，请在浏览器的下载列表确认文件已保存。');
+    if (!backupDownload.hidden) URL.revokeObjectURL(backupDownload.href);
+    backupDownload.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    backupDownload.download = `xuesu-flash-${new Date().toISOString().replaceAll(':', '-')}.bin`;
+    backupDownload.hidden = false;
     progress('备份完成', 100);
+    if (current.usbDevice) {
+      message('备份已生成，请点「下载 Flash 备份」。');
+    } else {
+      backupDownload.click();
+      message('请在浏览器的下载列表确认备份文件已保存。');
+    }
   }),
 );
+
+backupDownload.addEventListener('click', () => {
+  if (session) session.backedUp = true;
+  if (!busy) message('请在浏览器的下载列表确认备份文件已保存。');
+  renderButtons();
+});
 
 installButton.addEventListener('click', () => {
   const current = session;
@@ -158,25 +180,35 @@ installButton.addEventListener('click', () => {
     const response = await fetch(firmwarePath(release));
     if (!response.ok) throw new Error(`固件下载失败（HTTP ${response.status}）。`);
     const bytes = new Uint8Array(await response.arrayBuffer());
+    if (session !== current) throw new Error('USB 连接已断开，请重新连接设备。');
     message('正在刷机，请勿拔出 USB 数据线。');
     await installFirmware(current.loader, bytes, release, current.mode, progress);
     session = undefined;
     try {
-      await current.loader.after('hard_reset');
-      message('固件写入和校验完成，设备正在重启。');
+      await resetToFirmware(current.loader);
+      message('固件写入和校验完成，已发送重启命令。请等待屏幕刷新。');
     } catch {
-      message('固件写入和校验完成。请手动重启设备。');
+      message('固件写入和校验完成。若屏幕没有刷新，请重新插入 USB 线，再短按确认键。');
     } finally {
-      await close(current.transport);
+      await close(current.transport, current.usbDevice);
     }
   });
 });
 
-navigator.serial?.addEventListener('disconnect', (event) => {
-  if (event.target !== session?.port) return;
+function deviceDisconnected() {
+  const current = session;
   session = undefined;
   if (!busy) message('USB 连接已断开。');
   renderButtons();
+  if (current.usbDevice) void close(current.transport, current.usbDevice);
+}
+
+navigator.serial?.addEventListener('disconnect', (event) => {
+  if (event.target === session?.port) deviceDisconnected();
+});
+
+navigator.usb?.addEventListener('disconnect', (event) => {
+  if (session?.usbDevice && event.device === session.usbDevice) deviceDisconnected();
 });
 
 window.addEventListener('beforeunload', (event) => {
@@ -214,7 +246,7 @@ async function loadRelease() {
     message(error.message, true);
   } finally {
     ready = true;
-    if (!supported) message('请在电脑上用 Chrome 或 Edge 打开 HTTPS 站点进行刷机。');
+    if (!supported) message('请通过 HTTPS 打开本页，使用电脑上的 Chrome 或 Edge，或安卓上的 Chrome。');
     renderButtons();
   }
 }

@@ -18,6 +18,7 @@ for (const [name, file] of [
   ['esptool-js', 'LICENSE'],
   ['atob-lite', 'LICENSE.md'],
   ['pako', 'LICENSE'],
+  ['web-serial-polyfill', 'LICENSE'],
 ]) {
   await copyFile(`node_modules/${name}/${file}`, `dist/licenses/${name}.txt`);
 }
