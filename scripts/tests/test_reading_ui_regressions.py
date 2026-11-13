@@ -34,6 +34,104 @@ def run_cpp(program, include_dirs=(), defines=(), extra_sources=(), system_inclu
 
 
 class ReadingUiRegressionTest(unittest.TestCase):
+    def test_xuesu_status_bar_shortcut_preserves_content_settings_and_xtc_position(self):
+        reader = (ROOT / 'src/activities/reader/ReaderActivity.cpp').read_text(encoding='utf-8')
+        settings = (ROOT / 'src/CrossPointSettings.cpp').read_text(encoding='utf-8')
+        save = settings[settings.index('  doc["xuesuReaderStatusBarHidden"]'):].split('\n#endif', 1)[0]
+        load = settings[settings.index('  xuesuReaderStatusBarHidden = doc['):].split('\n#endif', 1)[0]
+        json_headers = next((ROOT / '.pio/libdeps').glob('*/ArduinoJson/src'))
+        run_cpp(r'''
+#include <ArduinoJson.h>
+#include <cassert>
+#include <string_view>
+struct CrossPointSettings {
+  enum { XTC_STATUS_BAR_HIDE, XTC_STATUS_BAR_BOTTOM, XTC_STATUS_BAR_TOP };
+  int xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
+  bool xuesuReaderStatusBarHidden = false, xuesuXtcStatusBarRestoreTop = false;
+  bool statusBarChapterPageCount = true, otherText = true, progress = true;
+  int saves = 0;
+  struct Spec {
+    int xtcMode;
+    bool text, progress;
+    bool textLaneVisible() const { return text; }
+    bool showsProgressBar() const { return progress; }
+  };
+  Spec statusBarSpec() const { return {xtcStatusBarMode, statusBarChapterPageCount || otherText, progress}; }
+  void saveToFile() { ++saves; }
+  void save(JsonDocument& doc) const {
+''' + save + r'''
+  }
+  void load(JsonVariantConst doc) {
+''' + load + r'''
+  }
+} SETTINGS;
+namespace FsHelpers {
+bool hasXtcExtension(std::string_view path) { return path.ends_with(".xtc") || path.ends_with(".xtch"); }
+}
+enum { STR_SHOW_READER_STATUS_BAR, STR_HIDE_READER_STATUS_BAR };
+const char* tr(int id) { return id == STR_SHOW_READER_STATUS_BAR ? "show" : "hide"; }
+struct ReaderActivity {
+  std::string_view bookPath = "book.epub";
+  bool overlay = false, ready = true, atEnd = false;
+  int reflows = 0, repaints = 0;
+  bool allowsXuesuQuickPanel() const { return !overlay; }
+  bool acceptsRemoteInput() const { return ready; }
+  bool isAtEndOfBook() const { return atEnd; }
+  void onStatusBarVisibilityChanged() { ++reflows; }
+  void requestUpdate() { ++repaints; }
+  bool isReaderStatusBarVisible() const;
+  const char* xuesuQuickActionLabel() const;
+  void runXuesuQuickAction();
+};
+struct RenderLock { explicit RenderLock(ReaderActivity&) {} };
+''' + method(reader, 'bool ReaderActivity::isReaderStatusBarVisible()') + method(
+            reader, 'const char* ReaderActivity::xuesuQuickActionLabel()') + method(
+            reader, 'void ReaderActivity::runXuesuQuickAction()') + r'''
+int main() {
+  ReaderActivity text;
+  assert(std::string_view(text.xuesuQuickActionLabel()) == "hide");
+  text.runXuesuQuickAction();
+  assert(SETTINGS.xuesuReaderStatusBarHidden && SETTINGS.statusBarChapterPageCount && SETTINGS.progress);
+  assert(std::string_view(text.xuesuQuickActionLabel()) == "show");
+
+  ReaderActivity comic{.bookPath = "book.xtch"};
+  assert(std::string_view(comic.xuesuQuickActionLabel()) == "show");
+  comic.runXuesuQuickAction();
+  assert(SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_BOTTOM);
+  SETTINGS.xtcStatusBarMode = CrossPointSettings::XTC_STATUS_BAR_TOP;
+  comic.runXuesuQuickAction();
+  assert(SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_HIDE);
+  assert(SETTINGS.xuesuReaderStatusBarHidden && SETTINGS.xuesuXtcStatusBarRestoreTop);
+  JsonDocument doc;
+  SETTINGS.save(doc);
+  CrossPointSettings restored;
+  restored.load(doc.as<JsonVariantConst>());
+  assert(restored.xuesuReaderStatusBarHidden && restored.xuesuXtcStatusBarRestoreTop);
+  doc.clear();
+  restored.load(doc.as<JsonVariantConst>());
+  assert(!restored.xuesuReaderStatusBarHidden && !restored.xuesuXtcStatusBarRestoreTop);
+  comic.runXuesuQuickAction();
+  assert(SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_TOP);
+
+  text.runXuesuQuickAction();
+  assert(!SETTINGS.xuesuReaderStatusBarHidden && SETTINGS.otherText && SETTINGS.progress);
+  SETTINGS.statusBarChapterPageCount = SETTINGS.otherText = SETTINGS.progress = false;
+  assert(std::string_view(text.xuesuQuickActionLabel()) == "show");
+  text.runXuesuQuickAction();
+  assert(SETTINGS.statusBarChapterPageCount && !SETTINGS.otherText && !SETTINGS.progress);
+  assert(std::string_view(text.xuesuQuickActionLabel()) == "hide");
+  text.overlay = true;
+  assert(!text.xuesuQuickActionLabel());
+  text.overlay = false;
+  text.ready = false;
+  assert(!text.xuesuQuickActionLabel());
+  text.ready = true;
+  text.atEnd = true;
+  assert(!text.xuesuQuickActionLabel());
+  assert(text.reflows == 3 && text.repaints == 3 && comic.reflows == 0 && comic.repaints == 3 && SETTINGS.saves == 6);
+}
+''', system_include_dirs=(json_headers,))
+
     def test_xuesu_quick_panel_reuses_one_selection_order_for_context_and_global_actions(self):
         source = (ROOT / 'src/activities/util/FrontlightPanelActivity.cpp').read_text(encoding='utf-8')
         loop = method(source, 'void FrontlightPanelActivity::loop()')

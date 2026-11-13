@@ -89,6 +89,11 @@ class ReaderActivity : public Activity {
   void notePageTurn(bool forward, bool succeeded);
   void flushReaderSession();
 
+#if FREEINK_DEVICE_XUESU_300
+  bool isReaderStatusBarVisible() const;
+  virtual void onStatusBarVisibilityChanged() {}
+#endif
+
  public:
   ~ReaderActivity() override = default;
 
@@ -104,6 +109,8 @@ class ReaderActivity : public Activity {
   bool isReaderActivity() const final { return true; }
 #if FREEINK_DEVICE_XUESU_300
   bool allowsXuesuQuickPanel() const final { return !inputOverPage(); }
+  const char* xuesuQuickActionLabel() const final;
+  void runXuesuQuickAction() final;
 #endif
   bool acceptsRemoteInput() const final { return pageRendered.load(std::memory_order_acquire); }
   bool handleForcedRefresh() final;

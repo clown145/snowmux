@@ -1939,6 +1939,9 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t requestedPageTurnRate)
   pageTurnDuration = (1UL * 60 * 1000) / pageTurnRate;
   automaticPageTurnActive = true;
 
+#if FREEINK_DEVICE_XUESU_300
+  if (SETTINGS.xuesuReaderStatusBarHidden) return;
+#endif
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
   if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
     RenderLock lock;
@@ -1951,6 +1954,18 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t requestedPageTurnRate)
     section.reset();
   }
 }
+
+#if FREEINK_DEVICE_XUESU_300
+void EpubReaderActivity::onStatusBarVisibilityChanged() {
+  lastPageTurnTime = millis();
+  if (!section) return;
+  rememberCurrentContentOffset();
+  cachedSpineIndex = currentSpineIndex;
+  cachedChapterTotalPageCount = section->pageCount;
+  nextPageNumber = section->currentPage;
+  section.reset();
+}
+#endif
 
 bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   if (!section) return false;
@@ -2229,6 +2244,9 @@ void EpubReaderActivity::renderBook() {
     bottomReserve -=
         std::max(0, UITheme::getStatusBarTextTopPadding(renderer) - UiHighDpiProfile::readerContentStatusGap);
   }
+#if FREEINK_DEVICE_XUESU_300
+  if (SETTINGS.xuesuReaderStatusBarHidden) bottomReserve = 0;
+#endif
   orientedMarginBottom += std::max(static_cast<int>(SETTINGS.screenMargin), bottomReserve);
 
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
@@ -2306,8 +2324,9 @@ void EpubReaderActivity::renderBook() {
         const bool anchorJump = !pendingAnchor.empty();
 
         if (section->isPartial() &&
-            (anchorJump ? section->getPageForAnchor(pendingAnchor).has_value()
-                        : target + PARTIAL_REBUILD_START_MARGIN < static_cast<int>(section->pageCount))) {
+            (anchorJump               ? section->getPageForAnchor(pendingAnchor).has_value()
+             : offsetJump.has_value() ? section->getPageForVisibleTextOffset(*offsetJump).has_value()
+                                      : target + PARTIAL_REBUILD_START_MARGIN < static_cast<int>(section->pageCount))) {
           LOG_DBG("ERS", "Partial covers target %d of %d; deferring extension build", target, section->pageCount);
         } else {
           const size_t spineBytes =
@@ -3539,6 +3558,12 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
 }
 
 void EpubReaderActivity::renderStatusBar() const {
+#if FREEINK_DEVICE_XUESU_300
+  if (SETTINGS.xuesuReaderStatusBarHidden) {
+    linkNoteTitle.draw(false, bleturner::LinkNote::None);
+    return;
+  }
+#endif
   const int currentPage = section ? section->currentPage + 1 : 1;
   const int pageCount = section ? section->estimatedTotalPages() : 1;
   const float bookProgress = bookProgressFor({currentPage - 1, pageCount}, true) * 100;

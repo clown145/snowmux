@@ -317,6 +317,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (xuesuBatteryFullMv != 0) {
     doc["xuesuBatteryFullMv"] = xuesuBatteryFullMv;
   }
+  doc["xuesuReaderStatusBarHidden"] = xuesuReaderStatusBarHidden;
+  doc["xuesuXtcStatusBarRestoreTop"] = xuesuXtcStatusBarRestoreTop;
 #endif
 
   bleturner::writeJson(ble, doc);
@@ -649,6 +651,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
 #if FREEINK_DEVICE_XUESU_300
   xuesuBatteryFullMv = doc["xuesuBatteryFullMv"] | uint16_t{0};
+  xuesuReaderStatusBarHidden = doc["xuesuReaderStatusBarHidden"] | false;
+  xuesuXtcStatusBarRestoreTop = doc["xuesuXtcStatusBarRestoreTop"] | false;
 #endif
 
   if (!bleturner::readJson(ble, doc)) {

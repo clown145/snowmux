@@ -301,6 +301,7 @@ struct Metrics { int statusBarVerticalMargin=UiHighDpiProfile::enabled?48:19, pr
 using ThemeMetrics=Metrics;
 struct Settings {
  uint8_t screenMargin=25;
+ bool xuesuReaderStatusBarHidden=false;
  struct Spec {
    bool text=true, progress=false;
    int progressBarHeightPx=4;
@@ -358,10 +359,15 @@ int main() {
      }
      if(std::max(textHeight,numericHeight)>=42) assert(bottom==oldBottom);
    }
+#if FREEINK_DEVICE_XUESU_300
+   SETTINGS.xuesuReaderStatusBarHidden=true;
+   assert(contentBottom(r,automatic)==r.height-r.bottom-margin);
+   SETTINGS.xuesuReaderStatusBarHidden=false;
+#endif
  }
 }
 '''
-        for defines in (('CROSSMUX_UI_PROFILE_HIGH_DPI', 'FREEINK_DEVICE_READPICO=1'), ()):
+        for defines in (('CROSSMUX_UI_PROFILE_HIGH_DPI', 'FREEINK_DEVICE_READPICO=1'), (), ('FREEINK_DEVICE_XUESU_300=1',)):
             run_cpp(program, defines=defines)
 
 

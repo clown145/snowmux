@@ -667,6 +667,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint16_t keyboardLayouts = 0;
 #if FREEINK_DEVICE_XUESU_300
   uint16_t xuesuBatteryFullMv = 0;
+  bool xuesuReaderStatusBarHidden = false;
+  bool xuesuXtcStatusBarRestoreTop = false;
 #endif
   // Bluetooth page turner, saved under the keys lib/BlePageTurner reads and writes (BlePageTurnerJson.h).
   bleturner::Config ble;

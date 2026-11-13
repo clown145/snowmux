@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <HalFrontlight.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <KOReaderDocumentId.h>
 #include <Memory.h>
 #include <TrustedTime.h>
@@ -367,3 +368,43 @@ bool ReaderActivity::handleForcedRefresh() {
   requestUpdate();
   return true;
 }
+
+#if FREEINK_DEVICE_XUESU_300
+bool ReaderActivity::isReaderStatusBarVisible() const {
+  const auto spec = SETTINGS.statusBarSpec();
+  const bool enabled = FsHelpers::hasXtcExtension(bookPath) ? spec.xtcMode != CrossPointSettings::XTC_STATUS_BAR_HIDE
+                                                            : !SETTINGS.xuesuReaderStatusBarHidden;
+  return enabled && (spec.textLaneVisible() || spec.showsProgressBar());
+}
+
+const char* ReaderActivity::xuesuQuickActionLabel() const {
+  if (!allowsXuesuQuickPanel() || !acceptsRemoteInput() || isAtEndOfBook()) return nullptr;
+  return isReaderStatusBarVisible() ? tr(STR_HIDE_READER_STATUS_BAR) : tr(STR_SHOW_READER_STATUS_BAR);
+}
+
+void ReaderActivity::runXuesuQuickAction() {
+  {
+    RenderLock lock(*this);
+    const bool hide = isReaderStatusBarVisible();
+    if (!hide) {
+      const auto spec = SETTINGS.statusBarSpec();
+      if (!spec.textLaneVisible() && !spec.showsProgressBar()) SETTINGS.statusBarChapterPageCount = 1;
+    }
+
+    if (FsHelpers::hasXtcExtension(bookPath)) {
+      if (hide) {
+        SETTINGS.xuesuXtcStatusBarRestoreTop = SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_TOP;
+        SETTINGS.xtcStatusBarMode = CrossPointSettings::XTC_STATUS_BAR_HIDE;
+      } else if (SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_HIDE) {
+        SETTINGS.xtcStatusBarMode = SETTINGS.xuesuXtcStatusBarRestoreTop ? CrossPointSettings::XTC_STATUS_BAR_TOP
+                                                                         : CrossPointSettings::XTC_STATUS_BAR_BOTTOM;
+      }
+    } else {
+      SETTINGS.xuesuReaderStatusBarHidden = hide;
+      onStatusBarVisibilityChanged();
+    }
+  }
+  SETTINGS.saveToFile();
+  requestUpdate();
+}
+#endif
