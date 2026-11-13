@@ -1,12 +1,32 @@
 // EPUB optimizer for the File Manager: repairs EPUB metadata and re-encodes,
 // splits, crops and rotates images. FilesPage.html loads it on demand, after
-// JSZip; it reads that page's top-level conversion settings (JPEG_QUALITY,
+// zip.js; it reads that page's top-level conversion settings (JPEG_QUALITY,
 // MAX_WIDTH, HANDEDNESS, imageStates, ...) and log helpers.
 
 // ═══════════════════════════════════════════════════════════════════
 // EPUB Utilities — ported from EPUB Optimizer Pro
 // MIT. Original code by zgredex. See licenses/borrowed-code.txt.
 // ═══════════════════════════════════════════════════════════════════
+
+const EPUB_IMAGE = /\.(png|gif|webp|bmp|jpe?g)$/i;
+const EPUB_HTML = /\.(xhtml|html|htm)$/i;
+const EPUB_MIME = 'application/epub+zip';
+
+async function openEpub(file) {
+  const reader = new zip.ZipReader(new zip.BlobReader(file));
+  try {
+    const entries = await reader.getEntries();
+    const files = new Map(entries.filter(entry => !entry.directory).map(entry => [entry.filename, entry]));
+    return { reader, files };
+  } catch (error) {
+    await reader.close();
+    throw error;
+  }
+}
+
+function readEpubEntry(entry, signal) {
+  return entry.getData(new zip.BlobWriter(), { signal, checkSignature: true });
+}
 
 /** Defensive CSS injected into every XHTML <head> — prevents e-ink overflow. */
 const DEFENSIVE_STYLE = '<style type="text/css">img,svg{max-width:100%;height:auto}body{overflow-wrap:break-word}table{max-width:100%;table-layout:fixed}pre,code{white-space:pre-wrap;word-wrap:break-word}*{box-sizing:border-box}</style>';
@@ -16,7 +36,6 @@ function xmlEscape(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function escapeRegex(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 /**
  * Decode a URI-encoded href (e.g., "my%20image.jpg" → "my image.jpg").
@@ -31,8 +50,8 @@ function decodeHref(href) {
  * Safely read a text file from the zip, handling BOM and encoding.
  * Strips UTF-8 BOM. Detects encoding from XML declaration or meta tag.
  */
-async function safeReadText(fileObj) {
-  const raw = await fileObj.async('uint8array');
+async function safeReadText(entry, signal) {
+  const raw = new Uint8Array(await (await readEpubEntry(entry, signal)).arrayBuffer());
 
   // Detect and strip UTF-8 BOM (EF BB BF)
   let offset = 0;
@@ -64,18 +83,16 @@ async function safeReadText(fileObj) {
  * Find the canonical OPF path by parsing META-INF/container.xml.
  * Falls back to scanning for any .opf file.
  */
-async function findOPFPath(zip) {
-  try {
-    const containerPath = Object.keys(zip.files).find(p => p.toLowerCase() === 'meta-inf/container.xml');
-    if (containerPath) {
-      const containerXml = await zip.files[containerPath].async('string');
-      const match = containerXml.match(/<rootfile[^>]+full-path=["']([^"']+)["']/i);
-      if (match && zip.files[match[1]]) return match[1];
+async function findOPFPath(files, signal) {
+  const containerPath = [...files.keys()].find(path => path.toLowerCase() === 'meta-inf/container.xml');
+  if (containerPath) {
+    const doc = new DOMParser().parseFromString(await safeReadText(files.get(containerPath), signal), 'application/xml');
+    for (const rootfile of doc.getElementsByTagNameNS('*', 'rootfile')) {
+      const path = rootfile.getAttribute('full-path');
+      if (files.has(path)) return path;
     }
-  } catch (e) { /* fall through */ }
-  let fallback = null;
-  zip.forEach(p => { if (!fallback && p.toLowerCase().endsWith('.opf')) fallback = p; });
-  return fallback;
+  }
+  return [...files.keys()].find(path => (/\.opf$/i.test(path)));
 }
 
 function sanitizeMetadataFilenamePart(value) {
@@ -98,12 +115,15 @@ function buildMetadataFilename(title, author) {
 }
 
 async function getMetadataFilenameForEpub(file) {
-  if (typeof JSZip === 'undefined') return '';
-  const zip = await JSZip.loadAsync(file);
-  const opfPath = await findOPFPath(zip);
-  if (!opfPath || !zip.files[opfPath]) return '';
-
-  const doc = new DOMParser().parseFromString(await safeReadText(zip.files[opfPath]), 'application/xml');
+  const { reader, files } = await openEpub(file);
+  let doc;
+  try {
+    const opfPath = await findOPFPath(files);
+    if (!opfPath) return '';
+    doc = new DOMParser().parseFromString(await safeReadText(files.get(opfPath)), 'application/xml');
+  } finally {
+    await reader.close();
+  }
   if (doc.querySelector('parsererror')) return '';
 
   const title = doc.getElementsByTagNameNS('*', 'title')[0]?.textContent || '';
@@ -141,6 +161,89 @@ function resolvePath(basePath, href) {
   }
   const resolved = [...baseParts, ...hrefParts].join('/');
   return resolved.replace(/\/+/g, '/');
+}
+
+function resolveEpubReference(basePath, href) {
+  const path = href.split(/[?#]/, 1)[0];
+  if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)) return '';
+  return resolvePath(basePath, decodeHref(path));
+}
+
+function relativeEpubPath(basePath, path) {
+  const base = basePath.split('/').slice(0, -1);
+  const target = path.split('/');
+  let shared = 0;
+  while (shared < base.length && shared < target.length && base[shared] === target[shared]) shared++;
+  return '../'.repeat(base.length - shared) + target.slice(shared).map(encodeURIComponent).join('/');
+}
+
+function epubPackageInfo(opfPath, opfContent) {
+  const doc = new DOMParser().parseFromString(opfContent, 'application/xml');
+  const items = [...doc.getElementsByTagNameNS('*', 'item')];
+  const paths = new Map(items.map(item => [
+    item.getAttribute('id'), resolveEpubReference(opfPath, item.getAttribute('href') || ''),
+  ]));
+  const spine = [...doc.getElementsByTagNameNS('*', 'itemref')].map(ref => paths.get(ref.getAttribute('idref')));
+  const coverId = items.find(item => item.getAttribute('properties')?.split(/\s+/).includes('cover-image'))?.getAttribute('id')
+    || [...doc.getElementsByTagNameNS('*', 'meta')].find(meta => meta.getAttribute('name') === 'cover')?.getAttribute('content');
+  const coverRef = [...doc.getElementsByTagNameNS('*', 'reference')].find(ref => ref.getAttribute('type') === 'cover');
+  const coverPage = coverRef ? resolveEpubReference(opfPath, coverRef.getAttribute('href') || '') : spine[0];
+  return { coverPath: paths.get(coverId), coverPage, spine };
+}
+
+function epubPageImagePaths(path, source) {
+  const doc = new DOMParser().parseFromString(source, 'application/xhtml+xml');
+  if (doc.querySelector('parsererror')) {
+    return [...source.matchAll(/(?:src|xlink:href)=["']([^"']+)["']/gi)]
+      .map(match => resolveEpubReference(path, match[1]));
+  }
+  return [...doc.querySelectorAll('img, image')].map(node => resolveEpubReference(path,
+    node.getAttribute('src') || node.getAttribute('xlink:href') || node.getAttribute('href') || ''));
+}
+
+async function findEpubCoverPaths(files, opfPath, opfContent, signal, info) {
+  if (!opfPath) return new Set();
+  const { coverPath, coverPage } = info || epubPackageInfo(opfPath, opfContent);
+  const cover = files.get(coverPath);
+  if (!cover) return new Set();
+  const result = new Set([coverPath]);
+  if (files.has(coverPage)) {
+    const html = await safeReadText(files.get(coverPage), signal);
+    for (const path of epubPageImagePaths(coverPage, html)) {
+      const entry = files.get(path);
+      // Compare ZIP checksums and sizes without decoding the cover images.
+      if (entry?.signature === cover.signature && entry.uncompressedSize === cover.uncompressedSize) result.add(path);
+    }
+  }
+  return result;
+}
+
+function isEpubCover(path, covers) {
+  return covers.has(path) || (covers.size === 0 && /(^|\/)cover[^/]*$/i.test(path));
+}
+
+async function listEpubImages(files, signal) {
+  const paths = [...files.keys()].filter(path => EPUB_IMAGE.test(path));
+  const available = new Set(paths);
+  const ordered = new Set();
+  const opfPath = await findOPFPath(files, signal);
+  let covers = new Set();
+  if (opfPath) {
+    const opf = await safeReadText(files.get(opfPath), signal);
+    const info = epubPackageInfo(opfPath, opf);
+    covers = await findEpubCoverPaths(files, opfPath, opf, signal, info);
+    for (const path of info.spine) {
+      signal.throwIfAborted();
+      if (available.has(path)) ordered.add(path);
+      if (!path || !files.has(path) || !EPUB_HTML.test(path)) continue;
+      const source = await safeReadText(files.get(path), signal);
+      for (const image of epubPageImagePaths(path, source)) {
+        if (available.has(image)) ordered.add(image);
+      }
+    }
+  }
+  for (const path of ordered.size ? paths : paths.sort()) ordered.add(path);
+  return [...ordered].map(path => ({ path, name: path.split('/').pop(), isCover: isEpubCover(path, covers) }));
 }
 
 /** Remove XML comments from XHTML source text. Returns {text, count, bytes}. */
@@ -285,9 +388,9 @@ const FONT_MEDIA_TYPE_REGEX = /^(font\/|application\/font-|application\/x-font-|
 
 // Returns a Set of zip-root-relative paths of embedded font files, detected by
 // file extension and by OPF manifest media-type (catches odd extensions).
-function collectFontPaths(zip, opfContent, opfPath) {
+function collectFontPaths(files, opfContent, opfPath) {
   const fontPaths = new Set();
-  zip.forEach(p => { if (FONT_EXT_REGEX.test(p.toLowerCase())) fontPaths.add(p); });
+  for (const path of files.keys()) if (FONT_EXT_REGEX.test(path.toLowerCase())) fontPaths.add(path);
 
   if (opfContent && opfPath) {
     try {
@@ -298,7 +401,7 @@ function collectFontPaths(zip, opfContent, opfPath) {
           const href = item.getAttribute('href') || '';
           if (href && FONT_MEDIA_TYPE_REGEX.test(type)) {
             const resolved = resolvePath(opfPath, decodeHref(href));
-            if (zip.files[resolved]) fontPaths.add(resolved);
+            if (files.has(resolved)) fontPaths.add(resolved);
           }
         }
       }
@@ -344,114 +447,45 @@ function stripFontEncryptionEntries(xmlText, fontPaths) {
   }
 }
 
-/**
- * Fix OPF content: fix media-types, strip svg properties,
- * update split image manifest entries, remove stripped font
- * entries, ensure cover meta. DOMParser with regex fallback.
- */
-function fixOPF(opfText, opfOriginal, opfDir, splitImages = {}, fontPaths = null) {
-  let t = opfText;
+function fixOPF(opfContent, opfPath, renamed, splitImages, fontPaths) {
+  const doc = new DOMParser().parseFromString(opfContent, 'application/xml');
+  const items = [...doc.getElementsByTagNameNS('*', 'item')];
+  const manifest = doc.getElementsByTagNameNS('*', 'manifest')[0];
+  const ids = new Set(items.map(item => item.getAttribute('id')));
+  let nextId = 1;
 
-  try {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(t, 'application/xml');
-    if (doc.querySelector('parsererror')) throw new Error('OPF parse failed');
-
-    const items = [...doc.getElementsByTagNameNS('*', 'item')];
-    const manifestEl = doc.getElementsByTagNameNS('*', 'manifest')[0];
-
-    // Fix media-types for converted images
-    for (const item of items) {
-      const href = item.getAttribute('href') || '';
-      const type = item.getAttribute('media-type') || '';
-      if (href.endsWith('.jpg') && type.match(/^image\/(png|gif|webp|bmp)$/)) {
-        item.setAttribute('media-type', 'image/jpeg');
-      }
+  for (const item of items) {
+    const path = resolveEpubReference(opfPath, item.getAttribute('href') || '');
+    if (fontPaths.has(path)) {
+      item.remove();
+      continue;
     }
 
-    // Remove 'svg' from properties
-    for (const item of items) {
-      const props = item.getAttribute('properties') || '';
-      if (props.includes('svg')) {
-        const newProps = props.split(/\s+/).filter(p => p !== 'svg').join(' ').trim();
-        if (newProps) item.setAttribute('properties', newProps);
-        else item.removeAttribute('properties');
-      }
+    const parts = splitImages[path];
+    const outputPath = parts?.[0] || renamed[path];
+    if (outputPath) {
+      item.setAttribute('href', relativeEpubPath(opfPath, outputPath));
+      item.setAttribute('media-type', 'image/jpeg');
     }
 
-    // Remove manifest entries for stripped embedded fonts
-    if (fontPaths && fontPaths.size) {
-      for (const item of items) {
-        const href = decodeHref(item.getAttribute('href') || '');
-        const full = resolvePath((opfDir ? opfDir + '/' : '') + 'x', href);
-        if (fontPaths.has(full)) item.parentNode.removeChild(item);
-      }
-    }
+    const props = item.getAttribute('properties') || '';
+    const updated = props.split(/\s+/).filter(prop => prop && prop !== 'svg').join(' ');
+    if (updated) item.setAttribute('properties', updated);
+    else if (props) item.removeAttribute('properties');
 
-    // Update split image hrefs and add manifest entries for parts
-    for (const [splitKey, splitInfo] of Object.entries(splitImages)) {
-      const parts = splitInfo.parts || splitInfo;
-      let origHref = opfDir && splitKey.startsWith(opfDir + '/') ? splitKey.substring(opfDir.length + 1) : splitKey;
-      const origHrefJpg = origHref.replace(/\.(png|gif|webp|bmp|jpeg)$/i, '.jpg');
-      const part1Href = origHrefJpg.replace(/\.jpg$/i, '_part1.jpg');
-
-      for (const item of items) {
-        const h = item.getAttribute('href') || '';
-        if (h === origHref || h === origHrefJpg || decodeHref(h) === origHref || decodeHref(h) === origHrefJpg) {
-          item.setAttribute('href', part1Href);
-          break;
-        }
-      }
-
-      if (manifestEl) {
-        const ns = manifestEl.namespaceURI || 'http://www.idpf.org/2007/opf';
-        for (let j = 1; j < parts.length; j++) {
-          const p = parts[j];
-          const href = opfDir && p.path.startsWith(opfDir + '/') ? p.path.substring(opfDir.length + 1) : p.path;
-          const newItem = doc.createElementNS(ns, 'item');
-          newItem.setAttribute('id', `img-${p.id}`);
-          newItem.setAttribute('href', href);
-          newItem.setAttribute('media-type', 'image/jpeg');
-          manifestEl.appendChild(newItem);
-        }
-      }
-    }
-
-    t = safeSerialize(doc, opfOriginal);
-  } catch (e) {
-    // Regex fallback
-    t = t.replace(/(<(?:\w+:)?item\b[^>]*href="[^"]+\.jpg"[^>]*)media-type="image\/(png|gif|webp|bmp)"/g, '$1media-type="image/jpeg"');
-    t = t.replace(/(<(?:\w+:)?item\b[^>]*)media-type="image\/(png|gif|webp|bmp)"([^>]*href="[^"]+\.jpg")/g, '$1media-type="image/jpeg"$3');
-    t = t.replace(/\s+svg(?=["'\s>])/g, '');
-    if (fontPaths && fontPaths.size) {
-      for (const p of fontPaths) {
-        const href = opfDir && p.startsWith(opfDir + '/') ? p.substring(opfDir.length + 1) : p;
-        const itemRegex = new RegExp(`<(?:\\w+:)?item\\b[^>]*href=["']${escapeRegex(href)}["'][^>]*\\/?>\\s*`, 'gi');
-        t = t.replace(itemRegex, '');
-      }
-    }
-    for (const [splitKey, splitInfo] of Object.entries(splitImages)) {
-      const parts = splitInfo.parts || splitInfo;
-      let origHref = opfDir && splitKey.startsWith(opfDir + '/') ? splitKey.substring(opfDir.length + 1) : splitKey;
-      const origHrefJpg = origHref.replace(/\.(png|gif|webp|bmp|jpeg)$/i, '.jpg');
-      const part1Href = origHrefJpg.replace(/\.jpg$/i, '_part1.jpg');
-      const origImgRegex = new RegExp(`(href=["'])(${escapeRegex(origHref)}|${escapeRegex(origHrefJpg)})(["'])`, 'gi');
-      t = t.replace(origImgRegex, `$1${part1Href}$3`);
-      let adds = '';
-      for (let j = 1; j < parts.length; j++) {
-        const p = parts[j];
-        const href = opfDir && p.path.startsWith(opfDir + '/') ? p.path.substring(opfDir.length + 1) : p.path;
-        adds += `<item id="img-${xmlEscape(p.id)}" href="${xmlEscape(href)}" media-type="image/jpeg"/>\n`;
-      }
-      if (adds && t.includes('</manifest>')) t = t.replace('</manifest>', adds + '</manifest>');
+    if (!parts || !manifest) continue;
+    for (const part of parts.slice(1)) {
+      while (ids.has(`img-part-${nextId}`)) nextId++;
+      const newItem = doc.createElementNS(manifest.namespaceURI, 'item');
+      newItem.setAttribute('id', `img-part-${nextId++}`);
+      newItem.setAttribute('href', relativeEpubPath(opfPath, part));
+      newItem.setAttribute('media-type', 'image/jpeg');
+      manifest.appendChild(newItem);
     }
   }
 
-  // Ensure cover meta
-  const cm = ensureCoverMeta(t);
-  if (cm.fixed) t = cm.o;
-
-  return t;
+  const serialized = safeSerialize(doc, opfContent);
+  return ensureCoverMeta(serialized).o;
 }
 
 // Fix SVG cover - converts SVG-wrapped covers to plain HTML img tags
@@ -684,9 +718,8 @@ function applyGrayscale(ctx, width, height) {
   ctx.putImageData(imageData, 0, 0);
 }
 
-function shouldSkipAutoCrop(imagePath, width, height, ignoreToggle = false) {
-  if (!ignoreToggle && !ENABLE_AUTO_CROP) return true;
-  if (autoCropProtectedPaths.has(imagePath)) return true;
+function shouldSkipAutoCrop(imagePath, width, height) {
+  if (!ENABLE_AUTO_CROP) return true;
   if (width < MIN_CROP_DIMENSION || height < MIN_CROP_DIMENSION) return true;
   return /(^|\/)(cover|thumbnail|thumb|icon)[^/]*\.(jpe?g|png|gif|webp|bmp)$/i.test(imagePath || '');
 }
@@ -765,7 +798,7 @@ function isNearWhiteBackground(background) {
          background.b >= CROP_WHITE_THRESHOLD;
 }
 
-function findNonWhiteBounds(ctx, width, height) {
+function findNonWhiteBounds(ctx, width, height, padding = CROP_PADDING_PX) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
   const background = estimateCropBackground(data, width, height);
@@ -788,10 +821,10 @@ function findNonWhiteBounds(ctx, width, height) {
 
   if (right < left || bottom < top) return null;
 
-  left = Math.max(0, left - CROP_PADDING_PX);
-  top = Math.max(0, top - CROP_PADDING_PX);
-  right = Math.min(width - 1, right + CROP_PADDING_PX);
-  bottom = Math.min(height - 1, bottom + CROP_PADDING_PX);
+  left = Math.max(0, left - padding);
+  top = Math.max(0, top - padding);
+  right = Math.min(width - 1, right + padding);
+  bottom = Math.min(height - 1, bottom + padding);
 
   const cropW = right - left + 1;
   const cropH = bottom - top + 1;
@@ -805,7 +838,8 @@ function findNonWhiteBounds(ctx, width, height) {
   return { x: left, y: top, width: cropW, height: cropH };
 }
 
-function createAutoCroppedCanvas(img, imagePath, width, height, ignoreToggle = false) {
+function createAutoCroppedCanvas(img, imagePath, width, height, locked) {
+  if (locked || shouldSkipAutoCrop(imagePath, width, height)) return { canvas: img, width, height };
   // Build a white-backed source canvas, detect the uniform page/background color
   // from its edges, crop to pixels that differ from that background, then let the
   // normal resize/rotate/split pipeline fit that cropped content to the device.
@@ -818,10 +852,6 @@ function createAutoCroppedCanvas(img, imagePath, width, height, ignoreToggle = f
   sourceCtx.fillStyle = '#FFF';
   sourceCtx.fillRect(0, 0, width, height);
   sourceCtx.drawImage(img, 0, 0);
-
-  if (shouldSkipAutoCrop(imagePath, width, height, ignoreToggle)) {
-    return { canvas: sourceCanvas, width, height };
-  }
 
   const crop = findNonWhiteBounds(sourceCtx, width, height);
   if (!crop) {
@@ -836,527 +866,525 @@ function createAutoCroppedCanvas(img, imagePath, width, height, ignoreToggle = f
   croppedCtx.fillRect(0, 0, crop.width, crop.height);
   croppedCtx.drawImage(sourceCanvas, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
 
+  sourceCanvas.width = sourceCanvas.height = 0;
   return { canvas: croppedCanvas, width: crop.width, height: crop.height, crop };
 }
 
-// Process single image - returns array of {data, suffix} objects
-const IMAGE_LOAD_TIMEOUT_MS = 30000; // 30 second timeout for image loading
-async function processImage(data, imageState = 0, imagePath = '') {
+const IMAGE_LOAD_TIMEOUT_MS = 30000;
+
+function isEpubSeparator(img, path) {
+  const width = img.naturalWidth, height = img.naturalHeight;
+  if (width < 200 && height < 200) return true;
+  if (width >= 150 && height >= 150) return false;
+  if (/separator|divider|ornament|break|flourish|scene|divid|decor/i.test(path.split('/').pop())) return true;
+  const ratio = width / height;
+  if (ratio > 10 || ratio < 0.1 || width < 10 || height < 10) return true;
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 100 / Math.max(width, height));
+  const w = canvas.width = Math.max(2, Math.round(width * scale));
+  const h = canvas.height = Math.max(1, Math.round(height * scale));
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    const { data } = ctx.getImageData(0, 0, w, h);
+    const half = Math.floor(w / 2);
+    let matches = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < half; x++) {
+        const a = (y * w + x) * 4, b = (y * w + w - 1 - x) * 4;
+        if (Math.abs(data[a] - data[b]) < 30 && Math.abs(data[a + 1] - data[b + 1]) < 30 &&
+            Math.abs(data[a + 2] - data[b + 2]) < 30) matches++;
+      }
+    }
+    return matches >= 0.85 * half * h;
+  } finally {
+    canvas.width = canvas.height = 0;
+  }
+}
+
+function epubSplitCount(width) {
+  if (width <= MAX_WIDTH) return 1;
+  const overlap = Math.round(MAX_WIDTH * OVERLAP_PERCENT / 100);
+  return Math.max(2, Math.ceil((width - overlap) / (MAX_WIDTH - overlap)));
+}
+
+function makeEpubPreview(img, image) {
+  const width = img.naturalWidth, height = img.naturalHeight;
+  const isSeparator = !image.isCover && isEpubSeparator(img, image.path);
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 220 / width, 160 / height);
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+    // Estimate the crop on the thumbnail. Conversion checks the original image.
+    const crop = image.isCover || isSeparator || Math.min(width, height) < MIN_CROP_DIMENSION
+      ? null : findNonWhiteBounds(ctx, canvas.width, canvas.height, Math.max(1, Math.round(CROP_PADDING_PX * scale)));
+    let cropPreview;
+    if (crop) {
+      const thumb = document.createElement('canvas');
+      thumb.width = crop.width;
+      thumb.height = crop.height;
+      thumb.getContext('2d').drawImage(canvas, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
+      cropPreview = {
+        dataUrl: thumb.toDataURL('image/jpeg', 0.82),
+        width: Math.round(crop.width * width / canvas.width),
+        height: Math.round(crop.height * height / canvas.height),
+      };
+      thumb.width = thumb.height = 0;
+    }
+    return { width, height, isSeparator, dataUrl, cropPreview };
+  } finally {
+    canvas.width = canvas.height = 0;
+  }
+}
+
+async function withEpubImage(blob, signal, useImage) {
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  let timer;
+  let abort;
+  try {
+    await new Promise((resolve, reject) => {
+      abort = () => reject(signal.reason);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) return abort();
+      timer = setTimeout(() => reject(new Error('Image load timeout')), IMAGE_LOAD_TIMEOUT_MS);
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = url;
+    });
+    signal?.throwIfAborted();
+    return await useImage(img);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+    img.onload = img.onerror = null;
+    img.removeAttribute('src');
+    URL.revokeObjectURL(url);
+  }
+}
+
+function encodeEpubJpeg(canvas) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([data]));
-    const img = new Image();
-    const origSize = data.byteLength;
-    // Set up timeout to handle cases where image never loads
-    const timeoutId = setTimeout(() => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Image load timeout'));
-    }, IMAGE_LOAD_TIMEOUT_MS);
-
-    img.onload = async () => {
-      clearTimeout(timeoutId);
-      URL.revokeObjectURL(url);
-      const origW = img.width, origH = img.height;
-      const source = createAutoCroppedCanvas(img, imagePath, origW, origH);
-      const sourceCanvas = source.canvas;
-      const sourceW = source.width;
-      const sourceH = source.height;
-      const sourceWasCropped = !!source.crop;
-
-      // imageState: 0=Normal, 1=H-Split (CW/CCW), 2=V-Split, 3=Rotate & Fit
-      // ========================================================================
-      // STATE 1: H-Split (Rotate + Split) - EXACT COPY FROM index.html
-      // Step 1: Scale WIDTH to 800px (keep aspect ratio)
-      // Step 2: Rotate 90° CW or CCW based on HANDEDNESS
-      // Step 3: If WIDTH > 480, split vertically with overlap
-      // ========================================================================
-      if (imageState === 1) {
-        // Step 1: Scale WIDTH to 800 (this is the key difference!)
-        const scale = MAX_HEIGHT / sourceW;  // 800 / sourceW
-        const scaledW = MAX_HEIGHT;  // 800
-        const scaledH = Math.round(sourceH * scale);
-
-        const scaledCanvas = document.createElement('canvas');
-        scaledCanvas.width = scaledW;
-        scaledCanvas.height = scaledH;
-        const scaledCtx = scaledCanvas.getContext('2d');
-        scaledCtx.imageSmoothingEnabled = true;
-        scaledCtx.imageSmoothingQuality = 'high';
-        scaledCtx.fillStyle = '#FFF';
-        scaledCtx.fillRect(0, 0, scaledW, scaledH);
-        scaledCtx.drawImage(sourceCanvas, 0, 0, sourceW, sourceH, 0, 0, scaledW, scaledH);
-
-        // Step 2: Rotate 90° CW or CCW
-        const rotW = scaledH;
-        const rotH = scaledW;  // 800
-
-        const rotCanvas = document.createElement('canvas');
-        rotCanvas.width = rotW;
-        rotCanvas.height = rotH;
-        const rotCtx = rotCanvas.getContext('2d');
-        rotCtx.fillStyle = '#FFF';
-        rotCtx.fillRect(0, 0, rotW, rotH);
-
-        const isClockwise = HANDEDNESS === 'right';
-        if (isClockwise) {
-          // Rotate 90° CW
-          rotCtx.translate(rotW, 0);
-          rotCtx.rotate(Math.PI / 2);
-        } else {
-          // Rotate 90° CCW
-          rotCtx.translate(0, rotH);
-          rotCtx.rotate(-Math.PI / 2);
-        }
-        rotCtx.drawImage(scaledCanvas, 0, 0);
-        rotCtx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
-        applyGrayscale(rotCtx, rotW, rotH);
-
-        // Step 3: If WIDTH > 480, split vertically
-        if (rotW <= MAX_WIDTH) {
-          const blob = await new Promise(res => rotCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: rotW, height: rotH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: rotW, finalH: rotH, finalSize: arrBuf.byteLength, imageState: 1 }
-          });
-        } else {
-          // Split by WIDTH (vertical cuts) - from RIGHT to LEFT for CW, LEFT to RIGHT for CCW
-          const parts = [];
-          const maxW = MAX_WIDTH;  // 480
-
-          // Centered distribution: calculate numParts first, then distribute evenly
-          let overlapPx, step, numParts;
-          const minOverlapPx = Math.round(maxW * (OVERLAP_PERCENT / 100));  // Configurable overlap
-          const maxStep = maxW - minOverlapPx;
-          numParts = Math.ceil((rotW - minOverlapPx) / maxStep);
-          if (numParts < 2) numParts = 2;
-          // Now calculate step to distribute evenly
-          step = Math.round((rotW - maxW) / (numParts - 1));
-          overlapPx = maxW - step;
-          // Ensure minimum overlap
-          if (overlapPx < minOverlapPx) {
-            overlapPx = minOverlapPx;
-            step = maxW - overlapPx;
-          }
-
-          // Calculate all x positions first to ensure consistency
-          const positions = [];
-          for (let i = 0; i < numParts; i++) {
-            let x;
-            if (isClockwise) {
-              // CW: right to left - start from right edge
-              x = rotW - maxW - (i * step);
-            } else {
-              // CCW: left to right - start from left edge
-              x = i * step;
-            }
-            // Clamp to valid range
-            x = Math.max(0, Math.min(x, rotW - maxW));
-            positions.push(x);
-          }
-
-          // Ensure first and last positions are at edges
-          if (isClockwise) {
-            positions[0] = rotW - maxW; // First part at right edge
-            positions[numParts - 1] = 0; // Last part at left edge
-          } else {
-            positions[0] = 0; // First part at left edge
-            positions[numParts - 1] = rotW - maxW; // Last part at right edge
-          }
-
-          for (let i = 0; i < numParts; i++) {
-            const x = positions[i];
-            const partW = maxW; // Always full width for consistency
-
-            const partCanvas = document.createElement('canvas');
-            partCanvas.width = partW;
-            partCanvas.height = rotH;
-            const partCtx = partCanvas.getContext('2d');
-            // Clear canvas first
-            partCtx.fillStyle = '#FFFFFF';
-            partCtx.fillRect(0, 0, partW, rotH);
-            // Draw the slice
-            partCtx.drawImage(rotCanvas, x, 0, partW, rotH, 0, 0, partW, rotH);
-
-            const blob = await new Promise(res => partCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-            const arrBuf = await blob.arrayBuffer();
-            parts.push({ data: arrBuf, suffix: `_part${i + 1}`, width: partW, height: rotH, size: arrBuf.byteLength });
-          }
-
-          const totalSize = parts.reduce((sum, p) => sum + p.size, 0);
-          resolve({
-            parts,
-            meta: { origW, origH, origSize, wasSplit: true, splitCount: numParts, rotated: true, finalW: parts[0].width, finalH: parts[0].height, finalSize: totalSize, imageState: 1 }
-          });
-        }
-      }
-      // ========================================================================
-      // STATE 2: V-Split (Vertical Split, no rotation)
-      // Step 1: Scale HEIGHT to 800px (up or down)
-      // Step 2: If WIDTH > 480, split vertically with overlap
-      // ========================================================================
-      else if (imageState === 2) {
-        // ALWAYS scale height to 800 (up or down)
-        const scale = MAX_HEIGHT / sourceH;  // 800 / sourceH
-        const scaledW = Math.round(sourceW * scale);
-        const scaledH = MAX_HEIGHT;  // Always 800
-
-        const scaledCanvas = document.createElement('canvas');
-        scaledCanvas.width = scaledW;
-        scaledCanvas.height = scaledH;
-        const scaledCtx = scaledCanvas.getContext('2d');
-        scaledCtx.imageSmoothingEnabled = true;
-        scaledCtx.imageSmoothingQuality = 'high';
-        scaledCtx.fillStyle = '#FFF';
-        scaledCtx.fillRect(0, 0, scaledW, scaledH);
-        scaledCtx.drawImage(sourceCanvas, 0, 0, sourceW, sourceH, 0, 0, scaledW, scaledH);
-        applyGrayscale(scaledCtx, scaledW, scaledH);
-
-        // Check if split needed
-        if (scaledW <= MAX_WIDTH) {
-          const blob = await new Promise(res => scaledCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: scaledW, height: scaledH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: scaledW, finalH: scaledH, finalSize: arrBuf.byteLength, imageState: 2 }
-          });
-        } else {
-          // Split by WIDTH (vertical cuts) - LEFT to RIGHT (natural reading order)
-          const parts = [];
-          const maxW = MAX_WIDTH;
-
-          // Centered distribution: calculate numParts first, then distribute evenly
-          let overlapPx, step, numParts;
-          const minOverlapPx = Math.round(maxW * (OVERLAP_PERCENT / 100));  // Configurable overlap
-          const maxStep = maxW - minOverlapPx;
-          numParts = Math.ceil((scaledW - minOverlapPx) / maxStep);
-          if (numParts < 2) numParts = 2;
-          // Now calculate step to distribute evenly
-          step = Math.round((scaledW - maxW) / (numParts - 1));
-          overlapPx = maxW - step;
-          // Ensure minimum overlap
-          if (overlapPx < minOverlapPx) {
-            overlapPx = minOverlapPx;
-            step = maxW - overlapPx;
-          }
-
-          // Calculate all x positions first to ensure consistency
-          const positions = [];
-          for (let i = 0; i < numParts; i++) {
-            let x = i * step;
-            // Clamp to valid range
-            x = Math.max(0, Math.min(x, scaledW - maxW));
-            positions.push(x);
-          }
-          // Ensure last position is at right edge
-          positions[0] = 0;
-          positions[numParts - 1] = scaledW - maxW;
-
-          for (let i = 0; i < numParts; i++) {
-            const x = positions[i];
-            const partW = maxW; // Always full width for consistency
-
-            const partCanvas = document.createElement('canvas');
-            partCanvas.width = partW;
-            partCanvas.height = scaledH;
-            const partCtx = partCanvas.getContext('2d');
-            // Clear canvas first
-            partCtx.fillStyle = '#FFFFFF';
-            partCtx.fillRect(0, 0, partW, scaledH);
-            // Draw the slice
-            partCtx.drawImage(scaledCanvas, x, 0, partW, scaledH, 0, 0, partW, scaledH);
-
-            const blob = await new Promise(res => partCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-            const arrBuf = await blob.arrayBuffer();
-            parts.push({ data: arrBuf, suffix: `_part${i + 1}`, width: partW, height: scaledH, size: arrBuf.byteLength });
-          }
-
-          const totalSize = parts.reduce((sum, p) => sum + p.size, 0);
-          resolve({
-            parts,
-            meta: { origW, origH, origSize, wasSplit: true, splitCount: numParts, rotated: false, finalW: parts[0].width, finalH: parts[0].height, finalSize: totalSize, imageState: 2 }
-          });
-        }
-      }
-      // ========================================================================
-      // STATE 3: Rotate & Fit (Rotate 90°, then scale to fit 480x800, no split)
-      // ========================================================================
-      else if (imageState === 3) {
-        // Step 1: Rotate 90° based on handedness
-        const rotW = sourceH;
-        const rotH = sourceW;
-
-        const rotCanvas = document.createElement('canvas');
-        rotCanvas.width = rotW;
-        rotCanvas.height = rotH;
-        const rotCtx = rotCanvas.getContext('2d');
-        rotCtx.fillStyle = '#FFF';
-        rotCtx.fillRect(0, 0, rotW, rotH);
-
-        const isClockwise = HANDEDNESS === 'right';
-        if (isClockwise) {
-          rotCtx.translate(rotW, 0);
-          rotCtx.rotate(Math.PI / 2);
-        } else {
-          rotCtx.translate(0, rotH);
-          rotCtx.rotate(-Math.PI / 2);
-        }
-        rotCtx.drawImage(sourceCanvas, 0, 0);
-        rotCtx.setTransform(1, 0, 0, 1, 0, 0);
-
-        // Step 2: Scale to fit 480x800 (if needed)
-        const fitsInScreen = rotW <= MAX_WIDTH && rotH <= MAX_HEIGHT;
-
-        if (fitsInScreen && !sourceWasCropped) {
-          // Already fits after rotation - just apply grayscale
-          applyGrayscale(rotCtx, rotW, rotH);
-          const blob = await new Promise(res => rotCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: rotW, height: rotH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: rotW, finalH: rotH, finalSize: arrBuf.byteLength, imageState: 3 }
-          });
-        } else {
-          // Scale to fit 480x800
-          const scale = Math.min(MAX_WIDTH / rotW, MAX_HEIGHT / rotH);
-          const newW = Math.round(rotW * scale);
-          const newH = Math.round(rotH * scale);
-
-          const scaledCanvas = document.createElement('canvas');
-          scaledCanvas.width = newW;
-          scaledCanvas.height = newH;
-          const scaledCtx = scaledCanvas.getContext('2d');
-          scaledCtx.imageSmoothingEnabled = true;
-          scaledCtx.imageSmoothingQuality = 'high';
-          scaledCtx.fillStyle = '#FFF';
-          scaledCtx.fillRect(0, 0, newW, newH);
-          scaledCtx.drawImage(rotCanvas, 0, 0, newW, newH);
-          applyGrayscale(scaledCtx, newW, newH);
-
-          const blob = await new Promise(res => scaledCanvas.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: newW, finalH: newH, finalSize: arrBuf.byteLength, imageState: 3 }
-          });
-        }
-      }
-      // ========================================================================
-      // STATE 0: Normal processing (scale to fit, no split/rotation)
-      // ========================================================================
-      else {
-        // Normal processing: check if scaling is needed
-        const fitsInScreen = sourceW <= MAX_WIDTH && sourceH <= MAX_HEIGHT;
-
-        if (fitsInScreen && !sourceWasCropped) {
-          // Image already fits - just convert to JPEG with grayscale
-          const c = document.createElement('canvas');
-          c.width = sourceW;
-          c.height = sourceH;
-          const ctx = c.getContext('2d');
-          ctx.fillStyle = '#FFF';
-          ctx.fillRect(0, 0, sourceW, sourceH);
-          ctx.drawImage(sourceCanvas, 0, 0);
-          applyGrayscale(ctx, sourceW, sourceH);
-
-          const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: sourceW, height: sourceH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: sourceW, finalH: sourceH, finalSize: arrBuf.byteLength, imageState: 0 }
-          });
-        } else {
-          // Scale to fit 480x800
-          const scale = Math.min(MAX_WIDTH / sourceW, MAX_HEIGHT / sourceH);
-          const newW = Math.round(sourceW * scale);
-          const newH = Math.round(sourceH * scale);
-
-          const c = document.createElement('canvas');
-          c.width = newW;
-          c.height = newH;
-          const ctx = c.getContext('2d');
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.fillStyle = '#FFF';
-          ctx.fillRect(0, 0, newW, newH);
-          ctx.drawImage(sourceCanvas, 0, 0, newW, newH);
-          applyGrayscale(ctx, newW, newH);
-
-          const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', JPEG_QUALITY / 100));
-          const arrBuf = await blob.arrayBuffer();
-          resolve({
-            parts: [{ data: arrBuf, suffix: '', width: newW, height: newH, size: arrBuf.byteLength }],
-            meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: newW, finalH: newH, finalSize: arrBuf.byteLength, imageState: 0 }
-          });
-        }
-      }
-    };
-    img.onerror = () => {
-      clearTimeout(timeoutId);
-      URL.revokeObjectURL(url);
-      reject(new Error('Image load failed'));
-    };
-    img.src = url;
+    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('JPEG encoding failed')),
+      'image/jpeg', JPEG_QUALITY / 100);
   });
 }
 
-// Convert EPUB file - returns converted blob
-async function convertEpubFile(file, progressCallback) {
-  const startTime = Date.now();
-  const originalSize = file.size;
-
-  // Initialize logging
-  clearLog();
-  showLog();
-  log(`<strong>${file.name}</strong> <span class="log-detail">(${formatBytes(originalSize)})</span>`, '', 'INFO');
-  log(`Target: ${MAX_WIDTH}×${MAX_HEIGHT} px | Quality: ${JPEG_QUALITY}% | Overlap: ${OVERLAP_PERCENT}% | Rotation: ${HANDEDNESS === 'right' ? 'CW' : 'CCW'} | Grayscale: ${ENABLE_GRAYSCALE ? 'ON' : 'OFF'} | Auto-crop: ${ENABLE_AUTO_CROP ? 'ON' : 'OFF'}`, '', 'INFO');
-
-  const zip = await JSZip.loadAsync(file);
-  const renamed = {};
-  zip.forEach(p => {
-    const l = p.toLowerCase();
-    if (l.match(/\.(png|gif|webp|bmp|jpeg)$/)) {
-      renamed[p] = p.replace(/\.(png|gif|webp|bmp|jpeg)$/i, '.jpg');
-    }
-  });
-
-  const out = new JSZip();
-  const entries = Object.entries(zip.files);
-  const splitImages = {};
-  const xhtmlFiles = {};
-  let opfPath = null, opfContent = null;
-  let mainIdentifier = null;
-
-  // Write mimetype FIRST per EPUB OCF spec
-  if (zip.files['mimetype']) {
-    const mimetypeData = await zip.files['mimetype'].async('arraybuffer');
-    out.file('mimetype', mimetypeData, { compression: 'STORE', createFolders: false });
+async function processImage(img, origSize, imageState, imagePath, signal, locked) {
+  const origW = img.naturalWidth, origH = img.naturalHeight;
+  const source = createAutoCroppedCanvas(img, imagePath, origW, origH, locked);
+  const sourceCanvas = source.canvas;
+  const sourceW = source.width;
+  const sourceH = source.height;
+  const sourceWasCropped = !!source.crop;
+  const canvases = [];
+  if (sourceCanvas !== img) canvases.push(sourceCanvas);
+  function createCanvas() {
+    const canvas = document.createElement('canvas');
+    canvases.push(canvas);
+    return canvas;
   }
 
-  // First pass: process images
-  for (let i = 0; i < entries.length; i++) {
-    if (operationCancelled) throw new Error('Cancelled by user');
-    const [path, fileObj] = entries[i];
-    if (fileObj.dir || path === 'mimetype') continue;
-    const low = path.toLowerCase();
+  try {
+    // imageState: 0=Normal, 1=H-Split (CW/CCW), 2=V-Split, 3=Rotate & Fit
+    // ========================================================================
+    // STATE 1: H-Split (Rotate + Split) - EXACT COPY FROM index.html
+    // Step 1: Scale WIDTH to 800px (keep aspect ratio)
+    // Step 2: Rotate 90° CW or CCW based on HANDEDNESS
+    // Step 3: If WIDTH > 480, split vertically with overlap
+    // ========================================================================
+    if (imageState === 1) {
+      // Step 1: Scale WIDTH to 800 (this is the key difference!)
+      const scale = MAX_HEIGHT / sourceW;  // 800 / sourceW
+      const scaledW = MAX_HEIGHT;  // 800
+      const scaledH = Math.max(1, Math.round(sourceH * scale));
 
-    if (low.match(/\.(png|gif|webp|bmp|jpg|jpeg)$/)) {
-      const data = await fileObj.async('arraybuffer');
-      const imageState = getImageState(path);
+      const scaledCanvas = createCanvas();
+      scaledCanvas.width = scaledW;
+      scaledCanvas.height = scaledH;
+      const scaledCtx = scaledCanvas.getContext('2d');
+      scaledCtx.imageSmoothingEnabled = true;
+      scaledCtx.imageSmoothingQuality = 'high';
+      scaledCtx.fillStyle = '#FFF';
+      scaledCtx.fillRect(0, 0, scaledW, scaledH);
+      scaledCtx.drawImage(sourceCanvas, 0, 0, sourceW, sourceH, 0, 0, scaledW, scaledH);
 
-      let result;
-      try {
-        result = await processImage(data, imageState, path);
-      } catch (imageError) {
-        // Log error but continue with original image
-        console.error(`Failed to process image ${path}:`, imageError);
-        log(`Warning: Failed to process ${path.split('/').pop()}, using original`, 'warning', 'IMG-ERR');
+      // Step 2: Rotate 90° CW or CCW
+      const rotW = scaledH;
+      const rotH = scaledW;  // 800
 
-        // Use original image data as fallback
-        result = {
-          parts: [{
-            data: data,
-            suffix: '',
-            width: 0,
-            height: 0,
-            size: data.byteLength
-          }],
-          meta: {
-            origW: 0,
-            origH: 0,
-            origSize: data.byteLength,
-            wasSplit: false,
-            rotated: false,
-            finalW: 0,
-            finalH: 0,
-            finalSize: data.byteLength,
-            imageState: imageState,
-            processingError: true
-          }
-        };
-      }
+      const rotCanvas = createCanvas();
+      rotCanvas.width = rotW;
+      rotCanvas.height = rotH;
+      const rotCtx = rotCanvas.getContext('2d');
+      rotCtx.fillStyle = '#FFF';
+      rotCtx.fillRect(0, 0, rotW, rotH);
 
-      const parts = result.parts;
-      const meta = result.meta;
-
-      const baseName = path.replace(/\.[^.]+$/, '');
-      const newExt = '.jpg';
-
-      // Log image processing
-      const imgName = path.split('/').pop();
-      const origFormat = path.split('.').pop();
-      logImage(imgName, meta.origW, meta.origH, origFormat, meta.origSize, meta.finalW, meta.finalH, meta.finalSize, meta.wasSplit, meta.splitCount || 0, parts, meta.imageState || 0);
-
-      if (parts.length === 1 && parts[0].suffix === '') {
-        const newPath = renamed[path] || path.replace(/\.[^.]+$/, newExt);
-        out.file(newPath, parts[0].data, { compression: 'STORE', createFolders: false });
+      const isClockwise = HANDEDNESS === 'right';
+      if (isClockwise) {
+        // Rotate 90° CW
+        rotCtx.translate(rotW, 0);
+        rotCtx.rotate(Math.PI / 2);
       } else {
-        // Store with full path for collision prevention, but also keep original filename
-        const origName = path.split('/').pop();
-        const origDir = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
-
-        // Key by full path to avoid collisions
-        splitImages[path] = {
-          origName: origName,
-          origDir: origDir,
-          parts: []
-        };
-
-        for (const part of parts) {
-          const partName = baseName.split('/').pop() + part.suffix + newExt;
-          const partPath = (path.includes('/') ? path.substring(0, path.lastIndexOf('/') + 1) : '') + partName;
-          out.file(partPath, part.data, { compression: 'STORE', createFolders: false });
-          // Store metadata for XHTML/OPF updates
-          splitImages[path].parts.push({
-            path: partPath,
-            imgName: partName,
-            id: baseName.split('/').pop() + part.suffix,
-            suffix: part.suffix
-          });
-        }
+        // Rotate 90° CCW
+        rotCtx.translate(0, rotH);
+        rotCtx.rotate(-Math.PI / 2);
       }
-    } else if (low.match(/\.(xhtml|html|htm)$/)) {
-      xhtmlFiles[path] = await safeReadText(fileObj);
-    } else if (low.endsWith('.opf')) {
-      opfPath = path;
-      opfContent = await safeReadText(fileObj);
+      rotCtx.drawImage(scaledCanvas, 0, 0);
+      rotCtx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
+      applyGrayscale(rotCtx, rotW, rotH);
+
+      // Step 3: If WIDTH > 480, split vertically
+      if (rotW <= MAX_WIDTH) {
+        const blob = await encodeEpubJpeg(rotCanvas);
+        return {
+          parts: [{ data: blob, suffix: '', width: rotW, height: rotH, size: blob.size }],
+          meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: rotW, finalH: rotH, finalSize: blob.size, imageState: 1 }
+        };
+      } else {
+        // Split by WIDTH (vertical cuts) - from RIGHT to LEFT for CW, LEFT to RIGHT for CCW
+        const parts = [];
+        const maxW = MAX_WIDTH;  // 480
+
+        // Centered distribution: calculate numParts first, then distribute evenly
+        let overlapPx, step;
+        const minOverlapPx = Math.round(maxW * (OVERLAP_PERCENT / 100));  // Configurable overlap
+        const numParts = epubSplitCount(rotW);
+        // Now calculate step to distribute evenly
+        step = Math.round((rotW - maxW) / (numParts - 1));
+        overlapPx = maxW - step;
+        // Ensure minimum overlap
+        if (overlapPx < minOverlapPx) {
+          overlapPx = minOverlapPx;
+          step = maxW - overlapPx;
+        }
+
+        // Calculate all x positions first to ensure consistency
+        const positions = [];
+        for (let i = 0; i < numParts; i++) {
+          let x;
+          if (isClockwise) {
+            // CW: right to left - start from right edge
+            x = rotW - maxW - (i * step);
+          } else {
+            // CCW: left to right - start from left edge
+            x = i * step;
+          }
+          // Clamp to valid range
+          x = Math.max(0, Math.min(x, rotW - maxW));
+          positions.push(x);
+        }
+
+        // Ensure first and last positions are at edges
+        if (isClockwise) {
+          positions[0] = rotW - maxW; // First part at right edge
+          positions[numParts - 1] = 0; // Last part at left edge
+        } else {
+          positions[0] = 0; // First part at left edge
+          positions[numParts - 1] = rotW - maxW; // Last part at right edge
+        }
+
+        for (let i = 0; i < numParts; i++) {
+          signal.throwIfAborted();
+          const x = positions[i];
+          const partW = maxW; // Always full width for consistency
+
+          const partCanvas = createCanvas();
+          partCanvas.width = partW;
+          partCanvas.height = rotH;
+          const partCtx = partCanvas.getContext('2d');
+          // Clear canvas first
+          partCtx.fillStyle = '#FFFFFF';
+          partCtx.fillRect(0, 0, partW, rotH);
+          // Draw the slice
+          partCtx.drawImage(rotCanvas, x, 0, partW, rotH, 0, 0, partW, rotH);
+
+          const blob = await encodeEpubJpeg(partCanvas);
+          partCanvas.width = partCanvas.height = 0;
+          parts.push({ data: blob, suffix: `_part${i + 1}`, width: partW, height: rotH, size: blob.size });
+        }
+
+        const totalSize = parts.reduce((sum, p) => sum + p.size, 0);
+        return {
+          parts,
+          meta: { origW, origH, origSize, wasSplit: true, splitCount: numParts, rotated: true, finalW: parts[0].width, finalH: parts[0].height, finalSize: totalSize, imageState: 1 }
+        };
+      }
+    }
+    // ========================================================================
+    // STATE 2: V-Split (Vertical Split, no rotation)
+    // Step 1: Scale HEIGHT to 800px (up or down)
+    // Step 2: If WIDTH > 480, split vertically with overlap
+    // ========================================================================
+    else if (imageState === 2) {
+      // ALWAYS scale height to 800 (up or down)
+      const scale = MAX_HEIGHT / sourceH;  // 800 / sourceH
+      const scaledW = Math.max(1, Math.round(sourceW * scale));
+      const scaledH = MAX_HEIGHT;  // Always 800
+
+      const scaledCanvas = createCanvas();
+      scaledCanvas.width = scaledW;
+      scaledCanvas.height = scaledH;
+      const scaledCtx = scaledCanvas.getContext('2d');
+      scaledCtx.imageSmoothingEnabled = true;
+      scaledCtx.imageSmoothingQuality = 'high';
+      scaledCtx.fillStyle = '#FFF';
+      scaledCtx.fillRect(0, 0, scaledW, scaledH);
+      scaledCtx.drawImage(sourceCanvas, 0, 0, sourceW, sourceH, 0, 0, scaledW, scaledH);
+      applyGrayscale(scaledCtx, scaledW, scaledH);
+
+      // Check if split needed
+      if (scaledW <= MAX_WIDTH) {
+        const blob = await encodeEpubJpeg(scaledCanvas);
+        return {
+          parts: [{ data: blob, suffix: '', width: scaledW, height: scaledH, size: blob.size }],
+          meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: scaledW, finalH: scaledH, finalSize: blob.size, imageState: 2 }
+        };
+      } else {
+        // Split by WIDTH (vertical cuts) - LEFT to RIGHT (natural reading order)
+        const parts = [];
+        const maxW = MAX_WIDTH;
+
+        // Centered distribution: calculate numParts first, then distribute evenly
+        let overlapPx, step;
+        const minOverlapPx = Math.round(maxW * (OVERLAP_PERCENT / 100));  // Configurable overlap
+        const numParts = epubSplitCount(scaledW);
+        // Now calculate step to distribute evenly
+        step = Math.round((scaledW - maxW) / (numParts - 1));
+        overlapPx = maxW - step;
+        // Ensure minimum overlap
+        if (overlapPx < minOverlapPx) {
+          overlapPx = minOverlapPx;
+          step = maxW - overlapPx;
+        }
+
+        // Calculate all x positions first to ensure consistency
+        const positions = [];
+        for (let i = 0; i < numParts; i++) {
+          let x = i * step;
+          // Clamp to valid range
+          x = Math.max(0, Math.min(x, scaledW - maxW));
+          positions.push(x);
+        }
+        // Ensure last position is at right edge
+        positions[0] = 0;
+        positions[numParts - 1] = scaledW - maxW;
+
+        for (let i = 0; i < numParts; i++) {
+          signal.throwIfAborted();
+          const x = positions[i];
+          const partW = maxW; // Always full width for consistency
+
+          const partCanvas = createCanvas();
+          partCanvas.width = partW;
+          partCanvas.height = scaledH;
+          const partCtx = partCanvas.getContext('2d');
+          // Clear canvas first
+          partCtx.fillStyle = '#FFFFFF';
+          partCtx.fillRect(0, 0, partW, scaledH);
+          // Draw the slice
+          partCtx.drawImage(scaledCanvas, x, 0, partW, scaledH, 0, 0, partW, scaledH);
+
+          const blob = await encodeEpubJpeg(partCanvas);
+          partCanvas.width = partCanvas.height = 0;
+          parts.push({ data: blob, suffix: `_part${i + 1}`, width: partW, height: scaledH, size: blob.size });
+        }
+
+        const totalSize = parts.reduce((sum, p) => sum + p.size, 0);
+        return {
+          parts,
+          meta: { origW, origH, origSize, wasSplit: true, splitCount: numParts, rotated: false, finalW: parts[0].width, finalH: parts[0].height, finalSize: totalSize, imageState: 2 }
+        };
+      }
     }
 
-    if (progressCallback) progressCallback((i / entries.length) * 60);
+    if (imageState === 3) {
+      // Rotate while resizing so a large scan does not need a second full-size canvas.
+      const fit = Math.min(MAX_WIDTH / sourceH, MAX_HEIGHT / sourceW);
+      const scale = sourceWasCropped ? fit : Math.min(1, fit);
+      const width = Math.max(1, Math.round(sourceH * scale));
+      const height = Math.max(1, Math.round(sourceW * scale));
+      const canvas = createCanvas();
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, width, height);
+      if (HANDEDNESS === 'right') {
+        ctx.translate(width, 0);
+        ctx.rotate(Math.PI / 2);
+      } else {
+        ctx.translate(0, height);
+        ctx.rotate(-Math.PI / 2);
+      }
+      ctx.drawImage(sourceCanvas, 0, 0, height, width);
+      applyGrayscale(ctx, width, height);
+      const blob = await encodeEpubJpeg(canvas);
+      return {
+        parts: [{ data: blob, suffix: '', width, height, size: blob.size }],
+        meta: { origW, origH, origSize, wasSplit: false, rotated: true, finalW: width, finalH: height, finalSize: blob.size, imageState: 3 }
+      };
+    }
+
+    const fit = Math.min(MAX_WIDTH / sourceW, MAX_HEIGHT / sourceH);
+    const scale = sourceWasCropped ? fit : Math.min(1, fit);
+    const width = Math.max(1, Math.round(sourceW * scale));
+    const height = Math.max(1, Math.round(sourceH * scale));
+    const canvas = createCanvas();
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(sourceCanvas, 0, 0, width, height);
+    applyGrayscale(ctx, width, height);
+    const blob = await encodeEpubJpeg(canvas);
+    return {
+      parts: [{ data: blob, suffix: '', width, height, size: blob.size }],
+      meta: { origW, origH, origSize, wasSplit: false, rotated: false, finalW: width, finalH: height, finalSize: blob.size, imageState: 0 }
+    };
+  } finally {
+    for (const canvas of canvases) canvas.width = canvas.height = 0;
+  }
+}
+
+async function convertEpubFile(file, progressCallback, signal) {
+  const { reader, files } = await openEpub(file);
+  const destination = new zip.BlobWriter(EPUB_MIME);
+  const out = new zip.ZipWriter(destination, { zip64: false, extendedTimestamp: false });
+  try {
+    return await writeOptimizedEpub(file, files, out, progressCallback, signal);
+  } catch (error) {
+    await destination.writable.abort(error).catch(() => {});
+    throw error;
+  } finally {
+    await reader.close();
+  }
+}
+
+async function writeOptimizedEpub(file, files, out, progressCallback, signal) {
+  const startTime = Date.now();
+  const originalSize = file.size;
+  const text = epubOptimizerText;
+  const encoder = new TextEncoder();
+  const entries = [...files];
+  const renamed = Object.create(null);
+  const splitImages = Object.create(null);
+  const reservedPaths = new Set(files.keys());
+  const opfPath = await findOPFPath(files, signal);
+  const opfContent = opfPath ? await safeReadText(files.get(opfPath), signal) : '';
+  if (!opfPath || new DOMParser().parseFromString(opfContent, 'application/xml').querySelector('parsererror')) {
+    throw new Error(text.invalidPackage);
+  }
+  const imageEntries = entries.filter(([path]) => EPUB_IMAGE.test(path));
+  const htmlEntries = entries.filter(([path]) => EPUB_HTML.test(path));
+  let completed = 0;
+  function updateProgress() {
+    progressCallback?.(++completed * 100 / (entries.length + 1));
+  }
+  function addEntry(path, content, stored = false, mimetype = false) {
+    signal.throwIfAborted();
+    const data = content instanceof Blob ? content : new Blob([content]);
+    return out.add(path, new zip.BlobReader(data), {
+      level: stored ? 0 : 6, signal, dataDescriptor: !mimetype, bufferedWrite: mimetype,
+    });
+  }
+
+  clearLog();
+  showLog();
+  log(`<strong>${escapeHtml(file.name)}</strong> <span class="log-detail">(${formatBytes(originalSize)})</span>`, '', 'INFO');
+  log(text.settings(), '', 'INFO');
+
+  // OCF requires the first entry to be stored without a local extra field.
+  await addEntry('mimetype', EPUB_MIME, true, true);
+  if (files.has('mimetype')) updateProgress();
+
+  // Resolve cover metadata even when the advanced picker was skipped.
+  const coverPaths = await findEpubCoverPaths(files, opfPath, opfContent, signal);
+
+  for (const [path, entry] of imageEntries) {
+    signal.throwIfAborted();
+    const data = await readEpubEntry(entry, signal);
+    let result;
+    try {
+      result = await withEpubImage(data, signal, img => {
+        const locked = isEpubCover(path, coverPaths) || isEpubSeparator(img, path);
+        const imageState = getImageState(path, img, locked);
+        return processImage(img, data.size, imageState, path, signal, locked);
+      });
+    } catch (error) {
+      signal.throwIfAborted();
+      // Keep the original name and media type if the browser cannot encode the page.
+      console.warn('Could not process EPUB image:', path, error);
+      log(text.imageFailed(escapeHtml(path.split('/').pop())), 'warning', 'IMG-ERR');
+      conversionStats.errors++;
+      await addEntry(path, data, true);
+      updateProgress();
+      continue;
+    }
+
+    const { parts, meta } = result;
+    const name = path.split('/').pop();
+    const directory = path.slice(0, path.length - name.length);
+    const stem = name.replace(/\.[^.]+$/, '');
+    const origFormat = name.split('.').pop();
+    logImage(escapeHtml(name), meta.origW, meta.origH, origFormat, meta.origSize,
+      meta.finalW, meta.finalH, meta.finalSize, meta.wasSplit, meta.splitCount || 0, parts, meta.imageState || 0);
+
+    // Reserve archive paths up front so converting an image cannot overwrite another entry.
+    const partPaths = parts.map(({ suffix }) => {
+      let output = directory + stem + suffix + '.jpg';
+      for (let n = 2; output !== path && reservedPaths.has(output); n++) {
+        output = directory + stem + suffix + '-' + n + '.jpg';
+      }
+      reservedPaths.add(output);
+      return output;
+    });
+    for (let i = 0; i < parts.length; i++) await addEntry(partPaths[i], parts[i].data, true);
+    if (parts.length > 1) {
+      splitImages[path] = partPaths;
+    } else if (partPaths[0] !== path) {
+      renamed[path] = partPaths[0];
+    }
+    updateProgress();
   }
 
   // Embedded fonts are dropped entirely — CrossPoint never renders with them.
   // Counters cover font files, @font-face rules (incl. data: URI fonts), and
   // encryption.xml shrinkage; they count uncompressed content bytes removed
   // (the final archive-size delta is reported separately by logSummary).
-  const fontPaths = collectFontPaths(zip, opfContent, opfPath);
+  const fontPaths = text.removeFonts ? collectFontPaths(files, opfContent, opfPath) : new Set();
   let removedFontCount = 0;
   let removedFontBytes = 0;
   let removedFontFaceRules = 0;
 
   // Second pass: update XHTML using DOMParser
-  for (const [xhtmlPath, content] of Object.entries(xhtmlFiles)) {
-    if (operationCancelled) throw new Error('Cancelled by user');
+  for (const [xhtmlPath, entry] of htmlEntries) {
+    signal.throwIfAborted();
+    const content = await safeReadText(entry, signal);
     let t = content;
 
     const stripped = stripComments(t);
     if (stripped.count) {
       t = stripped.text;
-      logFix(`Comments (${stripped.count}, ${formatBytes(stripped.bytes)})`, xhtmlPath.split('/').pop());
+      logFix(text.comments(stripped.count, formatBytes(stripped.bytes)), escapeHtml(xhtmlPath.split('/').pop()));
     }
+    const cover = fixSvgCover(t);
+    if (cover.fixed) { t = cover.c; logFix(text.svgCover, escapeHtml(xhtmlPath.split('/').pop())); }
+    const wrapped = fixSvgWrappedImages(t);
+    if (wrapped.fixed) { t = wrapped.c; logFix(text.svgImages(wrapped.count), escapeHtml(xhtmlPath.split('/').pop())); }
 
-    const r = fixSvgCover(t);
-    if (r.fixed) { t = r.c; logFix('SVG cover', xhtmlPath.split('/').pop()); }
-
-    const r2 = fixSvgWrappedImages(t);
-    if (r2.fixed) { t = r2.c; logFix(`SVG images (${r2.count})`, xhtmlPath.split('/').pop()); }
-
-    // Use DOMParser for all img modifications: remove width/height and handle split images
     try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(t, 'application/xhtml+xml');
-      const parseError = doc.querySelector('parsererror');
-
-      if (!parseError) {
+      const doc = new DOMParser().parseFromString(t, 'application/xhtml+xml');
+      if (!doc.querySelector('parsererror')) {
         let modified = false;
 
         // Remove width/height attributes from ALL img tags (dimensions may have changed)
@@ -1367,118 +1395,46 @@ async function convertEpubFile(file, progressCallback) {
           if (img.hasAttribute('height')) { img.removeAttribute('height'); modified = true; }
 
           const src = img.getAttribute('src');
-          if (src) {
-            const decodedSrc = decodeHref(src);
-            const resolvedSrc = resolvePath(xhtmlPath, decodedSrc);
+          if (!src) continue;
+          const path = resolveEpubReference(xhtmlPath, src);
+          const parts = splitImages[path];
+          if (!parts && !renamed[path]) continue;
+          modified = true;
+          img.setAttribute('src', relativeEpubPath(xhtmlPath, parts ? parts[0] : renamed[path]));
+          if (!parts) continue;
 
-            const match = Object.entries(renamed).find(([oldPath]) => resolvedSrc === oldPath);
-
-            if (match) {
-              const [oldPath, newPath] = match;
-              img.setAttribute('src', decodedSrc.replace(oldPath.split('/').pop(), newPath.split('/').pop()));
-              modified = true;
-            }
+          img.removeAttribute('class');
+          img.setAttribute('style', 'max-width:100%;height:auto');
+          let container = img.parentElement;
+          while (container.parentElement && !/^(div|p|figure|aside|section|body)$/i.test(container.localName)) {
+            container = container.parentElement;
+          }
+          // Insert inside the body for chapters with bare image tags.
+          const insideBody = container.localName === 'body';
+          const parent = insideBody ? container : container.parentElement;
+          const reference = insideBody ? img.nextSibling : container.nextSibling;
+          if (!insideBody) {
+            container.removeAttribute('class');
+            container.removeAttribute('style');
+          }
+          for (const part of parts.slice(1)) {
+            const wrapper = doc.createElementNS(img.namespaceURI, 'div');
+            const next = doc.createElementNS(img.namespaceURI, 'img');
+            next.setAttribute('src', relativeEpubPath(xhtmlPath, part));
+            next.setAttribute('alt', '');
+            next.setAttribute('style', 'max-width:100%;height:auto');
+            wrapper.appendChild(next);
+            parent.insertBefore(wrapper, reference);
           }
         }
 
-        // Handle split images with path collision prevention
-        if (Object.keys(splitImages).length > 0) {
-          // Get XHTML directory for resolving relative paths
-          const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/')) : '';
-          const rootFolders = ['ops', 'oebps', 'epub', 'content'];
-
-          for (const [fullPath, splitInfo] of Object.entries(splitImages)) {
-            const origName = splitInfo.origName;
-            const origDir = splitInfo.origDir;
-            const parts = splitInfo.parts;
-            const newName = origName.replace(/\.(png|gif|webp|bmp|jpeg)$/i, '.jpg');
-
-            // Extract immediate parent directory for collision prevention
-            const splitDirParts = origDir.split('/').filter(p => p);
-            const lastDir = splitDirParts.length > 0 ? splitDirParts[splitDirParts.length - 1].toLowerCase() : null;
-            const immediateParent = (lastDir && !rootFolders.includes(lastDir)) ? splitDirParts[splitDirParts.length - 1] : null;
-
-            // Get XHTML's parent directory parts for relative path resolution
-            const xhtmlDirParts = xhtmlDir.split('/').filter(p => p);
-
-            // Find all img elements
-            const allImgs = doc.querySelectorAll('img');
-            const matchingImgs = [];
-
-            for (const img of allImgs) {
-              const src = img.getAttribute('src') || '';
-              const srcParts = src.split('/').filter(p => p && p !== '..' && p !== '.');
-              const srcName = srcParts.pop() || '';
-
-              // Check filename match
-              if (srcName !== origName && srcName !== newName) continue;
-
-              // Path collision prevention with root folder handling
-              if (immediateParent) {
-                // Image is in a specific subfolder (not root like OPS/OEBPS)
-                if (srcParts.length === 0) {
-                  // src has no path - check if XHTML is in same folder as image
-                  const xhtmlLastDir = xhtmlDirParts.length > 0 ? xhtmlDirParts[xhtmlDirParts.length - 1] : null;
-                  if (xhtmlLastDir !== immediateParent) continue;
-                } else {
-                  // src has path - verify parent directory matches
-                  if (srcParts[srcParts.length - 1] !== immediateParent) continue;
-                }
-              } else {
-                // Image is in root folder (like OEBPS/cover.jpg)
-                // Only match if src has NO subfolder path OR points to root folder
-                if (srcParts.length > 0) {
-                  const srcLastDir = srcParts[srcParts.length - 1].toLowerCase();
-                  if (!rootFolders.includes(srcLastDir)) continue;
-                }
-              }
-
-              matchingImgs.push(img);
-            }
-
-            // Process each matching img — Pro's strip+inject approach
-            for (const img of matchingImgs) {
-              const src = img.getAttribute('src') || '';
-
-              // Part 1: update src in-place, strip original sizing
-              img.setAttribute('src', src.replace(origName, parts[0].imgName).replace(newName, parts[0].imgName));
-
-              if (parts.length > 1) {
-                // Strip original width/height/class that were sized for the unsplit image
-                img.removeAttribute('width');
-                img.removeAttribute('height');
-                img.removeAttribute('class');
-                img.setAttribute('style', 'max-width:100%;height:auto');
-
-                // Neutralize container height constraints that were sized for the original
-                let container = img.parentElement;
-                const safeContainers = ['div', 'p', 'figure', 'aside', 'section', 'body'];
-                while (container && !safeContainers.includes(container.tagName.toLowerCase())) container = container.parentElement;
-                const insertTarget = container || img.parentElement;
-                // Strip constraining classes/styles from container — they were for the unsplit image
-                if (insertTarget && insertTarget.tagName.toLowerCase() !== 'body') {
-                  insertTarget.removeAttribute('class');
-                  insertTarget.removeAttribute('style');
-                }
-                const insertParent = insertTarget.parentElement;
-                const insertRef = insertTarget.nextSibling;
-                const ns = doc.documentElement.namespaceURI || 'http://www.w3.org/1999/xhtml';
-
-                // Insert new minimal wrappers for parts 2+ in reading order
-                for (let pi = 1; pi < parts.length; pi++) {
-                  const wrapper = doc.createElementNS(ns, 'div');
-                  const newImg = doc.createElementNS(ns, 'img');
-                  const partSrc = src.replace(origName, parts[pi].imgName).replace(newName, parts[pi].imgName);
-                  newImg.setAttribute('src', partSrc);
-                  newImg.setAttribute('alt', '');
-                  newImg.setAttribute('style', 'max-width:100%;height:auto');
-                  wrapper.appendChild(newImg);
-                  if (insertRef) insertParent.insertBefore(wrapper, insertRef);
-                  else insertParent.appendChild(wrapper);
-                }
-              }
-              modified = true;
-            }
+        for (const image of doc.querySelectorAll('image')) {
+          const attr = image.hasAttribute('xlink:href') ? 'xlink:href' : 'href';
+          const path = resolveEpubReference(xhtmlPath, image.getAttribute(attr) || '');
+          const target = renamed[path] || splitImages[path]?.[0];
+          if (target) {
+            image.setAttribute(attr, relativeEpubPath(xhtmlPath, target));
+            modified = true;
           }
         }
 
@@ -1493,7 +1449,7 @@ async function convertEpubFile(file, progressCallback) {
 
     // Strip @font-face rules from inline <style> blocks — embedded font files
     // are removed, so leftover rules would reference missing resources
-    t = t.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (m, open, css, close) => {
+    if (text.removeFonts) t = t.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (m, open, css, close) => {
       const ff = stripFontFaceRules(css);
       if (!ff.count) return m;
       removedFontFaceRules += ff.count;
@@ -1507,7 +1463,8 @@ async function convertEpubFile(file, progressCallback) {
       t = t.replace('</head>', DEFENSIVE_STYLE + '</head>');
     }
 
-    out.file(xhtmlPath, t, { compression: 'DEFLATE', compressionOptions: { level: 8 }, createFolders: false });
+    await addEntry(xhtmlPath, t);
+    updateProgress();
   }
 
   // Extract main identifier from OPF using DOMParser with regex fallback
@@ -1517,85 +1474,80 @@ async function convertEpubFile(file, progressCallback) {
 
   // Third pass: update OPF using fixOPF (DOMParser with regex fallback)
   if (opfContent) {
-    let t = opfContent;
-    for (const [o, n] of Object.entries(renamed)) {
-      t = t.split(o.split('/').pop()).join(n.split('/').pop());
-    }
-    const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/')) : '';
-    t = fixOPF(t, opfContent, opfDir, splitImages, fontPaths);
-    if (t !== opfContent) logFix('OPF', 'manifest updated');
-    out.file(opfPath, t, { compression: 'DEFLATE', compressionOptions: { level: 8 }, createFolders: false });
+    const t = fixOPF(opfContent, opfPath, renamed, splitImages, fontPaths);
+    if (t !== opfContent) logFix('OPF', text.manifestUpdated);
+    await addEntry(opfPath, t);
+    updateProgress();
   }
 
-  // Copy remaining files
-  for (const [path, fileObj] of entries) {
-    if (operationCancelled) throw new Error('Cancelled by user');
-    if (fileObj.dir || path === 'mimetype') continue;
-    const low = path.toLowerCase();
-    if (low.match(/\.(png|gif|webp|bmp|jpg|jpeg)$/) || low.match(/\.(xhtml|html|htm)$/) || low.endsWith('.opf')) continue;
+  // Copy other resources one entry at a time, rewriting only text that needs it.
+  for (const [path, entry] of entries) {
+    signal.throwIfAborted();
+    if (path === 'mimetype' || path === opfPath || EPUB_IMAGE.test(path) || EPUB_HTML.test(path)) continue;
+    updateProgress();
 
     if (fontPaths.has(path)) {
-      const fontData = await fileObj.async('arraybuffer');
       removedFontCount++;
-      removedFontBytes += fontData.byteLength;
-      log(`${escapeHtml(path.split('/').pop())} <span class="log-detail">(${formatBytes(fontData.byteLength)})</span>`, 'success', 'REMOVE');
+      removedFontBytes += entry.uncompressedSize;
+      log(`${escapeHtml(path.split('/').pop())} <span class="log-detail">(${formatBytes(entry.uncompressedSize)})</span>`, 'success', 'REMOVE');
       continue;
     }
 
-    let data = await fileObj.async('arraybuffer');
+    const low = path.toLowerCase();
+    let data;
     if (low.endsWith('.css')) {
-      let t = await safeReadText(fileObj);
-      for (const [o, n] of Object.entries(renamed)) {
-        t = t.split(o.split('/').pop()).join(n.split('/').pop());
+      let t = await safeReadText(entry, signal);
+      t = t.replace(/url\(\s*(["']?)([^"'()]+)\1\s*\)/gi, (original, quote, href) => {
+        const ref = resolveEpubReference(path, href.trim());
+        const target = renamed[ref] || splitImages[ref]?.[0];
+        return target ? `url("${relativeEpubPath(path, target)}")` : original;
+      });
+      if (text.removeFonts) {
+        const ff = stripFontFaceRules(t);
+        if (ff.count) {
+          removedFontFaceRules += ff.count;
+          removedFontBytes += encoder.encode(t).length - encoder.encode(ff.css).length;
+          t = ff.css;
+          logFix('@font-face', `${ff.count} rule(s) removed from ${escapeHtml(path.split('/').pop())}`);
+        }
       }
-      const ff = stripFontFaceRules(t);
-      if (ff.count) {
-        removedFontFaceRules += ff.count;
-        removedFontBytes += new TextEncoder().encode(t).length - new TextEncoder().encode(ff.css).length;
-        t = ff.css;
-        logFix('@font-face', `${ff.count} rule(s) removed from ${escapeHtml(path.split('/').pop())}`);
-      }
-      data = new TextEncoder().encode(t);
-    } else if (path === 'META-INF/encryption.xml' && fontPaths.size) {
-      const t = await safeReadText(fileObj);
+      data = t;
+    } else if (low === 'meta-inf/encryption.xml' && fontPaths.size) {
+      const t = await safeReadText(entry, signal);
       const enc = stripFontEncryptionEntries(t, fontPaths);
       if (enc.dropFile) {
-        removedFontBytes += data.byteLength;
+        removedFontBytes += entry.uncompressedSize;
         logFix('encryption.xml', 'removed (contained only font obfuscation entries)');
         continue;
       }
+      data = enc.modified ? enc.xml : t;
       if (enc.modified) {
-        const encoded = new TextEncoder().encode(enc.xml);
-        removedFontBytes += Math.max(0, data.byteLength - encoded.length);
-        data = encoded;
+        removedFontBytes += Math.max(0, entry.uncompressedSize - encoder.encode(data).length);
         logFix('encryption.xml', 'font obfuscation entries removed');
       }
     } else if (low.endsWith('.ncx')) {
-      let t = await safeReadText(fileObj);
-      for (const [o, n] of Object.entries(renamed)) {
-        t = t.split(o.split('/').pop()).join(n.split('/').pop());
-      }
-      const oldT = t;
-      t = syncNCXIdentifier(t, mainIdentifier);
-      if (t !== oldT) logFix('NCX identifier', 'Synced with OPF');
-      data = new TextEncoder().encode(t);
+      const t = await safeReadText(entry, signal);
+      data = syncNCXIdentifier(t, mainIdentifier);
+      if (t !== data) logFix(text.ncxId, text.ncxSynced);
+    } else {
+      data = await readEpubEntry(entry, signal);
     }
-    out.file(path, data, { compression: 'DEFLATE', compressionOptions: { level: 8 }, createFolders: false });
+    await addEntry(path, data);
   }
 
   if (removedFontCount > 0 || removedFontFaceRules > 0) {
     log(`Removed ${removedFontCount} embedded font(s) and ${removedFontFaceRules} @font-face rule(s), ${formatBytes(removedFontBytes)} of font data`, '', 'INFO');
   }
 
-  if (progressCallback) progressCallback(100);
-
-  // Generate final blob
-  const newBlob = await out.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
+  signal.throwIfAborted();
+  const newBlob = await out.close();
+  signal.throwIfAborted();
+  progressCallback?.(100);
   const newSize = newBlob.size;
   const timeElapsed = (Date.now() - startTime) / 1000;
 
   // Log completion
-  log('Conversion complete!', 'success', 'DONE');
+  log(text.done, 'success', 'DONE');
   logSummary(originalSize, newSize, timeElapsed);
 
   // Auto-export only if NOT in batch mode (batch mode exports at the end)

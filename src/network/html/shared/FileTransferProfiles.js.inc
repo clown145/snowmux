@@ -56,11 +56,11 @@ async function ensureDeviceTarget() {
   return MAX_WIDTH > 0 && MAX_HEIGHT > 0;
 }
 
-function imageTargetFlags({ width, height }) {
+function imageTargetFlags({ width, height }, targetWidth = MAX_WIDTH, targetHeight = MAX_HEIGHT) {
   return {
-    fitsScreen: MAX_WIDTH > 0 && width <= MAX_WIDTH && height <= MAX_HEIGHT,
-    canHSplit: MAX_HEIGHT > 0 && width >= MAX_HEIGHT,
-    canVSplit: MAX_HEIGHT > 0 && height >= MAX_HEIGHT,
+    fitsScreen: targetWidth > 0 && width <= targetWidth && height <= targetHeight,
+    canHSplit: targetHeight > 0 && width >= targetHeight,
+    canVSplit: targetHeight > 0 && height >= targetHeight,
   };
 }
 

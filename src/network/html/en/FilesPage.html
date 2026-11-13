@@ -378,6 +378,25 @@
       font-size: 0.75em;
       color: var(--label-color);
     }
+    #imagePickerPagination:not([hidden]) {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    #imagePickerPagination button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    .image-item.preview-placeholder { cursor: default; }
+    .preview-status {
+      display: grid;
+      place-items: center;
+      height: 80px;
+      padding: 4px;
+      text-align: center;
+      font-size: 0.75em;
+      color: var(--label-color);
+    }
     .image-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
@@ -1074,7 +1093,7 @@
       <div class="image-picker-section" id="imagePickerSection" style="display:none;">
         <div class="image-picker-header">
           <span class="image-picker-title">Image Processing Options</span>
-          <span class="image-picker-count" id="imagePickerCount">0 images</span>
+          <span class="image-picker-count" id="imagePickerCount" aria-live="polite">0 images</span>
         </div>
         <div class="state-legend">
           <div class="legend-item locked">
@@ -1102,6 +1121,10 @@
             <span>Rotate</span>
           </button>
         </div>
+        <div id="imagePickerPagination" hidden>
+          <button type="button" id="epubPreviewPrevious" class="legend-btn" onclick="moveEpubPreviewPage(-1)">Previous</button>
+          <button type="button" id="epubPreviewNext" class="legend-btn" onclick="moveEpubPreviewPage(1)">Next</button>
+        </div>
         <div class="image-grid" id="imageGrid"></div>
       </div>
       </div><!-- end picker-columns -->
@@ -1114,7 +1137,7 @@
       <div class="modal-actions">
         <button class="delete-btn-cancel" onclick="handleCancelUploadModal()">Cancel</button>
         <button id="uploadBtn" class="upload-btn" onclick="uploadFile()" disabled>Upload</button>
-        <button id="startConversionBtn" class="upload-btn optimize" style="display:none;" onclick="startConversionWithImageStates()">Optimize & Upload</button>
+        <button id="startConversionBtn" class="upload-btn optimize" style="display:none;" onclick="uploadFile()">Optimize & Upload</button>
       </div>
       <div id="progress-container">
         <div id="progress-bar"><div id="progress-fill"></div></div>
@@ -1494,7 +1517,7 @@
 
   // Modal functions
   function openUploadModal() {
-    imageStates = {};
+    clearImagePicker();
     restoreUploadSettingsFromStorage();
 
     // Hide convert options when opening modal (no files selected initially)
@@ -1521,6 +1544,7 @@
     }
     // Process running: stop it, keep modal open for retry
     operationCancelled = true;
+    activeEpubConversion?.abort();
     if (currentUploadWs) { currentUploadWs.close(); currentUploadWs = null; }
     if (currentUploadXhr) { currentUploadXhr.abort(); currentUploadXhr = null; }
     // isUploadInProgress and UI are restored by restoreAfterCancel() from the async handlers
@@ -1565,16 +1589,7 @@
     if (convertOptions) convertOptions.style.display = 'none';
     document.getElementById('convertInfo').style.display = 'none';
     document.getElementById('convertWarning').style.display = 'none';
-    // Clear image picker cache and reset layout
-    epubImagesCache = [];
-    imageStates = {};
-    autoCropProtectedPaths = new Set();
-    document.getElementById('imagePickerSection').style.display = 'none';
-    const imageGrid = document.getElementById('imageGrid');
-    if (imageGrid) imageGrid.innerHTML = '';
-    document.querySelector('#uploadModal .modal').classList.remove('picker-mode');
-    document.getElementById('pickerColumns').classList.remove('picker-active');
-    // Hide log section
+    clearImagePicker();
     if (logSection) logSection.classList.remove('visible');
     // Reset advanced options
     const advancedSettingsContent = document.getElementById('advancedSettingsContent');
@@ -1595,6 +1610,7 @@
   }
 
   function toggleConvertOptions() {
+    if (isUploadInProgress) return;
     const checked = document.getElementById('convertBeforeUpload').checked;
     const uploadBtn = document.getElementById('uploadBtn');
     document.getElementById('convertWarning').style.display = checked ? 'block' : 'none';
@@ -1624,6 +1640,7 @@
   }
 
   function toggleAdvancedOptions() {
+    if (isUploadInProgress) return;
     // Check if advanced options toggle is enabled (optimize EPUB must be checked)
     const convertEnabled = document.getElementById('convertBeforeUpload').checked;
     if (!convertEnabled) {
@@ -1645,13 +1662,7 @@
         showImagePicker(files[0]).catch(err => console.error('Image picker error:', err));
       }
     } else {
-      // When collapsing, hide the picker and startConversionBtn
-      document.getElementById('imagePickerSection').style.display = 'none';
-      document.getElementById('startConversionBtn').style.display = 'none';
-      document.getElementById('uploadBtn').style.display = 'block';
-      document.getElementById('uploadBtn').disabled = false;
-      document.querySelector('#uploadModal .modal').classList.remove('picker-mode');
-      document.getElementById('pickerColumns').classList.remove('picker-active');
+      clearImagePicker();
     }
   }
 
@@ -1665,6 +1676,7 @@
   }
 
   function updateQualitySettings() {
+    if (isUploadInProgress) return;
     const quality = document.getElementById('qualitySlider').value;
     const autoCropToggle = document.getElementById('autoCropToggle');
 
@@ -1685,6 +1697,7 @@
   }
 
   function setHandedness(value) {
+    if (isUploadInProgress) return;
     HANDEDNESS = value;
     // Update UI
     document.getElementById('rotationCW').classList.remove('active');
@@ -1698,646 +1711,13 @@
   }
 
   function setOverlap(value) {
+    if (isUploadInProgress) return;
     OVERLAP_PERCENT = value;
     // Update UI
     document.querySelectorAll('.overlap-btn').forEach(btn => {
       btn.classList.toggle('active', parseInt(btn.dataset.value) === value);
     });
     updateUploadSettingsPersistence();
-  }
-
-  function isImagePickerVisible() {
-    const pickerSection = document.getElementById('imagePickerSection');
-    return pickerSection && pickerSection.style.display !== 'none';
-  }
-
-  function loadPreviewImage(dataUrl) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Preview image load failed'));
-      img.src = dataUrl;
-    });
-  }
-
-  async function createAutoCropPreview(dataUrl, imagePath, width, height) {
-    const img = await loadPreviewImage(dataUrl);
-    const cropped = createAutoCroppedCanvas(img, imagePath, width, height, true);
-    if (!cropped.crop) return null;
-
-    const maxPreviewW = 220;
-    const maxPreviewH = 160;
-    const scale = Math.min(maxPreviewW / cropped.width, maxPreviewH / cropped.height, 1);
-    const previewW = Math.max(1, Math.round(cropped.width * scale));
-    const previewH = Math.max(1, Math.round(cropped.height * scale));
-    const previewCanvas = document.createElement('canvas');
-    previewCanvas.width = previewW;
-    previewCanvas.height = previewH;
-    const previewCtx = previewCanvas.getContext('2d');
-    previewCtx.imageSmoothingEnabled = true;
-    previewCtx.imageSmoothingQuality = 'high';
-    previewCtx.fillStyle = '#FFF';
-    previewCtx.fillRect(0, 0, previewW, previewH);
-    previewCtx.drawImage(cropped.canvas, 0, 0, previewW, previewH);
-
-    return {
-      dataUrl: previewCanvas.toDataURL('image/jpeg', 0.82),
-      width: cropped.width,
-      height: cropped.height
-    };
-  }
-
-  // ============================================================================
-  // Image Picker Functions
-  // ============================================================================
-
-  /**
-   * Extract images from EPUB for preview
-   * Returns array of {path, name, dataUrl, width, height}
-   */
-  async function extractImagesForPreview(file) {
-    const zip = await JSZip.loadAsync(file);
-    const imageExtensions = ['.png', '.gif', '.webp', '.bmp', '.jpg', '.jpeg'];
-
-    // Collect all image paths first
-    const allImages = [];
-    for (const [path, fileObj] of Object.entries(zip.files)) {
-      if (fileObj.dir) continue;
-      const ext = path.substring(path.lastIndexOf('.')).toLowerCase();
-      if (imageExtensions.includes(ext)) {
-        allImages.push(path);
-      }
-    }
-
-    // Try to get images in reading order from OPF spine
-    let orderedImages = [];
-    let coverImagePath = null; // Track cover image
-    try {
-      // Find OPF file
-      let opfPath = null;
-      zip.forEach(p => { if (p.toLowerCase().endsWith('.opf')) opfPath = p; });
-
-      if (opfPath) {
-        const opfContent = await zip.files[opfPath].async('string');
-        const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/')) : '';
-
-        // Detect cover image from OPF
-        let coverId = null;
-        let m;
-        // Try 1: properties="cover-image"
-        if (m = opfContent.match(/<item[^>]+id=["']([^"']+)["'][^>]+properties="[^"]*cover-image[^"]*"/)) coverId = m[1];
-        if (!coverId && (m = opfContent.match(/<item[^>]+properties="[^"]*cover-image[^"]*"[^>]+id=["']([^"']+)["']/))) coverId = m[1];
-        // Try 2: meta name="cover" content="id"
-        if (!coverId && (m = opfContent.match(/<meta\s+name=["']cover["']\s+content=["']([^"']+)["']/))) coverId = m[1];
-        if (!coverId && (m = opfContent.match(/<meta\s+content=["']([^"']+)["']\s+name=["']cover["']/))) coverId = m[1];
-
-        // Parse manifest to get id -> href mapping
-        const manifest = {};
-        const manifestRegex = /<item[^>]+id=["']([^"']+)["'][^>]+href=["']([^"']+)["'][^>]*>/gi;
-        let match;
-        while ((match = manifestRegex.exec(opfContent)) !== null) {
-          const id = match[1];
-          const href = match[2];
-          const fullPath = opfDir ? opfDir + '/' + href : href;
-          manifest[id] = fullPath;
-          if (id === coverId) coverImagePath = fullPath;
-        }
-        // Also check reversed attribute order
-        const manifestRegex2 = /<item[^>]+href=["']([^"']+)["'][^>]+id=["']([^"']+)["'][^>]*>/gi;
-        while ((match = manifestRegex2.exec(opfContent)) !== null) {
-          const href = match[1];
-          const id = match[2];
-          const fullPath = opfDir ? opfDir + '/' + href : href;
-          manifest[id] = fullPath;
-          if (id === coverId) coverImagePath = fullPath;
-        }
-
-        // Cover-page reconciliation — if the cover XHTML references a different
-        // but byte-identical image, prefer the one actually displayed on the page.
-        if (coverImagePath) {
-          try {
-            let coverXhtmlPath = null;
-            const guideM = opfContent.match(/<(?:\w+:)?reference[^>]+type=["']cover["'][^>]+href=["']([^"']+)["']/i) ||
-                            opfContent.match(/<(?:\w+:)?reference[^>]+href=["']([^"']+)["'][^>]+type=["']cover["']/i);
-            if (guideM) {
-              coverXhtmlPath = opfDir ? opfDir + '/' + decodeHref(guideM[1]) : decodeHref(guideM[1]);
-            }
-            if (!coverXhtmlPath) {
-              const spineM = opfContent.match(/<(?:\w+:)?itemref[^>]+idref=["']([^"']+)["']/i);
-              if (spineM && manifest[spineM[1]]) coverXhtmlPath = manifest[spineM[1]];
-            }
-            if (coverXhtmlPath && zip.files[coverXhtmlPath]) {
-              const coverXhtml = await zip.files[coverXhtmlPath].async('string');
-              const imgM = coverXhtml.match(/(?:src|xlink:href)=["']([^"']+)["']/i);
-              if (imgM) {
-                const href = imgM[1];
-                const xDir = coverXhtmlPath.includes('/') ? coverXhtmlPath.substring(0, coverXhtmlPath.lastIndexOf('/')) : '';
-                let pageImgPath = href.startsWith('../') ? xDir.split('/').slice(0, -1).join('/') + '/' + href.substring(3)
-                                : href.startsWith('/') ? href.substring(1)
-                                : xDir ? xDir + '/' + href : href;
-                pageImgPath = pageImgPath.replace(/\/+/g, '/');
-                for (const realPath of allImages) {
-                  if (realPath === pageImgPath || realPath.endsWith('/' + href) || realPath.endsWith(href)) {
-                    pageImgPath = realPath; break;
-                  }
-                }
-                if (pageImgPath !== coverImagePath && allImages.includes(pageImgPath) && zip.files[pageImgPath]) {
-                  const coverData = await zip.files[coverImagePath].async('arraybuffer');
-                  const pageData = await zip.files[pageImgPath].async('arraybuffer');
-                  if (coverData.byteLength === pageData.byteLength) {
-                    const a = new Uint8Array(coverData);
-                    const b = new Uint8Array(pageData);
-                    let identical = true;
-                    for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) { identical = false; break; } }
-                    if (identical) coverImagePath = pageImgPath;
-                  }
-                }
-              }
-            }
-          } catch (e) { /* non-critical */ }
-        }
-
-        // Parse spine to get reading order
-        const spineOrder = [];
-        const spineRegex = /<itemref[^>]+idref=["']([^"']+)["'][^>]*>/gi;
-        while ((match = spineRegex.exec(opfContent)) !== null) {
-          const idref = match[1];
-          if (manifest[idref]) spineOrder.push(manifest[idref]);
-        }
-
-        // For each spine item (XHTML), extract images in order
-        const seenImages = new Set();
-        for (const xhtmlPath of spineOrder) {
-          if (!zip.files[xhtmlPath]) continue;
-          const xhtmlContent = await zip.files[xhtmlPath].async('string');
-          const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/')) : '';
-
-          // Find all image references
-          const imgRegex = /(?:src|xlink:href)=["']([^"']+)["']/gi;
-          while ((match = imgRegex.exec(xhtmlContent)) !== null) {
-            let imgHref = match[1];
-            // Skip non-image references
-            if (!imageExtensions.some(ext => imgHref.toLowerCase().endsWith(ext))) continue;
-
-            // Resolve relative path
-            let imgPath;
-            if (imgHref.startsWith('../')) {
-              // Go up from xhtmlDir
-              const parts = xhtmlDir.split('/');
-              parts.pop();
-              imgPath = parts.join('/') + '/' + imgHref.substring(3);
-            } else if (imgHref.startsWith('/')) {
-              imgPath = imgHref.substring(1);
-            } else {
-              imgPath = xhtmlDir ? xhtmlDir + '/' + imgHref : imgHref;
-            }
-            // Normalize path
-            imgPath = imgPath.replace(/\/+/g, '/');
-
-            // Check if this is actually an image in our list
-            for (const realPath of allImages) {
-              if (realPath === imgPath || realPath.endsWith('/' + imgHref) || realPath.endsWith(imgHref)) {
-                if (!seenImages.has(realPath)) {
-                  seenImages.add(realPath);
-                  orderedImages.push(realPath);
-                }
-                break;
-              }
-            }
-          }
-        }
-
-        // Add any remaining images that weren't in XHTML files (e.g., unused images)
-        for (const imgPath of allImages) {
-          if (!seenImages.has(imgPath)) {
-            orderedImages.push(imgPath);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse reading order, using default:', e);
-    }
-
-    // Fallback to alphabetical if parsing failed
-    if (orderedImages.length === 0) {
-      orderedImages = [...allImages].sort();
-    }
-
-    // Load image data in order
-    const images = [];
-    for (const path of orderedImages) {
-      const data = await zip.files[path].async('arraybuffer');
-      const blob = new Blob([data]);
-      const dataUrl = URL.createObjectURL(blob);
-
-      // Get dimensions
-      const dims = await getImageDimensions(data);
-      
-      // Check if this is the cover image
-      const isCover = (path === coverImagePath) || 
-                      path.toLowerCase().includes('cover') && images.length === 0;
-      
-      // Check if this is a separator/ornament (skip cover check)
-      const filename = path.split('/').pop();
-      let isSeparator = false;
-      if (!isCover) {
-        try {
-          isSeparator = await isSeparatorImage(dataUrl, dims.width, dims.height, filename);
-        } catch (e) {
-          console.warn('Separator check failed for', filename, e);
-        }
-      }
-      
-      // Tiny images (<200x200) are locked like separators
-      const isTiny = (dims.width < 200 && dims.height < 200);
-      const isLockedImage = isCover || isSeparator || isTiny;
-      let autoCropPreview = null;
-      if (!isLockedImage) {
-        try {
-          autoCropPreview = await createAutoCropPreview(dataUrl, path, dims.width, dims.height);
-        } catch (e) {
-          console.warn('Auto-crop preview failed for', path, e);
-        }
-      }
-      
-      images.push({
-        path: path,
-        name: filename,
-        dataUrl: dataUrl,
-        autoCropPreview: autoCropPreview,
-        width: dims.width,
-        height: dims.height,
-        isCover: isCover,
-        isSeparator: isSeparator || isTiny,
-        ...imageTargetFlags(dims)
-      });
-    }
-
-    return images;
-  }
-
-  /**
-   * Get image dimensions from array buffer
-   */
-  function getImageDimensions(data) {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(new Blob([data]));
-      const img = new Image();
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        resolve({ width: img.width, height: img.height });
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve({ width: 0, height: 0 });
-      };
-      img.src = url;
-    });
-  }
-
-  /**
-   * Check if image is a separator/ornament
-   * Criteria: small size AND (filename match OR symmetric OR extreme aspect ratio)
-   */
-  async function isSeparatorImage(dataUrl, width, height, filename) {
-    const MAX_DIMENSION = 150;
-    const SYMMETRY_THRESHOLD = 0.85;
-    
-    // First check: must be small in at least one dimension
-    const isSmall = (height < MAX_DIMENSION || width < MAX_DIMENSION);
-    if (!isSmall) return false;
-    
-    // Filename hints (instant match if small + named correctly)
-    const separatorNames = ['separator', 'divider', 'ornament', 'break', 'flourish', 'scene', 'divid', 'decor'];
-    const lowerName = filename.toLowerCase();
-    if (separatorNames.some(n => lowerName.includes(n))) return true;
-    
-    // Extreme aspect ratio check (>10:1 or <1:10) - these are definitely separators/lines
-    const aspectRatio = width / height;
-    if (aspectRatio > 10 || aspectRatio < 0.1) return true;
-    
-    // Symmetry check (skip for very thin images - too few pixels)
-    if (width < 10 || height < 10) return true; // Very small = separator
-    
-    try {
-      const isSymmetric = await checkHorizontalSymmetry(dataUrl, width, height, SYMMETRY_THRESHOLD);
-      return isSymmetric;
-    } catch (e) {
-      console.warn('Symmetry check failed:', e);
-      return false;
-    }
-  }
-
-  /**
-   * Check horizontal symmetry by comparing left and right halves
-   */
-  function checkHorizontalSymmetry(dataUrl, width, height, threshold) {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        // Use small canvas for performance (max 100px wide)
-        const scale = Math.min(1, 100 / width);
-        const w = Math.max(2, Math.floor(width * scale));  // Minimum 2px
-        const h = Math.max(1, Math.floor(height * scale)); // Minimum 1px
-        
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        
-        // Draw scaled image
-        ctx.drawImage(img, 0, 0, w, h);
-        const imageData = ctx.getImageData(0, 0, w, h);
-        const pixels = imageData.data;
-        
-        // Compare left half with flipped right half
-        const halfW = Math.floor(w / 2);
-        let matchingPixels = 0;
-        let totalPixels = 0;
-        
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < halfW; x++) {
-            const leftIdx = (y * w + x) * 4;
-            const rightIdx = (y * w + (w - 1 - x)) * 4;
-            
-            // Compare RGB (ignore alpha)
-            const rDiff = Math.abs(pixels[leftIdx] - pixels[rightIdx]);
-            const gDiff = Math.abs(pixels[leftIdx + 1] - pixels[rightIdx + 1]);
-            const bDiff = Math.abs(pixels[leftIdx + 2] - pixels[rightIdx + 2]);
-            
-            // Allow some tolerance for JPEG artifacts (threshold of 30)
-            if (rDiff < 30 && gDiff < 30 && bDiff < 30) {
-              matchingPixels++;
-            }
-            totalPixels++;
-          }
-        }
-        
-        const symmetryScore = matchingPixels / totalPixels;
-        resolve(symmetryScore >= threshold);
-      };
-      img.onerror = () => resolve(false);
-      img.src = dataUrl;
-    });
-  }
-
-  /**
-   * Show image picker after EPUB file selection
-   */
-  async function showImagePicker(file) {
-    await ensureDeviceTarget();
-    try {
-      await ensureEpubTools();
-    } catch (e) {
-      // Nothing has started yet, so leave the normal upload button.
-      console.error('EPUB tools not loaded:', e);
-      showWebAlert('Image picker unavailable. Use the upload button to continue without it.');
-      clearImagePicker();
-      return;
-    }
-
-    const pickerSection = document.getElementById('imagePickerSection');
-    const imageGrid = document.getElementById('imageGrid');
-    const countDisplay = document.getElementById('imagePickerCount');
-
-    // Reset state
-    imageStates = {};
-    epubImagesCache = [];
-    autoCropProtectedPaths = new Set();
-    pendingConversionFile = file;
-
-    // Extract images
-    try {
-      const images = await extractImagesForPreview(file);
-      epubImagesCache = images;
-      autoCropProtectedPaths = new Set(
-        images
-          .filter(img => img.isCover || img.isSeparator)
-          .map(img => img.path)
-      );
-
-      // Initialize all states to 0 (Normal)
-      images.forEach(img => {
-        imageStates[img.path] = 0;
-      });
-
-      // Build UI
-      renderImageGrid();
-
-      // Count images - covers and separators are locked
-      const coverCount = images.filter(img => img.isCover).length;
-      const separatorCount = images.filter(img => img.isSeparator).length;
-      const lockedCount = coverCount + separatorCount;
-      const selectableCount = images.length - lockedCount;
-      
-      if (lockedCount > 0) {
-        const lockedParts = [];
-        if (coverCount > 0) lockedParts.push(`${coverCount} cover`);
-        if (separatorCount > 0) lockedParts.push(`${separatorCount} separator${separatorCount !== 1 ? 's' : ''}`);
-        countDisplay.textContent = `${images.length} images (${selectableCount} selectable, ${lockedParts.join(', ')})`;
-      } else {
-        countDisplay.textContent = `${images.length} image${images.length !== 1 ? 's' : ''} (all selectable)`;
-      }
-
-      // Show picker, hide upload button, show start conversion button
-      pickerSection.style.display = 'block';
-      document.getElementById('uploadBtn').style.display = 'none';
-      document.getElementById('startConversionBtn').style.display = 'block';
-      // Enable two-column layout
-      document.querySelector('#uploadModal .modal').classList.add('picker-mode');
-      document.getElementById('pickerColumns').classList.add('picker-active');
-
-    } catch (error) {
-      console.error('Failed to extract images:', error);
-      showWebAlert('Failed to preview images: ' + error.message + '\n\nConversion will proceed normally.');
-      // Fallback: start conversion directly
-      startConversionWithImageStates();
-    }
-  }
-
-  /**
-   * Render the image grid with current states
-   */
-  function renderImageGrid() {
-    const imageGrid = document.getElementById('imageGrid');
-    imageGrid.innerHTML = '';
-
-    const stateLabels = ['', 'H-Split', 'V-Split', 'Rotate'];
-    const stateClasses = ['state-0', 'state-1', 'state-2', 'state-3'];
-
-    epubImagesCache.forEach(img => {
-      // Cover images and separators are always locked (no splitting/rotation)
-      const isCover = img.isCover;
-      const isSeparator = img.isSeparator;
-      const state = imageStates[img.path] || 0;
-
-      const item = document.createElement('div');
-
-      if (isCover) {
-        // Cover image - locked, cannot be split
-        item.className = 'image-item cover-locked';
-        item.title = `${img.width}×${img.height} - Cover image (locked)`;
-        item.innerHTML = `
-          <span class="image-state-badge cover-badge">${fileIcon('lock')}</span>
-          <img src="${img.dataUrl}" alt="${img.name}" loading="lazy">
-          <div class="image-name">${img.name}</div>
-        `;
-      } else if (isSeparator) {
-        // Separator/ornament - locked, cannot be split
-        item.className = 'image-item separator-locked';
-        item.title = `${img.width}×${img.height} - Separator (locked)`;
-        item.innerHTML = `
-          <span class="image-state-badge separator-badge">✦</span>
-          <img src="${img.dataUrl}" alt="${img.name}" loading="lazy">
-          <div class="image-name">${img.name}</div>
-        `;
-      } else {
-        // All other images are selectable - all modes allowed
-        
-        // Determine which overlay to show based on state
-        const showRotation = (state === 1 || state === 3); // H-Split or Rotate
-        const showSplitLines = (state === 1 || state === 2); // H-Split or V-Split
-        const rotateClass = showRotation ? (HANDEDNESS === 'right' ? 'rotate-cw' : 'rotate-ccw') : '';
-        
-        // Calculate actual number of parts for split preview
-        let numParts = 1;
-        if (showSplitLines) {
-          let finalWidth;
-          if (state === 1) {
-            // H-Split: scale width to MAX_HEIGHT, rotate, then check width
-            const scaledH = Math.round(img.height * (MAX_HEIGHT / img.width));
-            finalWidth = scaledH; // After rotation, height becomes width
-          } else {
-            // V-Split: scale height to MAX_HEIGHT, then check width
-            finalWidth = Math.round(img.width * (MAX_HEIGHT / img.height));
-          }
-          if (finalWidth > MAX_WIDTH) {
-            const minOverlapPx = Math.round(MAX_WIDTH * (OVERLAP_PERCENT / 100));
-            const maxStep = MAX_WIDTH - minOverlapPx;
-            numParts = Math.ceil((finalWidth - minOverlapPx) / maxStep);
-            if (numParts < 2) numParts = 2;
-          }
-        }
-        
-        // Generate split line elements (numParts - 1 lines at evenly distributed positions)
-        let splitLinesHtml = '';
-        if (showSplitLines && numParts > 1) {
-          const lines = [];
-          const splitClass = state === 1 ? 'split-h' : 'split-v';
-          for (let i = 1; i < numParts; i++) {
-            const pos = (i / numParts) * 100;
-            lines.push(`<div class="split-line ${splitClass}" style="left:${pos}%"></div>`);
-          }
-          splitLinesHtml = `<div class="split-lines">${lines.join('')}</div>`;
-        }
-        
-        // Build tooltip
-        const stateText = stateLabels[state] || 'Normal';
-        const partsText = numParts > 1 ? ` (${numParts} parts)` : '';
-        const showCropPreview = ENABLE_AUTO_CROP && img.autoCropPreview;
-        const previewSrc = showCropPreview ? img.autoCropPreview.dataUrl : img.dataUrl;
-        const cropText = showCropPreview ? ` | Auto-crop: ${img.autoCropPreview.width}×${img.autoCropPreview.height}` : '';
-        
-        item.className = `image-item ${stateClasses[state]} ${rotateClass} ${showCropPreview ? 'crop-preview' : ''}`.trim();
-        item.onclick = () => cycleImageState(img.path);
-        item.title = `${img.width}×${img.height} - ${stateText}${partsText}${cropText}`;
-        item.innerHTML = `
-          <span class="image-state-badge">${showCropPreview ? '✂' : (stateLabels[state] || '•')}</span>
-          <div class="image-preview-overlay">
-            ${splitLinesHtml}
-          </div>
-          <img src="${previewSrc}" alt="${img.name}" loading="lazy">
-          <div class="image-name">${img.name}</div>
-        `;
-      }
-
-      imageGrid.appendChild(item);
-    });
-  }
-
-  /**
-   * Cycle state for a single image
-   * All non-locked images: 0 -> 1 -> 2 -> 3 -> 0
-   */
-  function cycleImageState(imagePath) {
-    const currentState = imageStates[imagePath] || 0;
-    imageStates[imagePath] = (currentState + 1) % 4;
-    renderImageGrid();
-  }
-
-  /**
-   * Apply state to all eligible images based on smart rules
-   * 0 = Normal (all selectable images)
-   * 1 = H-Split (landscapes that canHSplit)
-   * 2 = V-Split (all images that canVSplit - portraits AND landscapes)
-   * 3 = Rotate (landscapes that don't fit screen)
-   */
-  function applyStateToAll(state) {
-    epubImagesCache.forEach(img => {
-      // Skip locked images
-      if (img.isCover || img.isSeparator) return;
-      
-      const canHSplit = img.canHSplit && !img.fitsScreen;
-      const canVSplit = img.canVSplit && !img.fitsScreen;
-      const isLandscape = img.width > img.height;
-      
-      if (state === 0) {
-        // Normal - applies to all selectable
-        imageStates[img.path] = 0;
-      } else if (state === 1) {
-        // H-Split - all landscapes that can H-Split
-        if (isLandscape && canHSplit) {
-          imageStates[img.path] = 1;
-        }
-      } else if (state === 2) {
-        // V-Split - all images that can V-Split (portrait and landscape)
-        if (canVSplit) {
-          imageStates[img.path] = 2;
-        }
-      } else if (state === 3) {
-        // Rotate - landscapes that exceed screen
-        if (isLandscape && !img.fitsScreen) {
-          imageStates[img.path] = 3;
-        }
-      }
-    });
-    renderImageGrid();
-  }
-
-  /**
-   * Start conversion with configured image states
-   */
-  function startConversionWithImageStates() {
-    const pickerSection = document.getElementById('imagePickerSection');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const startConversionBtn = document.getElementById('startConversionBtn');
-
-    // Hide picker and start conversion button, remove two-column layout
-    pickerSection.style.display = 'none';
-    startConversionBtn.style.display = 'none';
-    document.querySelector('#uploadModal .modal').classList.remove('picker-mode');
-    document.getElementById('pickerColumns').classList.remove('picker-active');
-
-    // Show upload button and trigger upload
-    uploadBtn.style.display = 'block';
-    uploadBtn.disabled = false;
-    uploadFile();
-  }
-
-  /**
-   * Get processing state for an image path
-   * Returns 0 (Normal), 1 (H-Split), 2 (V-Split), or 3 (Rotate)
-   */
-  function getImageState(imagePath) {
-    return imageStates[imagePath] || 0;
-  }
-
-  /**
-   * Get state label for logging
-   */
-  function getStateLabel(state) {
-    const labels = ['Normal', 'H-Split', 'V-Split', 'Rotate'];
-    return labels[state] || 'Normal';
   }
 
   // Initialize quality settings handlers
@@ -2514,25 +1894,6 @@
     });
   }
 
-  // Helper to clear image picker state
-  function clearImagePicker() {
-    epubImagesCache = [];
-    imageStates = {};
-    autoCropProtectedPaths = new Set();
-    const imageGrid = document.getElementById('imageGrid');
-    if (imageGrid) imageGrid.innerHTML = '';
-    const pickerSection = document.getElementById('imagePickerSection');
-    if (pickerSection) pickerSection.style.display = 'none';
-    // Reset two-column layout
-    document.querySelector('#uploadModal .modal')?.classList.remove('picker-mode');
-    document.getElementById('pickerColumns')?.classList.remove('picker-active');
-    // Hide start conversion, show upload
-    const startBtn = document.getElementById('startConversionBtn');
-    if (startBtn) startBtn.style.display = 'none';
-    const uploadBtn = document.getElementById('uploadBtn');
-    if (uploadBtn) uploadBtn.style.display = 'block';
-  }
-
   // Set up file input click listener once
   (function setupFileInputListener() {
     const fileInput = document.getElementById('fileInput');
@@ -2633,7 +1994,7 @@
     }
 
     if (files.length > 0) {
-      // If advanced settings is expanded and single EPUB, show image picker
+      // Index one EPUB when Advanced Mode is open.
       const advancedContent = document.getElementById('advancedSettingsContent');
       const convertEnabled = document.getElementById('convertBeforeUpload').checked;
       if (advancedContent.classList.contains('visible') && files.length === 1 && convertEnabled && files[0].name.toLowerCase().endsWith('.epub')) {
@@ -2679,6 +2040,23 @@ const WS_CHUNK_SIZE = 4096; // 4KB chunks - smaller for ESP32 stability
 // ============================================================================
 
 const XUESU_DEVICE_LABEL = 'Xuesu 3';
+const epubPickerText = {
+  loading: 'Loading previews…', empty: 'No images to preview.', failed: 'Preview unavailable',
+  range: (first, last, total) => `${first}–${last} of ${total} images`,
+  cover: 'Cover (locked)', separator: 'Separator (locked)', crop: 'Crop preview',
+  states: ['Normal', 'H-Split', 'V-Split', 'Rotate'], parts: count => ` (${count} parts)`,
+};
+const epubOptimizerText = {
+  removeFonts: true,
+  settings: () => `Target ${MAX_WIDTH}×${MAX_HEIGHT} px, JPEG ${JPEG_QUALITY}%, overlap ${OVERLAP_PERCENT}%, rotation ${HANDEDNESS === 'right' ? 'CW' : 'CCW'}, auto-crop ${ENABLE_AUTO_CROP ? 'on' : 'off'}`,
+  invalidPackage: 'Could not read EPUB package document',
+  imageFailed: name => `Could not process ${name}, using original image`,
+  comments: (count, bytes) => `Comments (${count}, ${bytes})`,
+  svgCover: 'SVG cover', svgImages: count => `SVG images (${count})`,
+  manifestUpdated: 'Manifest updated', ncxId: 'NCX identifier', ncxSynced: 'Synced with OPF',
+  done: 'Conversion complete!',
+};
+<!--#include file="../shared/EpubImagePicker.js.inc" -->
 <!--#include file="../shared/FileTransferProfiles.js.inc" -->
 
 const DEFAULT_JPEG_QUALITY = 85;
@@ -2762,15 +2140,6 @@ function updateUploadSettingsPersistence() {
     console.warn('Could not save upload settings:', e);
   }
 }
-
-// ============================================================================
-// Image Picker State Management
-// ============================================================================
-
-let imageStates = {};        // Map: imagePath -> state (0=Normal, 1=H-Split, 2=V-Split, 3=Rotate)
-let epubImagesCache = [];    // Cache of extracted images for preview
-let autoCropProtectedPaths = new Set(); // Picker-locked covers/separators should never be auto-cropped
-let pendingConversionFile = null;  // File awaiting conversion after image selection
 
 // ============================================================================
 // Enhanced Logging System
@@ -3124,52 +2493,6 @@ function exportLogToFile(filename = null, isBatch = false) {
   URL.revokeObjectURL(url);
 }
 
-// JSZip and the EPUB optimizer load on first use; most visits only browse files.
-const SCRIPT_LOAD_TIMEOUT_MS = 20000;
-let jszipPromise = null;
-let epubToolsPromise = null;
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    const fail = (message) => {
-      clearTimeout(timer);
-      s.remove();
-      reject(new Error(message));
-    };
-    // A stalled request would otherwise block uploads and Cancel indefinitely.
-    const timer = setTimeout(() => fail('Timed out loading ' + src), SCRIPT_LOAD_TIMEOUT_MS);
-    s.onload = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    s.onerror = () => fail('Failed to load ' + src);
-    s.src = src;
-    document.head.appendChild(s);
-  });
-}
-
-// Shared by the EPUB tools and File Manager plugins so JSZip downloads once.
-function ensureJszip() {
-  if (typeof JSZip !== 'undefined') return Promise.resolve();
-  if (!jszipPromise) {
-    jszipPromise = loadScript('/js/jszip.min.js');
-    jszipPromise.catch(() => { jszipPromise = null; });  // let a later use retry
-  }
-  return jszipPromise;
-}
-
-function ensureEpubTools() {
-  if (!epubToolsPromise) {
-    // One at a time: the device serves one connection at a time. An earlier
-    // timed-out attempt may already have loaded the optimizer.
-    epubToolsPromise = ensureJszip()
-      .then(() => (typeof convertEpubFile === 'function' ? undefined : loadScript('/js/epub-optimizer.js')));
-    epubToolsPromise.catch(() => { epubToolsPromise = null; });  // let a later use retry
-  }
-  return epubToolsPromise;
-}
-
 async function maybeRenameEbookFile(file) {
   const renameToggle = document.getElementById('renameFromMetadataToggle');
   if (!renameToggle || !renameToggle.checked || !file.name.toLowerCase().endsWith('.epub')) {
@@ -3390,6 +2713,7 @@ function uploadFileHTTP(file, onProgress, onComplete, onError) {
 
 async function uploadFile() {
   if (isUploadInProgress) return;
+  if (isUploadInProgress) return;
 
   const fileInput = document.getElementById('fileInput');
   const files = Array.from(fileInput.files);
@@ -3401,11 +2725,14 @@ async function uploadFile() {
   }
 
   isUploadInProgress = true;
+  fileInput.disabled = true;
+  releaseImagePicker();
   if (convertEnabled && files.some(file => file.name.toLowerCase().endsWith('.epub'))) {
     const targetReady = await ensureDeviceTarget();
     if (operationCancelled) { restoreAfterCancel(); return; }
     if (!targetReady) {
       isUploadInProgress = false;
+      fileInput.disabled = false;
       showWebAlert('Screen size unavailable. Select a target device in Advanced Options.');
       return;
     }
@@ -3414,16 +2741,19 @@ async function uploadFile() {
   try {
     usedFileNames = await fetchExistingUploadNames();
   } catch (error) {
+    if (operationCancelled) { restoreAfterCancel(); return; }
     isUploadInProgress = false;
+    fileInput.disabled = false;
     showWebAlert('Failed to check existing files: ' + error.message);
     return;
   }
+
+  if (operationCancelled) { restoreAfterCancel(); return; }
 
   // Prevent modal close during upload
   uploadGeneration++;
   const myGeneration = uploadGeneration;
   document.getElementById('uploadModalClose').classList.add('disabled');
-  fileInput.disabled = true;
 
   const progressContainer = document.getElementById('progress-container');
   const progressFill = document.getElementById('progress-fill');
@@ -3520,6 +2850,11 @@ async function uploadFile() {
       }
     }
 
+    if (operationCancelled) {
+      if (uploadGeneration === myGeneration) restoreAfterCancel();
+      return;
+    }
+
     const availableName = reserveAvailableUploadFilename(file.name, usedFileNames);
     if (availableName !== file.name) {
       file = new File([file], availableName, {
@@ -3610,8 +2945,7 @@ async function uploadFile() {
         const origFileSize = file.size;
 
         try {
-          await ensureEpubTools();
-          const convertedBlob = await convertEpubFile(file, (percent) => {
+          const convertedBlob = await optimizeEpubForUpload(file, (percent) => {
             // Pass current quality setting to converter
             progressFill.style.width = (percent * 0.5) + '%'; // Conversion takes first 50%
           });

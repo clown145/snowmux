@@ -77,6 +77,7 @@ namespace web_en {
 #include "html/assets/webCss.generated.h"
 #include "html/js/epub_optimizerJs.generated.h"
 #include "html/js/jszip_minJs.generated.h"
+#include "html/js/zip_minJs.generated.h"
 #include "html/js/plugin_hostJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/DictionaryRegistry.h"
@@ -341,6 +342,11 @@ class CrossPointWebServer::RouteHandler final : public RequestHandler {
         {"/", HTTP_GET, [](S& s) { s.handleRoot(); }, nullptr},
         {"/files", HTTP_GET, [](S& s) { s.handleFileList(); }, nullptr},
         {"/js/jszip.min.js", HTTP_GET, [](S& s) { s.handleJszip(); }, nullptr},
+        {"/js/zip.min.js", HTTP_GET,
+         [](S& s) {
+           sendStaticContent(s.server.get(), zip_minJs, sizeof(zip_minJs), zip_minJsETag, "application/javascript");
+         },
+         nullptr},
         {"/js/epub-optimizer.js", HTTP_GET,
          [](S& s) {
            sendStaticContent(s.server.get(), epub_optimizerJs, sizeof(epub_optimizerJs), epub_optimizerJsETag,

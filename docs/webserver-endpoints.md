@@ -21,8 +21,9 @@ the IP address shown on the device screen.
 | `GET` | `/settings` | Web settings page |
 | `GET` | `/fonts` | SD-card font manager page |
 | `GET` | `/plugins` | Plugins page (web settings of SD-card plugins) |
-| `GET` | `/js/jszip.min.js` | JavaScript asset used by the file manager |
-| `GET` | `/js/epub-optimizer.js` | File manager EPUB optimizer, loaded with JSZip only when needed |
+| `GET` | `/js/jszip.min.js` | JSZip asset for file manager plugins |
+| `GET` | `/js/zip.min.js` | zip.js archive reader and writer for EPUB tools |
+| `GET` | `/js/epub-optimizer.js` | File manager EPUB optimizer, loaded with zip.js on demand |
 | `GET` | `/js/plugin-host.js` | Browser plugin host shared by the Plugins, File Manager, and `/plugins-run` pages |
 
 HTML page responses, including `304 Not Modified`, set the cookie `cpPlugins=1` while
@@ -79,6 +80,15 @@ The File Manager's EPUB optimizer uses these dimensions for Auto, including
 image previews, split estimates and JPEG output. Older status responses can
 use a known device preset. A manual target overrides Auto. If Auto cannot
 resolve the screen size, EPUB optimization asks for a manual target.
+
+Optimization runs in the browser. The ZIP reader seeks within the selected
+file, and the optimizer reads, processes and writes entries individually.
+The browser assembles the output as a Blob before the existing upload starts.
+Memory use still depends on the browser, the largest decoded image, and the
+size of the output. Advanced Mode indexes image paths in reading order and
+generates thumbnails only for the selected page of up to 24 images. Bulk
+rotation and split settings apply to eligible images throughout the book.
+Canceling optimization discards the partial archive.
 
 ## File Management
 

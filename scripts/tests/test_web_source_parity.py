@@ -122,6 +122,7 @@ const setTimeout=()=>++timers, clearTimeout=id=>cleared.push(id);
                 self.assertNotRegex(source, r"\balert\(")
                 self.assertIn("modal.addEventListener('cancel'",source)
                 self.assertIn("event.preventDefault()",source)
+                picker = (HTML / "shared/EpubImagePicker.js.inc").read_text(encoding="utf-8")
                 functions="\n".join(function(source, name) for name in [
                     "function openWebModal(", "function closeWebModal(", "function closeUploadModal(",
                     "function handleCancelUploadModal(", "function reserveAvailableUploadFilename("])
@@ -130,22 +131,27 @@ const assert=require('node:assert/strict');
 const elements=Object.create(null);
 const document={getElementById:id=>elements[id]||(elements[id]={
   open:false,style:{},value:'pending',classList:{remove(){},add(){}},
-  showModal(){this.open=true;},close(){this.open=false;}
+  showModal(){this.open=true;},close(){this.open=false;},replaceChildren(){}
 }),querySelector:()=>({classList:{remove(){}}})};
 let isUploadInProgress=false,operationCancelled=false,currentUploadWs=null,currentUploadXhr=null;
-let epubImagesCache=['old'], imageStates={old:true},autoCropProtectedPaths=new Set(['old']),logSection=null;
+let logSection=null;
 const applyUploadSettings=()=>{};
-''' + functions + r'''
+''' + picker + functions + r'''
 const modal=document.getElementById('uploadModal');
 openWebModal('uploadModal');assert(modal.open);
 let closed=0,aborted=0;
 isUploadInProgress=true;
+activeEpubConversion=new AbortController();
+epubImagesCache=['old'];
+imageStates.set('old', {state: 1, revision: 1});
 currentUploadWs={close(){closed++;}};currentUploadXhr={abort(){aborted++;}};
 closeUploadModal();assert(modal.open);assert.equal(closed,0);
 handleCancelUploadModal();assert(modal.open);assert(operationCancelled);
 assert.equal(closed,1);assert.equal(aborted,1);
+assert(activeEpubConversion.signal.aborted);
 isUploadInProgress=false;handleCancelUploadModal();assert(!modal.open);
 assert.equal(document.getElementById('fileInput').value,'');assert.deepEqual(epubImagesCache,[]);
+assert.equal(imageStates.size,0);
 const names=new Set(['café.epub']);
 assert.equal(reserveAvailableUploadFilename('cafe\u0301.epub',names),'café (2).epub');
 assert.equal(reserveAvailableUploadFilename('another.epub',names),'another.epub');
@@ -208,6 +214,82 @@ const fetch = url => {
   assert.equal(await ensureDeviceTarget(), true);
   assert.equal(summary.textContent, 'Max 300×400 px');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+''')
+
+    def test_epub_preview_reads_one_page_and_keeps_whole_book_choices(self):
+        picker = (HTML / "shared/EpubImagePicker.js.inc").read_text(encoding="utf-8")
+        profiles = (HTML / "shared/FileTransferProfiles.js.inc").read_text(encoding="utf-8")
+        run_node(r'''
+const assert = require('node:assert/strict');
+const elements = new Map();
+const makeElement = () => ({
+  style: {}, classList: {add() {}, remove() {}}, children: [],
+  replaceChildren() { this.children = []; },
+  appendChild(child) { this.children.push(child); },
+});
+const document = {
+  getElementById(id) {
+    if (!elements.has(id)) elements.set(id, makeElement());
+    return elements.get(id);
+  },
+  querySelector: makeElement,
+  createElement: makeElement,
+};
+const epubPickerText = {
+  loading: '', empty: '', failed: '', range: () => '', states: ['', '', '', ''],
+  cover: '', separator: '', parts: () => '',
+};
+const XUESU_DEVICE_LABEL = 'Xuesu 3';
+const ENABLE_AUTO_CROP = false, HANDEDNESS = 'right';
+const escapeHtml = value => value;
+const epubSplitCount = () => 2;
+const paths = Array.from({length: 53}, (_, index) => ({path: String(index), name: String(index), isCover: index === 0}));
+let closes = 0, reads = [], pause = false, release;
+const openEpub = async () => ({
+  files: new Map(paths.map(image => [image.path, image.path])),
+  reader: {async close() { closes++; }},
+});
+const listEpubImages = async () => paths;
+const readEpubEntry = async path => {
+  reads.push(path);
+  if (pause) await new Promise(resolve => { release = resolve; });
+};
+const withEpubImage = async (data, signal, callback) => {
+  signal.throwIfAborted();
+  return callback({});
+};
+const makeEpubPreview = () => ({ width: 800, height: 500, dataUrl: 'data:image/jpeg;base64,preview' });
+''' + picker + profiles + r'''
+(async () => {
+  MAX_WIDTH = 300; MAX_HEIGHT = 400;
+  ensureDeviceTarget = async () => true;
+  ensureEpubTools = async () => {};
+  await showImagePicker({});
+  assert.deepEqual(reads, paths.slice(0,24).map(image => image.path));
+  assert.equal(epubImagesCache.length,24);
+  epubImagesCache[1].card.onclick();
+  assert.equal(getImageState('1', epubImagesCache[1], false),1);
+  applyStateToAll(2);
+  assert.equal(getImageState('52', {width:800,height:500}, false),2);
+  assert.equal(getImageState('0', {width:800,height:500}, true),0);
+  await showEpubPreviewPage(2);
+  assert.deepEqual(reads.slice(24),['48','49','50','51','52']);
+  assert.equal(epubImagesCache.length,5);
+  assert(document.getElementById('epubPreviewNext').disabled);
+  assert.equal(getImageState('1', {width:800,height:500}, false),2);
+  MAX_WIDTH=1000; MAX_HEIGHT=1000;
+  assert.equal(getImageState('52', {width:800,height:500}, false),2);
+  pause = true;
+  const pending = showEpubPreviewPage(1);
+  await Promise.resolve();
+  clearImagePicker();
+  release();
+  await pending;
+  assert.equal(epubImagesCache.length,0);
+  assert.equal(document.getElementById('imageGrid').children.length,0);
+  assert.equal(getImageState('52', {width:800,height:500}, false),0);
+  assert.equal(closes,4);
+})().catch(error => {console.error(error); process.exitCode=1;});
 ''')
 
     def test_xmpic_preview_preserves_orientation_download_and_cancellation(self):
