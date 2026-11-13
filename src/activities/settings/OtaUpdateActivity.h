@@ -17,6 +17,7 @@ class OtaUpdateActivity : public Activity, private UiAppHost {
     UpdateAvailable,
     ConfirmingUpdate,
     UpdateInProgress,
+    Finalizing,
     NoUpdate,
     Failed,
     Finished,
@@ -28,6 +29,9 @@ class OtaUpdateActivity : public Activity, private UiAppHost {
   int selectedReadyRow = 0;
   bool waitForConfirmRelease = false;
   bool readingStatsReleased = false;
+  bool cancelRequested = false;
+  bool waitForBackRelease = false;
+  unsigned long lastInputPoll = 0;
   size_t progressBytes = 0;
   size_t progressTotalBytes = 0;
   unsigned int lastProgressRefreshPercent = 0;
@@ -48,6 +52,9 @@ class OtaUpdateActivity : public Activity, private UiAppHost {
   void renderUpdateAvailable(const Rect& safeArea);
   void rebuildReleaseNotePages(const Rect& safeArea, int bottomInset);
   void runUpdateInstall();
+  void beginCancelPolling();
+  bool pollCancel();
+  void drawCancelHint(const Rect& bounds, int y);
 
   static constexpr freeink::ui::ActionId ACTION_RELEASE_PAGE = 1;
   static constexpr freeink::ui::ActionId ACTION_INSTALL_UPDATE = 2;
@@ -63,6 +70,8 @@ class OtaUpdateActivity : public Activity, private UiAppHost {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool preventAutoSleep() override { return state == State::CheckingForUpdate || state == State::UpdateInProgress; }
+  bool preventAutoSleep() override {
+    return state == State::CheckingForUpdate || state == State::UpdateInProgress || state == State::Finalizing;
+  }
   bool skipLoopDelay() override { return true; }  // Prevent power-saving mode
 };

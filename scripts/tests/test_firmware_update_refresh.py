@@ -9,6 +9,106 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class FirmwareUpdateRefreshTest(unittest.TestCase):
+    def test_verified_https_polls_input_without_response_bytes(self):
+        source = (ROOT / 'src/network/HttpDownloader.cpp').read_text()
+        program = r'''
+#include <cassert>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string_view>
+using esp_err_t = int;
+constexpr int ESP_OK=0, ESP_FAIL=-1, ESP_ERR_HTTP_EAGAIN=7, WL_CONNECTED=1;
+enum class Stall { None, Connect, Headers, Body };
+Stall stall=Stall::None;
+unsigned long nowMs=0;
+int cleanups=0, writes=0, reads=0, statusCode=200;
+bool disconnected=false, complete=true;
+unsigned long millis() { return nowMs; }
+void delay(int ms) { nowMs+=ms; }
+struct { int status() { return disconnected ? 0 : WL_CONNECTED; } } WiFi;
+struct WifiPowerSaveGuard { WifiPowerSaveGuard() {} };
+template<class T> auto makeUniqueNoThrow(size_t size) { return std::make_unique<T>(size); }
+#define LOG_ERR(...) ((void)0)
+void esp_crt_bundle_attach() {}
+struct esp_http_client_config_t {
+  const char* url=nullptr;
+  bool is_async=false, disable_auto_redirect=false;
+  int timeout_ms=0, buffer_size=0;
+  void (*crt_bundle_attach)()=nullptr;
+};
+using esp_http_client_handle_t = int*;
+esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t* config) {
+  assert(config->is_async && config->disable_auto_redirect && config->crt_bundle_attach==esp_crt_bundle_attach);
+  static int handle;
+  return &handle;
+}
+int esp_http_client_cleanup(esp_http_client_handle_t) { ++cleanups; return ESP_OK; }
+int esp_http_client_set_timeout_ms(esp_http_client_handle_t,int) { return ESP_OK; }
+int esp_http_client_open(esp_http_client_handle_t,int) {
+  return stall==Stall::Connect ? ESP_ERR_HTTP_EAGAIN : ESP_OK;
+}
+int64_t esp_http_client_fetch_headers(esp_http_client_handle_t) {
+  if (stall!=Stall::Headers) return 3;
+  nowMs+=75;
+  return -ESP_ERR_HTTP_EAGAIN;
+}
+int esp_http_client_get_status_code(esp_http_client_handle_t) { return statusCode; }
+int esp_http_client_read(esp_http_client_handle_t,char* buffer,int size) {
+  assert(size>=3);
+  if (++reads==1) { nowMs+=75; return -ESP_ERR_HTTP_EAGAIN; }
+  if (reads==2) { buffer[0]=42; return 3; }
+  if (stall!=Stall::Body) return 0;
+  nowMs+=75;
+  return -ESP_ERR_HTTP_EAGAIN;
+}
+bool esp_http_client_is_complete_data_received(esp_http_client_handle_t) { return complete; }
+struct HttpDownloader {
+  using DataCallback=std::function<bool(const uint8_t*,size_t)>;
+  using AbortCallback=std::function<bool()>;
+  static bool hasMemoryForTls() { return true; }
+  static bool fetchVerifiedHttps(const char*,const DataCallback&,int,const AbortCallback&);
+};
+''' + method(source, 'bool HttpDownloader::fetchVerifiedHttps(') + r'''
+int main() {
+  const char* url="https://test";
+  const auto sink=[](const uint8_t* data,size_t size) {
+    assert(data[0]==42 && size==3);
+    ++writes;
+    return true;
+  };
+  const auto reset=[] { nowMs=0; reads=0; writes=0; };
+  for (auto phase : {Stall::Connect,Stall::Headers,Stall::Body}) {
+    stall=phase;
+    const int expectedWrites=phase==Stall::Body ? 1 : 0;
+    reset();
+    assert(!HttpDownloader::fetchVerifiedHttps(url,sink,300,[] { return nowMs>=150; }));
+    assert(nowMs==150 && writes==expectedWrites);
+    reset();
+    assert(!HttpDownloader::fetchVerifiedHttps(url,sink,300,nullptr));
+    assert(nowMs==(phase==Stall::Body ? 375u : 300u) && writes==expectedWrites);
+  }
+  stall=Stall::None;
+  reset();
+  assert(HttpDownloader::fetchVerifiedHttps(url,sink,300,nullptr) && writes==1);
+  reset();
+  complete=false;
+  assert(!HttpDownloader::fetchVerifiedHttps(url,sink,300,nullptr));
+  reset();
+  statusCode=302;
+  assert(!HttpDownloader::fetchVerifiedHttps(url,sink,300,nullptr) && writes==0);
+  statusCode=200;
+  reset();
+  stall=Stall::Body;
+  assert(!HttpDownloader::fetchVerifiedHttps(url,sink,300,[] {
+    disconnected=nowMs>=150;
+    return false;
+  }));
+  assert(nowMs==150 && writes==1 && cleanups==10);
+}
+'''
+        run_cpp(program)
+
     def test_unsafe_destinations_never_validate_allocate_erase_or_write(self):
         flasher = (ROOT / 'src/network/FirmwareFlasher.cpp').read_text()
         sd = (ROOT / 'src/activities/settings/SdFirmwareUpdateActivity.cpp').read_text()
@@ -224,7 +324,9 @@ int mbedtls_sha256_finish(mbedtls_sha256_context*,uint8_t* hash) {
   return 0;
 }
 void mbedtls_sha256_free(mbedtls_sha256_context*) {}
-struct { bool hasValidTime(){return true;} bool syncFromNTP(){return true;} } halClock;
+struct { bool hasValidTime(){return true;} } halClock;
+constexpr int WL_CONNECTED=1;
+struct { int status() const { return connected ? WL_CONNECTED : 0; } bool connected=true; } WiFi;
 namespace firmware_flash { uint16_t runningPartitionChipId(){return 9;} }
 namespace board_tag {
 struct Scanner {
@@ -242,14 +344,25 @@ std::string assetUrl=std::string(xuesuImageBase)+std::string(64,'a')+".bin";
 std::string officialModel="xuesu-300-std";
 std::string officialUrl="/XueSu_300OTA/firmware10049.bin";
 std::string officialVersion="1.4.9";
+bool abortManifest=false;
+bool abortDownload=false;
+bool cancelRequested=false;
 namespace HttpDownloader {
-template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink,int timeout=0) {
+template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink,int timeout,
+                                             const OtaUpdater::AbortCallback& shouldAbort) {
   if (std::string_view(url)==xuesuManifestUrl) {
+    assert(timeout==xuesuOtaTimeoutMs);
+    if (abortManifest) {
+      cancelRequested=true;
+      assert(shouldAbort());
+      return false;
+    }
     const std::string json="{\"tag_name\":\""+manifestVersion+"\",\"assets\":[{\"name\":\"firmware.bin\","
       "\"size\":64,\"browser_download_url\":\""+assetUrl+"\"}]}";
     return sink(reinterpret_cast<const uint8_t*>(json.data()),json.size());
   }
   if (std::string_view(url)==xuesuFactoryManifest) {
+    assert(timeout==xuesuOtaTimeoutMs);
     const std::string json="{\"devices\":{\"xuebing-370-std\":{\"version_name\":\"9.0.0\",\"url\":\"/wrong.bin\",\"size\":64},\""
       +officialModel+"\":{\"version_name\":\""+officialVersion+"\",\"version_code\":10049,\"size\":64,\"url\":\""
       +officialUrl+"\"}}}";
@@ -258,12 +371,18 @@ template<class Sink> bool fetchVerifiedHttps(const char* url,Sink sink,int timeo
   const std::string mirror="https://gh-proxy.com/https://github.com/clown145/snowmux/releases/download/"
                            "xuesu-v"+manifestVersion+"/xuesu-v"+manifestVersion+"-ota1.bin";
   assert(url==mirror || url==assetUrl || url==std::string(xuesuFactoryOrigin)+officialUrl);
-  assert(timeout==(url==mirror ? 10000 : 0));
+  assert(timeout==(url==mirror ? xuesuMirrorTimeoutMs : xuesuOtaTimeoutMs));
   downloads.emplace_back(url);
   activeResponse=url==mirror ? mirrorOverride.value_or(response) : response;
   std::array<uint8_t,65> image{};
   image[0]=0xe9;
   image[12]=9;
+  if (abortDownload) {
+    assert(sink(image.data(),16));
+    cancelRequested=true;
+    assert(shouldAbort());
+    return false;
+  }
   if (activeResponse==Response::Interrupted) { sink(image.data(),16); return false; }
   return sink(image.data(),activeResponse==Response::Oversized ? 65 : 64);
 }
@@ -297,14 +416,19 @@ int main() {
   assert(downloads.size()==1 && downloads[0].starts_with("https://gh-proxy.com/"));
   mirrorOverride=Response::Interrupted;
   downloads.clear();
-  struct { OtaUpdater& updater; std::vector<size_t> bytes; } progress{update, {}};
-  const auto reportProgress=[](void* context) {
+  struct { OtaUpdater& updater; std::vector<size_t> bytes; bool finalizing=false; } progress{update, {}};
+  const auto reportProgress=[](void* context,OtaUpdater::InstallPhase phase) {
     auto& state=*static_cast<decltype(progress)*>(context);
+    if (phase==OtaUpdater::InstallPhase::Finalizing) {
+      assert(writeOpen && selected==running);
+      state.finalizing=true;
+      return;
+    }
     state.bytes.push_back(state.updater.getProcessedSize());
   };
   assert(update.installUpdate(reportProgress,&progress)==OtaUpdater::OK && selected==&ota0 && switches==1);
   assert(downloads.size()==2 && downloads[1]==assetUrl && aborts==9);
-  assert((progress.bytes==std::vector<size_t>{16,0,64}));
+  assert((progress.bytes==std::vector<size_t>{16,0,64}) && progress.finalizing);
   assert(update.installUpdate()!=OtaUpdater::OK && begins==11);
   running=&ota0;
   mirrorOverride.reset();
@@ -334,6 +458,33 @@ int main() {
   officialModel="other-device";
   officialUrl="/XueSu_300OTA/firmware10050.bin";
   assert(update.checkForUpdate(OtaUpdater::Channel::Factory)==OtaUpdater::JSON_PARSE_ERROR);
+
+  officialModel=xuesuFactoryModel;
+  manifestVersion="0.1.1";
+  assetUrl=std::string(xuesuImageBase)+std::string(64,'a')+".bin";
+  running=selected;
+  const auto shouldAbort=[] { return cancelRequested; };
+  abortManifest=true;
+  assert(update.checkForUpdate(OtaUpdater::Channel::Stable,shouldAbort)==OtaUpdater::CANCELLED);
+  assert(!update.isUpdateNewer());
+  abortManifest=false;
+  for (auto channel : {OtaUpdater::Channel::Stable,OtaUpdater::Channel::Factory}) {
+    cancelRequested=false;
+    assert(update.checkForUpdate(channel,shouldAbort)==OtaUpdater::OK);
+    abortDownload=true;
+    downloads.clear();
+    const int previousAborts=aborts;
+    assert(update.installUpdate(nullptr,nullptr,shouldAbort)==OtaUpdater::CANCELLED);
+    assert(!writeOpen && aborts==previousAborts+1 && downloads.size()==1);
+    assert(selected==running && switches==3);
+  }
+  abortDownload=false;
+  assert(update.checkForUpdate(OtaUpdater::Channel::Stable)==OtaUpdater::OK);
+  response=Response::Interrupted;
+  WiFi.connected=false;
+  downloads.clear();
+  assert(update.installUpdate()==OtaUpdater::HTTP_ERROR);
+  assert(!writeOpen && selected==running && switches==3 && downloads.size()==1);
 }
 '''
         sax = ROOT / 'freeink-sdk/libs/network/JsonSax'
@@ -353,6 +504,9 @@ int main() {
             method(theme, 'int BaseTheme::measureProgressBarHeight('),
             method(theme, 'int BaseTheme::drawProgressBar('),
             method(ota, 'void OtaUpdateActivity::render('),
+            method(ota, 'void OtaUpdateActivity::drawCancelHint('),
+            method(ota, 'void OtaUpdateActivity::beginCancelPolling('),
+            method(ota, 'bool OtaUpdateActivity::pollCancel('),
             method(sd, 'void SdFirmwareUpdateActivity::render('),
             method(ota, 'void OtaUpdateActivity::runUpdateInstall('),
             method(sd, 'void SdFirmwareUpdateActivity::onConfirmationResult('),
@@ -365,6 +519,7 @@ int main() {
         constants = re.search(r'constexpr unsigned int PROGRESS_REFRESH_STEP_PERCENT = \d+;', ota).group()
         sd_constants = re.search(r'constexpr unsigned int PROGRESS_REFRESH_STEP_PERCENT = \d+;', sd).group()
         self.assertEqual(constants, sd_constants)
+        constants += '\n' + re.search(r'constexpr unsigned long INPUT_POLL_INTERVAL_MS = \d+;', ota).group()
         # Reuse the production SD chunk/erase sizes, not a rewritten writer loop.
         flash_constants = '\n'.join(re.findall(r'constexpr size_t (?:SEC|BLK|CHUNK) = [^;]+;', flasher))
         program = HARNESS + '\nenum { ' + ', '.join(keys) + ' };\n' + constants + '\n'
@@ -453,7 +608,7 @@ int main() {
   otaActivity.state = OtaUpdateActivity::State::UpdateInProgress;
   SdFirmwareUpdateActivity sdActivity;
   sdActivity.state = SdFirmwareUpdateActivity::State::UPDATING;
-  auto otaProgress = ''' + method(ota, '[](void* ctx)') + r''';
+  auto otaProgress = ''' + method(ota, '[](void* ctx, OtaUpdater::InstallPhase phase)') + r''';
   auto sdProgress = ''' + method(sd, '[](size_t written, size_t total, void* ctx)') + r''';
   for (auto [done, total, count] : {Sample{20,0,0}, Sample{9,100,0}, Sample{10,100,1},
                                   Sample{10,100,1}, Sample{19,100,1}, Sample{20,100,2},
@@ -461,12 +616,30 @@ int main() {
                                   Sample{99,100,5}, Sample{100,100,6}, Sample{110,100,6}}) {
     otaActivity.updater.processedSize = done;
     otaActivity.updater.totalSize = total;
-    otaProgress(&otaActivity);
+    otaProgress(&otaActivity, OtaUpdater::InstallPhase::Downloading);
     sdProgress(done, total, &sdActivity);
     assert(otaActivity.renderer.frames == count && sdActivity.renderer.frames == count);
     assert(otaActivity.progressBytes == done && otaActivity.progressTotalBytes == total);
     assert(sdActivity.writtenBytes == done && sdActivity.firmwareSize == total);
   }
+
+  // The transfer consumes the inherited hold and its release. A new Back
+  // gesture cancels only once it is released.
+  otaActivity.mappedInput.held=true;
+  otaActivity.beginCancelPolling();
+  assert(!otaActivity.pollCancel());
+  nowMs+=20;
+  otaActivity.mappedInput.held=false;
+  otaActivity.mappedInput.released=true;
+  assert(!otaActivity.pollCancel());
+  nowMs+=20;
+  otaActivity.mappedInput.held=true;
+  otaActivity.mappedInput.released=false;
+  assert(!otaActivity.pollCancel());
+  nowMs+=20;
+  otaActivity.mappedInput.held=false;
+  otaActivity.mappedInput.released=true;
+  assert(otaActivity.pollCancel());
 }
 '''
         run_cpp(program)
@@ -510,6 +683,8 @@ void reset(Failure f) {
   missingNext=singleSlot=copiedRunning=missingRunning=false;
 }
 void delay(int) { flashOperation(); }
+unsigned long nowMs=0;
+unsigned long millis() { return nowMs; }
 struct { void restart() { flashOperation(); ++restarts; } } ESP;
 const char* tr(int id) { static char labels[64][32]; snprintf(labels[id],32,"label%d",id); return labels[id]; }
 struct Rect { int x,y,width,height; };
@@ -572,6 +747,12 @@ int sectionGap(const ThemeMetrics&) { return 20; }
 int centeredTop(Rect r,int h) { return r.y+(r.height-h)/2; }
 }
 struct MappedInputManager {
+  enum class Button { Back };
+  bool held=false,released=false;
+  bool isPressed(Button) const { return held; }
+  bool wasReleased(Button) const { return released; }
+  bool wasHomeGesture() const { return false; }
+  void update() {}
   struct Labels { const char *btn1,*btn2,*btn3,*btn4; };
   Labels mapLabels(const char* a,const char* b,const char* c,const char* d) { return {a,b,c,d}; }
 };
@@ -614,8 +795,10 @@ struct OptionPopup { bool processRender(GfxRenderer&,MappedInputManager&) { retu
 struct OtaUpdater {
   enum class Channel { Stable, Nightly };
   enum OtaUpdaterError { OK, UPDATE_OLDER_ERROR, INTERNAL_UPDATE_ERROR, WRONG_DEVICE_ERROR,
-                         HTTP_ERROR,UNSUPPORTED_CHANNEL,JSON_PARSE_ERROR,NO_UPDATE };
-  using ProgressCallback=void(*)(void*);
+                         HTTP_ERROR,UNSUPPORTED_CHANNEL,JSON_PARSE_ERROR,NO_UPDATE,CANCELLED };
+  enum class InstallPhase { Downloading, Finalizing };
+  using ProgressCallback=void(*)(void*,InstallPhase);
+  using AbortCallback=std::function<bool()>;
   size_t processedSize=0,totalSize=0;
   size_t releaseNotes=0,otaSize=0,releaseNoteCount=0;
   Channel channel=Channel::Stable;
@@ -626,13 +809,13 @@ struct OtaUpdater {
   size_t getProcessedSize() const { assert(!inRender); return processedSize; }
   size_t getTotalSize() const { assert(!inRender); return totalSize; }
   const std::string& getLatestVersion() const { static std::string version="next"; return version; }
-  OtaUpdaterError installUpdate(ProgressCallback,void*);
-  OtaUpdaterError installUpdateFromSource(const char*,ProgressCallback,void*);
-  OtaUpdaterError checkForUpdate(Channel);
+  OtaUpdaterError installUpdate(ProgressCallback,void*,const AbortCallback& = nullptr);
+  OtaUpdaterError installUpdateFromSource(const char*,ProgressCallback,void*,const AbortCallback&);
+  OtaUpdaterError checkForUpdate(Channel,const AbortCallback& = nullptr);
 };
 struct OtaUpdateActivity : Activity {
   enum class State { Ready,WifiSelection,CheckingForUpdate,UpdateAvailable,ConfirmingUpdate,
-                    UpdateInProgress,NoUpdate,Failed,Finished,ShuttingDown };
+                    UpdateInProgress,Finalizing,NoUpdate,Failed,Finished,ShuttingDown };
   State state=State::Ready;
   OtaUpdater::Channel selectedChannel=OtaUpdater::Channel::Stable;
   int selectedReadyRow=0;
@@ -641,9 +824,14 @@ struct OtaUpdateActivity : Activity {
   OtaUpdater updater;
   OptionPopup updateConfirmation;
   const char* failedDetail=nullptr;
+  bool cancelRequested=false,waitForBackRelease=false;
+  unsigned long lastInputPoll=0;
   void renderUpdateAvailable(Rect) {}
   void render(RenderLock&&) override;
   void runUpdateInstall();
+  void beginCancelPolling();
+  bool pollCancel();
+  void drawCancelHint(const Rect&,int);
 };
 enum { CHECK_UPDATES_ROW,NIGHTLY_ROW,READY_ROW_COUNT };
 Rect getReadyListRect(const GfxRenderer&) { return {0,0,400,100}; }
@@ -693,10 +881,12 @@ struct Scanner {
 };
 }
 namespace HttpDownloader {
-template<class F> bool fetchUrl(const std::string&,F write) {
+template<class F> bool fetchUrl(const std::string&,F write,const char*,const char*,
+                                const std::vector<int>&,const OtaUpdater::AbortCallback& shouldAbort) {
   ++fetches;
   size_t previous=0;
   for (size_t current : {10,90,100,190,200,550,640,650,990,1000}) {
+    if (shouldAbort && shouldAbort()) return false;
     std::vector<uint8_t> chunk(current-previous,0);
     if (fault==Failure::WrongChip && previous<=12 && current>12) chunk[12-previous]=1;
     if (!write(chunk.data(),chunk.size())) return false;

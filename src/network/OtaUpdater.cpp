@@ -14,6 +14,7 @@
 #if FREEINK_DEVICE_XUESU_300
 #include <ArduinoJson.h>
 #include <HalClock.h>
+#include <WiFi.h>
 #include <mbedtls/sha256.h>
 #endif
 // clang-format on
@@ -71,6 +72,7 @@ constexpr std::string_view xuesuImageBase = "https://clown145.github.io/snowmux/
 constexpr char xuesuMirrorFormat[] =
     "https://gh-proxy.com/https://github.com/clown145/snowmux/releases/download/xuesu-v%s/xuesu-v%s-ota1.bin";
 constexpr int xuesuMirrorTimeoutMs = 10'000;
+constexpr int xuesuOtaTimeoutMs = 15'000;
 constexpr size_t xuesuSlotSize = 0x730000;
 constexpr size_t xuesuManifestLimit = 4096;
 using ImageHash = std::array<uint8_t, 32>;
@@ -115,16 +117,18 @@ bool isXuesuAppSlot(const esp_partition_t* partition) {
 #endif
 }  // namespace
 
-OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
+OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel,
+                                                       const AbortCallback& shouldAbort) {
 #if FREEINK_DEVICE_PICCO
   return UNSUPPORTED_CHANNEL;
 #endif
   updateAvailable = false;
+  if (shouldAbort && shouldAbort()) return CANCELLED;
   channel = requestedChannel;
 #if FREEINK_DEVICE_XUESU_300
   if (channel == Channel::Nightly) return UNSUPPORTED_CHANNEL;
-  if (!halClock.hasValidTime() && !halClock.syncFromNTP()) return HTTP_ERROR;
-  if (channel == Channel::Factory) return checkFactoryRelease();
+  if (!halClock.hasValidTime()) return HTTP_ERROR;
+  if (channel == Channel::Factory) return checkFactoryRelease(shouldAbort);
   const char* releaseUrl = xuesuManifestUrl;
 #else
   char releaseUrl[releaseUrlCapacity];
@@ -163,10 +167,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     return true;
   };
 #if FREEINK_DEVICE_XUESU_300
-  const bool ok = HttpDownloader::fetchVerifiedHttps(releaseUrl, feedRelease);
+  const bool ok = HttpDownloader::fetchVerifiedHttps(releaseUrl, feedRelease, xuesuOtaTimeoutMs, shouldAbort);
 #else
-  const bool ok = HttpDownloader::fetchUrl(releaseUrl, feedRelease);
+  const bool ok = HttpDownloader::fetchUrl(releaseUrl, feedRelease, "", "", {}, shouldAbort);
 #endif
+  if (shouldAbort && shouldAbort()) return CANCELLED;
   if (!ok) {
     LOG_ERR("OTA", "Release check fetch failed");
     return HTTP_ERROR;
@@ -214,7 +219,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
 }
 
 #if FREEINK_DEVICE_XUESU_300
-OtaUpdater::OtaUpdaterError OtaUpdater::checkFactoryRelease() {
+OtaUpdater::OtaUpdaterError OtaUpdater::checkFactoryRelease(const AbortCallback& shouldAbort) {
   // The vendor publishes a multi-device JSON document. Read it into one
   // bounded heap buffer so the update activity does not need a larger stack.
   constexpr size_t manifestCapacity = 8192;
@@ -224,14 +229,17 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkFactoryRelease() {
     return OOM_ERROR;
   }
   size_t length = 0;
-  if (!HttpDownloader::fetchVerifiedHttps(xuesuFactoryManifest, [&](const uint8_t* data, size_t len) {
+  const bool ok = HttpDownloader::fetchVerifiedHttps(
+      xuesuFactoryManifest,
+      [&](const uint8_t* data, size_t len) {
         if (len > manifestCapacity - length) return false;
         std::memcpy(manifest.get() + length, data, len);
         length += len;
         return true;
-      })) {
-    return HTTP_ERROR;
-  }
+      },
+      xuesuOtaTimeoutMs, shouldAbort);
+  if (shouldAbort && shouldAbort()) return CANCELLED;
+  if (!ok) return HTTP_ERROR;
 
   JsonDocument filter;
   JsonObject fields = filter["devices"][xuesuFactoryModel].to<JsonObject>();
@@ -322,7 +330,8 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
-OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
+OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx,
+                                                      const AbortCallback& shouldAbort) {
 #if FREEINK_DEVICE_PICCO
   return UNSUPPORTED_CHANNEL;
 #endif
@@ -336,25 +345,28 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     const int length =
         snprintf(mirrorUrl, sizeof(mirrorUrl), xuesuMirrorFormat, latestVersion.c_str(), latestVersion.c_str());
     if (length > 0 && static_cast<size_t>(length) < sizeof(mirrorUrl)) {
-      const auto result = installUpdateFromSource(mirrorUrl, onProgress, ctx);
+      const auto result = installUpdateFromSource(mirrorUrl, onProgress, ctx, shouldAbort);
       if (result == OK) {
         LOG_INF("OTA", "Xuesu update verified from gh-proxy.com");
         return OK;
       }
       if (result != HTTP_ERROR && result != VERIFICATION_ERROR && result != WRONG_DEVICE_ERROR) return result;
+      if (WiFi.status() != WL_CONNECTED) return HTTP_ERROR;
 
       // The mirror attempt has been aborted. Start a fresh write from the canonical Pages URL.
       LOG_INF("OTA", "Xuesu mirror failed (%d), retrying from Pages", static_cast<int>(result));
       processedSize = 0;
-      if (onProgress) onProgress(ctx);
+      if (onProgress) onProgress(ctx, InstallPhase::Downloading);
     }
   }
 #endif
-  return installUpdateFromSource(nullptr, onProgress, ctx);
+  return installUpdateFromSource(nullptr, onProgress, ctx, shouldAbort);
 }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource([[maybe_unused]] const char* mirrorUrl,
-                                                                ProgressCallback onProgress, void* ctx) {
+                                                                ProgressCallback onProgress, void* ctx,
+                                                                const AbortCallback& shouldAbort) {
+  if (shouldAbort && shouldAbort()) return CANCELLED;
   // esp_https_ota is hardwired to esp-tls/mbedTLS, whose precompiled build on this
   // package can't negotiate TLS 1.3 (see SecureClient.h). Drive the OTA partition
   // ourselves and stream the firmware through HttpDownloader, which runs over
@@ -456,15 +468,15 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource([[maybe_unused]]
       const int pct = static_cast<int>(static_cast<uint64_t>(processedSize) * 100 / totalSize);
       if (pct != lastReportedPct) {
         lastReportedPct = pct;
-        onProgress(ctx);
+        onProgress(ctx, InstallPhase::Downloading);
       }
     }
     return true;
   };
 #if FREEINK_DEVICE_XUESU_300
-  const bool fetchOk =
-      verificationOk && HttpDownloader::fetchVerifiedHttps(mirrorUrl ? mirrorUrl : otaUrl.c_str(), writeChunk,
-                                                           mirrorUrl ? xuesuMirrorTimeoutMs : 0);
+  const bool fetchOk = verificationOk && HttpDownloader::fetchVerifiedHttps(
+                                             mirrorUrl ? mirrorUrl : otaUrl.c_str(), writeChunk,
+                                             mirrorUrl ? xuesuMirrorTimeoutMs : xuesuOtaTimeoutMs, shouldAbort);
   ImageHash actualHash{};
   if (fetchOk) {
     verificationOk =
@@ -473,18 +485,24 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource([[maybe_unused]]
                               actualHash == expectedHash));
   }
   if (!restoringFactory) mbedtls_sha256_free(&hashContext);
-  if (!verificationOk) {
-    LOG_ERR("OTA", "Xuesu image failed size, board tag or SHA-256 verification");
-    esp_ota_abort(otaHandle);
-    return VERIFICATION_ERROR;
-  }
 #else
-  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, writeChunk);
+  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, writeChunk, "", "", {}, shouldAbort);
 #endif
 
   /* Return back to default power saving for WiFi in case of failing */
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
+  if (shouldAbort && shouldAbort()) {
+    esp_ota_abort(otaHandle);
+    return CANCELLED;
+  }
+#if FREEINK_DEVICE_XUESU_300
+  if (!verificationOk) {
+    LOG_ERR("OTA", "Xuesu image failed size, board tag or SHA-256 verification");
+    esp_ota_abort(otaHandle);
+    return VERIFICATION_ERROR;
+  }
+#endif
   if (wrongChip || wrongBoard) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device");
     esp_ota_abort(otaHandle);
@@ -497,6 +515,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdateFromSource([[maybe_unused]]
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
   }
 
+  if (onProgress) onProgress(ctx, InstallPhase::Finalizing);
   esp_err = esp_ota_end(otaHandle);  // verifies the written image
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(esp_err));

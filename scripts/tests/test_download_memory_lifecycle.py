@@ -33,7 +33,11 @@ class DownloadMemoryLifecycleTest(unittest.TestCase):
 #define LOG_ERR(...) ((void)0)
 #define LOG_DBG(...) ((void)0)
 #define LOG_INF(...) ((void)0)
+#ifndef FREEINK_DEVICE_XUESU_300
+#define FREEINK_DEVICE_XUESU_300 0
+#endif
 constexpr int WIFI_MODE_NULL = 0;
+constexpr int WIFI_OFF = WIFI_MODE_NULL;
 bool childAllocationOk = true, locked = false;
 int launches = 0, restartRoute = -1;
 struct ActivityResult { bool isCancelled = false; };
@@ -55,7 +59,11 @@ struct RenderLock {
   explicit RenderLock(Activity&) { assert(!locked); locked = true; }
   ~RenderLock() { locked = false; }
 };
-struct WifiSelectionActivity { WifiSelectionActivity(int, int) {} };
+struct WifiSelectionActivity {
+  WifiSelectionActivity(int, int, bool autoConnect = true, bool syncClockOnConnect = true) {
+    assert(autoConnect && syncClockOnConnect == !FREEINK_DEVICE_XUESU_300);
+  }
+};
 template<class T, class... Args> auto makeUniqueNoThrow(Args... args) {
   return childAllocationOk ? std::make_unique<T>(args...) : nullptr;
 }
@@ -65,11 +73,16 @@ struct {
   bool releaseMemoryForNetwork() { assert(locked); ++releases; return ok; }
 } READING_STATS;
 struct {
-  int mode = WIFI_MODE_NULL, disconnects = 0;
-  int getMode() { return mode; }
+  int currentMode = WIFI_MODE_NULL, disconnects = 0;
+  int getMode() { return currentMode; }
+  void mode(int value) { currentMode = value; }
   void disconnect(bool) { ++disconnects; }
 } WiFi;
-struct { void setAutoSyncEnabled(bool) {} } halClock;
+struct { bool autoSync = true; void setAutoSyncEnabled(bool enabled) { autoSync = enabled; } } halClock;
+struct { int clockAutoSync = 1; } SETTINGS;
+#if FREEINK_DEVICE_XUESU_300
+struct { void ensureLoaded(int, bool) {} } sdFontSystem;
+#endif
 void delay(int) {}
 void silentRestart() { restartRoute = 0; }
 void silentRestartToReader(bool suppress = false) { restartRoute = suppress ? 2 : 1; }
@@ -145,23 +158,30 @@ int main() {
       FontDownloadActivity font;
       font.readingStatsReleased_ = c3;
       font.exitRoute_ = static_cast<FontDownloadActivity::ExitRoute>(route);
-      WiFi.mode = wifi; WiFi.disconnects = 0; restartRoute = -1;
+      WiFi.currentMode = wifi; WiFi.disconnects = 0; restartRoute = -1;
       font.onExit();
       assert(WiFi.disconnects == wifi);
       assert(restartRoute == (c3 || wifi || route == 3 ? route : -1));
     }
   }
-  WiFi.mode = 1; restartRoute = -1;
+  WiFi.currentMode = 1; restartRoute = -1;
+  halClock.autoSync = false;
   OtaUpdateActivity networkOta;
   networkOta.onExit();
+  assert(halClock.autoSync);
+#if FREEINK_DEVICE_XUESU_300
+  assert(restartRoute == -1 && WiFi.currentMode == WIFI_OFF);
+#else
   assert(restartRoute == 0);
+#endif
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
             cpp = Path(directory) / "lifecycle.cpp"
             cpp.write_text(harness + methods + checks)
             executable = Path(directory) / "lifecycle"
-            for defines in (["-DCONFIG_IDF_TARGET_ESP32C3=1"], ["-DCONFIG_IDF_TARGET_ESP32S3=1"]):
+            for defines in (["-DCONFIG_IDF_TARGET_ESP32C3=1"], ["-DCONFIG_IDF_TARGET_ESP32S3=1"],
+                            ["-DCONFIG_IDF_TARGET_ESP32S3=1", "-DFREEINK_DEVICE_XUESU_300=1"]):
                 with self.subTest(defines=defines):
                     subprocess.run(shlex.split(os.environ.get("CXX", "c++")) + [
                         "-std=c++20", "-Wall", "-Wextra", "-Werror", *defines,

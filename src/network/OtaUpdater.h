@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <span>
 #include <string>
 
@@ -32,7 +33,9 @@ class OtaUpdater {
   size_t releaseNoteCount = 0;
 
  public:
-  using ProgressCallback = void (*)(void* ctx);
+  enum class InstallPhase : uint8_t { Downloading, Finalizing };
+  using ProgressCallback = void (*)(void* ctx, InstallPhase phase);
+  using AbortCallback = std::function<bool()>;
 
   enum OtaUpdaterError {
     OK = 0,
@@ -45,6 +48,7 @@ class OtaUpdater {
     OOM_ERROR,
     WRONG_DEVICE_ERROR,
     VERIFICATION_ERROR,
+    CANCELLED,
   };
 
   size_t getOtaSize() const { return otaSize; }
@@ -75,15 +79,17 @@ class OtaUpdater {
     }
   }
 #endif
-  OtaUpdaterError checkForUpdate(Channel requestedChannel);
-  OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr);
+  OtaUpdaterError checkForUpdate(Channel requestedChannel, const AbortCallback& shouldAbort = nullptr);
+  OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr,
+                                const AbortCallback& shouldAbort = nullptr);
 #if FREEINK_DEVICE_XUESU_300
   bool targetsOta0() const;
 #endif
 
  private:
-  OtaUpdaterError installUpdateFromSource(const char* mirrorUrl, ProgressCallback onProgress, void* ctx);
+  OtaUpdaterError installUpdateFromSource(const char* mirrorUrl, ProgressCallback onProgress, void* ctx,
+                                          const AbortCallback& shouldAbort);
 #if FREEINK_DEVICE_XUESU_300
-  OtaUpdaterError checkFactoryRelease();
+  OtaUpdaterError checkFactoryRelease(const AbortCallback& shouldAbort);
 #endif
 };

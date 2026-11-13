@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <functional>
 
 enum class ClockSyncState : uint8_t {
   Idle,
@@ -50,6 +51,6 @@ class HalClock {
   void setAutoSyncEnabled(bool enabled);
   void setUseChinaServers(bool enabled) { _useChinaServers = enabled; }
   bool requestSync();
-  bool syncNow(uint32_t timeoutMs = 10000);
+  bool syncNow(uint32_t timeoutMs = 10000, const std::function<bool()>& shouldAbort = nullptr);
   ClockSyncState syncState() const { return _syncState; }
 };

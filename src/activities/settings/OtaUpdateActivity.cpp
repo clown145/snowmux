@@ -39,6 +39,7 @@ enum ReadyRow {
 
 constexpr uint8_t RELEASE_NOTE_MAX_LINES = 4;
 constexpr unsigned int PROGRESS_REFRESH_STEP_PERCENT = 10;
+constexpr unsigned long INPUT_POLL_INTERVAL_MS = 20;
 
 fui::TextStyle releaseNoteStyle() {
   fui::TextStyle style;
@@ -86,6 +87,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 
   LOG_DBG("OTA", "WiFi connected, checking for update");
 
+  beginCancelPolling();
   {
     RenderLock lock(*this);
     state = State::CheckingForUpdate;
@@ -97,14 +99,45 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 #else
   // The checking screen can reload fonts after WiFi startup cleanup, so release them again immediately before TLS.
   NetworkStartup::prepare(renderer);
+  const OtaUpdater::AbortCallback shouldAbort = [this] { return pollCancel(); };
+#if FREEINK_DEVICE_XUESU_300
+  const bool firstRtcSync = halClock.isAvailable() && !SETTINGS.clockHasBeenSynced;
+  const bool needsTimeForTls = !halClock.hasValidTime();
+  if (firstRtcSync || needsTimeForTls) {
+    constexpr uint32_t clockSyncTimeoutMs = 10'000;
+    const bool synced = halClock.syncNow(clockSyncTimeoutMs, shouldAbort);
+    if (shouldAbort()) {
+      finish();
+      return;
+    }
+    if (!synced && needsTimeForTls) {
+      {
+        RenderLock lock(*this);
+        failedDetail = WiFi.status() == WL_CONNECTED ? tr(STR_CLOCK_SYNC_FAIL) : tr(STR_WIFI_CONN_FAILED);
+        state = State::Failed;
+      }
+      requestUpdate();
+      return;
+    }
+    if (synced && firstRtcSync) {
+      SETTINGS.clockHasBeenSynced = 1;
+      SETTINGS.saveToFile();
+    }
+  }
+#endif
   LOG_INF("OTA", "TLS preflight (manifest): free=%u, maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
-  const auto res = updater.checkForUpdate(selectedChannel);
+  const auto res = updater.checkForUpdate(selectedChannel, shouldAbort);
+  if (res == OtaUpdater::CANCELLED) {
+    finish();
+    return;
+  }
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update check failed: %d", res);
     {
       RenderLock lock(*this);
       failedDetail = res == OtaUpdater::UNSUPPORTED_CHANNEL ? tr(STR_OTA_CHANNEL_UNSUPPORTED) : nullptr;
+      if (res == OtaUpdater::HTTP_ERROR && WiFi.status() != WL_CONNECTED) failedDetail = tr(STR_WIFI_CONN_FAILED);
       state = State::Failed;
     }
     requestUpdate();
@@ -199,7 +232,8 @@ void OtaUpdateActivity::beginWifiSelection() {
   }
 #endif
   // ActivityManager owns the child across frames, so stack/static lifetime is invalid.
-  auto wifiSelection = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput);
+  auto wifiSelection = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/true,
+                                                                /*syncClockOnConnect=*/!FREEINK_DEVICE_XUESU_300);
   if (!wifiSelection) {
     LOG_ERR("OTA", "OOM: WifiSelectionActivity (%u bytes)", static_cast<unsigned>(sizeof(WifiSelectionActivity)));
     state = State::Failed;
@@ -224,6 +258,13 @@ void OtaUpdateActivity::onExit() {
   Activity::onExit();
 
   const bool wifiWasEnabled = WiFi.getMode() != WIFI_MODE_NULL;
+#if FREEINK_DEVICE_XUESU_300
+  // This target keeps its reading statistics loaded throughout the update.
+  if (wifiWasEnabled) {
+    WiFi.mode(WIFI_OFF);
+    sdFontSystem.ensureLoaded(renderer, false);
+  }
+#else
   if (wifiWasEnabled) {
     WiFi.disconnect(false);
     delay(30);
@@ -233,6 +274,8 @@ void OtaUpdateActivity::onExit() {
   if (wifiWasEnabled || readingStatsReleased) {
     silentRestart();
   }
+#endif
+  halClock.setAutoSyncEnabled(SETTINGS.clockAutoSync != 0);
 }
 
 void OtaUpdateActivity::showUpdateConfirmation() {
@@ -409,6 +452,38 @@ void OtaUpdateActivity::onInstallUpdate(const fui::ActionEvent&, void* user) {
   self->showUpdateConfirmation();
 }
 
+void OtaUpdateActivity::beginCancelPolling() {
+  cancelRequested = false;
+  waitForBackRelease = mappedInput.isPressed(MappedInputManager::Button::Back);
+  lastInputPoll = millis() - INPUT_POLL_INTERVAL_MS;
+}
+
+bool OtaUpdateActivity::pollCancel() {
+  const auto now = millis();
+  if (cancelRequested || now - lastInputPoll < INPUT_POLL_INTERVAL_MS) return cancelRequested;
+  lastInputPoll = now;
+
+  // OTA owns the input snapshot while this synchronous transfer blocks the main loop.
+  mappedInput.update();
+  if (waitForBackRelease) {
+    waitForBackRelease = mappedInput.isPressed(MappedInputManager::Button::Back);
+    return false;
+  }
+  cancelRequested = mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture();
+  return cancelRequested;
+}
+
+void OtaUpdateActivity::drawCancelHint(const Rect& bounds, const int y) {
+#if FREEINK_DEVICE_XUESU_300
+  UITheme::drawCenteredText(renderer, bounds, UI_10_FONT_ID, y, tr(STR_XUESU_OTA_CANCEL_HINT));
+#else
+  (void)bounds;
+  (void)y;
+  const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+#endif
+}
+
 void OtaUpdateActivity::render(RenderLock&&) {
   if (!UITheme::getInstance().hasMainTabs() && state != State::Ready && state != State::UpdateAvailable &&
       state != State::ConfirmingUpdate) {
@@ -418,12 +493,14 @@ void OtaUpdateActivity::render(RenderLock&&) {
 
     renderer.clearScreen();
 
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_UPDATE));
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_UPDATE), nullptr,
+                   state != State::Finalizing && state != State::Finished);
     const auto height = renderer.getLineHeight(UI_10_FONT_ID);
     const auto top = (pageHeight - height) / 2;
 
     if (state == State::CheckingForUpdate) {
       renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_CHECKING_UPDATE));
+      drawCancelHint(Rect{0, 0, pageWidth, pageHeight}, top + height + metrics.verticalSpacing);
     } else if (state == State::ConfirmingUpdate) {
       // Version info sits in the upper part of the screen so the centered
       // Cancel/Update popup doesn't cover it (same layout as ConfirmationActivity).
@@ -435,7 +512,7 @@ void OtaUpdateActivity::render(RenderLock&&) {
 
       if (updateConfirmation.processRender(renderer, mappedInput)) return;
     } else if (state == State::UpdateInProgress) {
-      renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATING));
+      renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_DOWNLOADING));
 
       int y = top + height + metrics.verticalSpacing;
       GUI.drawProgressBar(
@@ -450,6 +527,11 @@ void OtaUpdateActivity::render(RenderLock&&) {
       char progressText[48];
       snprintf(progressText, sizeof(progressText), "%zu / %zu", progressBytes, progressTotalBytes);
       renderer.drawCenteredText(UI_10_FONT_ID, y, progressText);
+      drawCancelHint(Rect{0, 0, pageWidth, pageHeight}, y + height + metrics.verticalSpacing);
+    } else if (state == State::Finalizing) {
+      renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATING));
+      renderer.drawCenteredText(UI_10_FONT_ID, top + height + metrics.verticalSpacing,
+                                tr(STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF));
     } else if (state == State::NoUpdate) {
       renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_NO_UPDATE), true, EpdFontFamily::BOLD);
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
@@ -528,12 +610,14 @@ void OtaUpdateActivity::render(RenderLock&&) {
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       break;
     }
-    case State::CheckingForUpdate:
+    case State::CheckingForUpdate: {
       GUI.drawHeader(renderer, Rect{safeArea.x, safeArea.y + metrics.topPadding, safeArea.width, metrics.headerHeight},
                      tr(STR_UPDATE));
-      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, SubpageLayout::centeredTop(content, titleHeight),
-                                tr(STR_CHECKING_UPDATE));
+      const int top = SubpageLayout::centeredTop(content, titleHeight);
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, top, tr(STR_CHECKING_UPDATE));
+      drawCancelHint(textBounds, top + titleHeight + relatedGap);
       break;
+    }
     case State::UpdateAvailable:
     case State::ConfirmingUpdate:
       renderUpdateAvailable(safeArea);
@@ -545,7 +629,7 @@ void OtaUpdateActivity::render(RenderLock&&) {
       const int blockHeight = titleHeight + sectionGap +
                               GUI.measureProgressBarHeight(renderer, metrics.progressBarHeight) + relatedGap + height;
       int y = SubpageLayout::centeredTop(content, blockHeight);
-      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, y, tr(STR_UPDATING), true, EpdFontFamily::BOLD);
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, y, tr(STR_DOWNLOADING), true, EpdFontFamily::BOLD);
       y += titleHeight + sectionGap;
       y = GUI.drawProgressBar(renderer, Rect{textBounds.x, y, textBounds.width, metrics.progressBarHeight},
                               std::min(progressBytes, progressTotalBytes), std::max<size_t>(progressTotalBytes, 1)) +
@@ -553,6 +637,16 @@ void OtaUpdateActivity::render(RenderLock&&) {
       char progressText[48];
       snprintf(progressText, sizeof(progressText), "%zu / %zu", progressBytes, progressTotalBytes);
       UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, y, progressText);
+      drawCancelHint(textBounds, y + height + relatedGap);
+      break;
+    }
+    case State::Finalizing: {
+      GUI.drawHeader(renderer, Rect{safeArea.x, safeArea.y + metrics.topPadding, safeArea.width, metrics.headerHeight},
+                     tr(STR_UPDATE), nullptr, false);
+      const int top = SubpageLayout::centeredTop(content, titleHeight + relatedGap + height);
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, top, tr(STR_UPDATING));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, top + titleHeight + relatedGap,
+                                tr(STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF));
       break;
     }
     case State::NoUpdate: {
@@ -599,6 +693,7 @@ void OtaUpdateActivity::render(RenderLock&&) {
 
 void OtaUpdateActivity::runUpdateInstall() {
   LOG_DBG("OTA", "New update available, starting download...");
+  beginCancelPolling();
   {
     RenderLock lock(*this);
     progressBytes = 0;
@@ -614,7 +709,7 @@ void OtaUpdateActivity::runUpdateInstall() {
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
 #endif
   const auto res = updater.installUpdate(
-      [](void* ctx) {
+      [](void* ctx, OtaUpdater::InstallPhase phase) {
         auto* self = static_cast<OtaUpdateActivity*>(ctx);
         bool refresh = false;
         {
@@ -627,9 +722,12 @@ void OtaUpdateActivity::runUpdateInstall() {
                         static_cast<uint64_t>(std::min(self->progressBytes, self->progressTotalBytes)) * 100 /
                         self->progressTotalBytes)
                   : 0;
-          if (percent < self->lastProgressRefreshPercent ||
-              percent >= self->lastProgressRefreshPercent + PROGRESS_REFRESH_STEP_PERCENT ||
-              (percent == 100 && self->lastProgressRefreshPercent != 100)) {
+          if (phase == OtaUpdater::InstallPhase::Finalizing) {
+            self->state = OtaUpdateActivity::State::Finalizing;
+            refresh = true;
+          } else if (percent < self->lastProgressRefreshPercent ||
+                     percent >= self->lastProgressRefreshPercent + PROGRESS_REFRESH_STEP_PERCENT ||
+                     (percent == 100 && self->lastProgressRefreshPercent != 100)) {
             self->lastProgressRefreshPercent = percent;
             refresh = true;
           }
@@ -637,7 +735,12 @@ void OtaUpdateActivity::runUpdateInstall() {
         // Flash writes suspend Read Pico's display feeder tasks; finish the frame before resuming the writer.
         if (refresh) self->requestUpdateAndWait();
       },
-      this);
+      this, [this] { return pollCancel(); });
+
+  if (res == OtaUpdater::CANCELLED) {
+    finish();
+    return;
+  }
 
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update failed: %d", res);
@@ -647,6 +750,9 @@ void OtaUpdateActivity::runUpdateInstall() {
       failedDetail = res == OtaUpdater::WRONG_DEVICE_ERROR ? tr(STR_FIRMWARE_WRONG_DEVICE) : nullptr;
 #if FREEINK_DEVICE_XUESU_300
       if (res == OtaUpdater::VERIFICATION_ERROR) failedDetail = tr(STR_INVALID_FIRMWARE);
+#endif
+#ifndef SIMULATOR
+      if (res == OtaUpdater::HTTP_ERROR && WiFi.status() != WL_CONNECTED) failedDetail = tr(STR_WIFI_CONN_FAILED);
 #endif
       state = State::Failed;
     }
@@ -750,6 +856,7 @@ void OtaUpdateActivity::loop() {
     case State::WifiSelection:
     case State::CheckingForUpdate:
     case State::UpdateInProgress:
+    case State::Finalizing:
     case State::Finished:
       return;
   }

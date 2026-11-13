@@ -9,6 +9,7 @@
 #include <ResumableFetch.h>
 
 #if FREEINK_DEVICE_XUESU_300
+#include <WiFi.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #endif
@@ -64,8 +65,9 @@ bool g_lastRedirected = false;
 HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
                                            const std::string& password,
                                            const std::vector<HttpDownloader::Header>& headers,
-                                           const freeink::FetchSink& sink, const bool* cancelFlag = nullptr,
-                                           size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false) {
+                                           const freeink::FetchSink& sink,
+                                           const HttpDownloader::AbortCallback& shouldAbort, size_t* bytesOut = nullptr,
+                                           const bool downgradeRedirectsToHttp = false) {
   char userAgent[80];
   const int length =
       snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
@@ -95,7 +97,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
         LOG_DBG("HTTP", "wolfSSL GET: %s (heap %u, max block %u)", url.c_str(), (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMaxAllocHeap());
       },
-      sink, [cancelFlag] { return cancelFlag && *cancelFlag; });
+      sink, shouldAbort);
   if (bytesOut) *bytesOut = result.bytes;
   // FetchResult::status is -1 when no response arrived (bad URL, DNS, connect, TLS).
   g_lastStatus = result.status < 0 ? 0 : result.status;
@@ -145,17 +147,21 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
-                              const std::string& password, const std::vector<Header>& headers) {
+                              const std::string& password, const std::vector<Header>& headers,
+                              const AbortCallback& shouldAbort) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   freeink::FetchSink sink;
   sink.write = onData;
-  return runGetSecure(url, username, password, headers, sink) == OK;
+  return runGetSecure(url, username, password, headers, sink, shouldAbort) == OK;
 }
 
 #if FREEINK_DEVICE_XUESU_300
-bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onData, const int timeoutMs) {
+bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onData, const int timeoutMs,
+                                        const AbortCallback& shouldAbort) {
   if (!std::string_view(url).starts_with("https://") || !hasMemoryForTls()) return false;
 
+  constexpr int connectPollMs = 3000;
+  constexpr int readPollMs = 75;
   // Reuse a single 1 KiB buffer for the transfer without growing the activity stack.
   constexpr size_t bufferSize = 1024;
   const auto buffer = makeUniqueNoThrow<char[]>(bufferSize);
@@ -167,24 +173,51 @@ bool HttpDownloader::fetchVerifiedHttps(const char* url, const DataCallback& onD
   WifiPowerSaveGuard psGuard;
   esp_http_client_config_t config{};
   config.url = url;
-  config.timeout_ms = timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS;
+  config.is_async = true;
+  config.timeout_ms = connectPollMs;
   config.disable_auto_redirect = true;
   config.crt_bundle_attach = esp_crt_bundle_attach;
   config.buffer_size = bufferSize;
   const std::unique_ptr<std::remove_pointer_t<esp_http_client_handle_t>, decltype(&esp_http_client_cleanup)> client(
       esp_http_client_init(&config), esp_http_client_cleanup);
-  if (!client || esp_http_client_open(client.get(), 0) != ESP_OK || esp_http_client_fetch_headers(client.get()) < 0 ||
-      esp_http_client_get_status_code(client.get()) != 200) {
+  if (!client) return false;
+
+  auto lastProgress = millis();
+  const auto stopped = [&] {
+    return (shouldAbort && shouldAbort()) || WiFi.status() != WL_CONNECTED ||
+           millis() - lastProgress >= static_cast<unsigned long>(timeoutMs);
+  };
+
+  esp_err_t opened;
+  do {
+    if (stopped()) return false;
+    opened = esp_http_client_open(client.get(), 0);
+    if (opened == ESP_ERR_HTTP_EAGAIN) delay(1);
+  } while (opened == ESP_ERR_HTTP_EAGAIN);
+
+  int64_t headers = ESP_FAIL;
+  if (opened == ESP_OK && esp_http_client_set_timeout_ms(client.get(), readPollMs) == ESP_OK) {
+    do {
+      if (stopped()) return false;
+      headers = esp_http_client_fetch_headers(client.get());
+    } while (headers == -ESP_ERR_HTTP_EAGAIN);
+  }
+  if (headers < 0 || esp_http_client_get_status_code(client.get()) != 200) {
     LOG_ERR("HTTP", "Verified GET failed: %s", url);
     return false;
   }
 
-  for (;;) {
+  lastProgress = millis();
+  while (!stopped()) {
     const int received = esp_http_client_read(client.get(), buffer.get(), bufferSize);
+    if (received == -ESP_ERR_HTTP_EAGAIN) continue;
     if (received < 0) return false;
     if (received == 0) return esp_http_client_is_complete_data_received(client.get());
+    if (stopped()) return false;
     if (!onData(reinterpret_cast<const uint8_t*>(buffer.get()), static_cast<size_t>(received))) return false;
+    lastProgress = millis();
   }
+  return false;
 }
 #endif
 
@@ -386,8 +419,9 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   sink.progress = progress;
 
   size_t downloaded = 0;
-  const DownloadError result =
-      runGetSecure(url, username, password, headers, sink, cancelFlag, &downloaded, downgradeRedirectsToHttp);
+  const DownloadError result = runGetSecure(
+      url, username, password, headers, sink, [cancelFlag] { return cancelFlag && *cancelFlag; }, &downloaded,
+      downgradeRedirectsToHttp);
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
   // otherwise close only after the remove. A failed rewind leaves no open handle.
   if (file.isOpen()) file.close();

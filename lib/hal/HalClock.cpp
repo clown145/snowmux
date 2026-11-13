@@ -237,19 +237,34 @@ void HalClock::completeSync() {
 
 bool HalClock::requestSync() { return startSntp(); }
 
-bool HalClock::syncNow(const uint32_t timeoutMs) {
+bool HalClock::syncNow(const uint32_t timeoutMs, const std::function<bool()>& shouldAbort) {
   if (!startSntp()) return false;
 
-  if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeoutMs)) != ESP_OK) {
-    LOG_ERR("CLK", "SNTP sync timed out");
-    _syncState = ClockSyncState::Failed;
-    if (!_autoSyncEnabled) stopSntp();
-    return false;
-  }
+  constexpr uint32_t pollMs = 50;
+  const auto startedAt = millis();
+  auto remainingMs = timeoutMs;
+  do {
+    if (shouldAbort && shouldAbort()) {
+      stopSntp();
+      _syncState = ClockSyncState::Idle;
+      return false;
+    }
+    const auto waitMs = shouldAbort && remainingMs > pollMs ? pollMs : remainingMs;
+    const auto result = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(waitMs));
+    if (result == ESP_OK) {
+      completeSync();
+      if (!_autoSyncEnabled) stopSntp();
+      return _syncState == ClockSyncState::Succeeded;
+    }
+    if (!shouldAbort || result != ESP_ERR_TIMEOUT || WiFi.status() != WL_CONNECTED) break;
+    const auto elapsedMs = millis() - startedAt;
+    remainingMs = elapsedMs >= timeoutMs ? 0 : timeoutMs - elapsedMs;
+  } while (remainingMs != 0);
 
-  completeSync();
+  LOG_ERR("CLK", "SNTP sync timed out");
+  _syncState = ClockSyncState::Failed;
   if (!_autoSyncEnabled) stopSntp();
-  return _syncState == ClockSyncState::Succeeded;
+  return false;
 }
 
 void HalClock::setAutoSyncEnabled(const bool enabled) {

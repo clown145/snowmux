@@ -46,6 +46,12 @@ total displays 0%. Download progress reaching 100% does not mean installation
 succeeded: the completion page is shown only after firmware verification and
 boot-partition selection succeed. No additional heap buffer is allocated.
 
+Online OTA accepts Back during the release check and firmware transfer. The
+blocking transfer polls logical input and unwinds before its activity exits.
+Cancellation aborts the inactive-slot write and leaves the current boot slot
+selected. Once final verification starts, the UI shows the power-off warning
+until verification and boot-partition selection complete.
+
 Run `python3 scripts/tests/test_firmware_update_refresh.py` for the production
 callback, Flash-operation ordering, failure-path and theme-render regressions,
 alongside `test_font_preload_refresh.py` and `test_download_memory_lifecycle.py`.

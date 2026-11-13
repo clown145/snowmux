@@ -43,8 +43,11 @@ bool readStationMac(uint8_t (&mac)[6]) {
 }  // namespace
 
 WifiSelectionActivity::WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                             const bool autoConnect)
-    : Activity("WifiSelection", renderer, mappedInput), UiAppHost(renderer), allowAutoConnect(autoConnect) {}
+                                             const bool autoConnect, const bool syncClockOnConnect)
+    : Activity("WifiSelection", renderer, mappedInput),
+      UiAppHost(renderer),
+      allowAutoConnect(autoConnect),
+      syncClockOnConnect(syncClockOnConnect) {}
 
 void WifiSelectionActivity::onRowEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<WifiSelectionActivity*>(user);
@@ -668,7 +671,7 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
     // drifts ~2 ppm so one sync is enough; users can force a re-sync from
     // Settings > System > Clock > Sync clock now.
-    if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
+    if (syncClockOnConnect && halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();

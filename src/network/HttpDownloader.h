@@ -22,6 +22,7 @@ class HttpDownloader {
   // Called with each body chunk as it arrives; return false to abort. Lets a
   // streaming parser consume the response without buffering the whole body.
   using DataCallback = std::function<bool(const uint8_t* data, size_t len)>;
+  using AbortCallback = std::function<bool()>;
   enum DownloadError {
     OK = 0,
     HTTP_ERROR,
@@ -64,10 +65,13 @@ class HttpDownloader {
    * Stream the response body to onData as it arrives, without buffering it.
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
-                       const std::string& password = "", const std::vector<Header>& headers = {});
+                       const std::string& password = "", const std::vector<Header>& headers = {},
+                       const AbortCallback& shouldAbort = nullptr);
 
-  // Stream a firmware response over verified HTTPS with redirects disabled. Zero uses the standard timeout.
-  static bool fetchVerifiedHttps(const char* url, const DataCallback& onData, int timeoutMs = 0);
+  // Stream a firmware response over verified HTTPS with redirects disabled.
+  // The timeout covers connecting and waiting for headers, then applies to an idle body.
+  static bool fetchVerifiedHttps(const char* url, const DataCallback& onData, int timeoutMs,
+                                 const AbortCallback& shouldAbort);
 
   /**
    * Authentication and response inspection options for fetchUrl/postForm.
