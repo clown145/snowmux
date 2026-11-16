@@ -30,10 +30,11 @@ OVERRIDES = f"""
 
 def patch_user_settings(path: Path) -> None:
     text = path.read_text()
-    if MARKER in text:
-        text = text.split(MARKER, 1)[0].rstrip()
-    path.write_text(text + OVERRIDES + "\n")
-    print(f"Patched wolfSSL settings: {path.relative_to(PROJECT_DIR)}")
+    source = text.split(MARKER, 1)[0].rstrip()
+    updated = source + OVERRIDES + "\n"
+    if updated != text:
+        path.write_text(updated)
+        print(f"Patched wolfSSL settings: {path.relative_to(PROJECT_DIR)}")
 
 
 
