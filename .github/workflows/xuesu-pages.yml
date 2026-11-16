@@ -1,24 +1,52 @@
 name: Release Xuesu firmware and publish Pages
+run-name: ${{ inputs.dry_run && 'Rehearse' || 'Publish' }} ${{ inputs.release_tag || 'Xuesu flasher' }}
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release tag (leave blank to update the flasher only)
+        type: string
+      dry_run:
+        description: Rehearse the tagged firmware build and package the site without publishing
+        type: boolean
+        default: false
 
 concurrency:
-  group: xuesu-release
+  group: ${{ inputs.dry_run && format('xuesu-rehearsal-{0}', github.ref) || 'xuesu-release' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  request:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate requested version and branch
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" == false && "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "::error::Run publication from the default branch."
+            exit 1
+          fi
+          if [[ -n "$RELEASE_TAG" || "$DRY_RUN" == true ]]; then
+            if [[ ! "$RELEASE_TAG" =~ ^xuesu-v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$ ]]; then
+              echo "::error::Enter a version tag such as xuesu-v0.1.0."
+              exit 1
+            fi
+          fi
+
   firmware:
-    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'xuesu-v')
+    needs: request
+    if: inputs.release_tag != ''
     uses: ./.github/workflows/xuesu-build.yml
     with:
-      release_tag: ${{ github.event.release.tag_name }}
-      published_at: ${{ github.event.release.published_at }}
+      release_tag: ${{ inputs.release_tag }}
 
   publish:
     needs: firmware
@@ -30,36 +58,64 @@ jobs:
         with:
           name: xuesu-firmware
           path: firmware-artifact
-      - name: Attach verified files to the release
+      - name: Prepare verified release files
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           mkdir release
-          digest=$(jq -er '.assets[0].digest | sub("^sha256:"; "")' firmware-artifact/api/v1/firmware/latest.json)
+          digest=$(jq -er --arg tag "$RELEASE_TAG" --arg commit "$GITHUB_SHA" '
+            select(.release_tag == $tag and .commit == $commit)
+            | .assets[0].digest | select(test("^sha256:[a-f0-9]{64}$")) | sub("^sha256:"; "")
+          ' firmware-artifact/api/v1/firmware/latest.json)
           firmware="${RELEASE_TAG}-ota1.bin"
           cp "firmware-artifact/firmware/${digest}.bin" "release/${firmware}"
           cp firmware-artifact/firmware/LICENSE.txt release/LICENSE.txt
           printf '%s  %s\n' "$digest" "$firmware" > release/SHA256SUMS.txt
           (cd release && sha256sum --check SHA256SUMS.txt)
 
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "$RUNNER_TEMP/xuesu-release.json"
-          for file in "release/${firmware}" release/LICENSE.txt release/SHA256SUMS.txt; do
+      - name: Attach files and publish the draft release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          release_id=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
+          draft=$(jq -r '.draft' <<< "$release")
+          target=$(jq -er '.target_commitish' <<< "$release")
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" | jq -r \
+            --arg tag "refs/tags/$RELEASE_TAG" '.[] | select(.ref == $tag) | .ref')
+          if [[ -n "$ref" ]]; then
+            target=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+          elif [[ "$draft" == true && "$target" == "$DEFAULT_BRANCH" ]]; then
+            target="$GITHUB_SHA"
+          fi
+          if [[ "$target" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release $RELEASE_TAG targets $target, expected $GITHUB_SHA."
+            exit 1
+          fi
+
+          for file in "release/${RELEASE_TAG}-ota1.bin" release/LICENSE.txt release/SHA256SUMS.txt; do
             name=${file##*/}
-            existing=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // "missing"' "$RUNNER_TEMP/xuesu-release.json")
-            if [[ -z "$existing" ]]; then
+            existing=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // "missing"' <<< "$release")
+            if [[ -z "$existing" && "$draft" == true ]]; then
               gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY"
             elif [[ "$existing" != "sha256:$(sha256sum "$file" | cut -d' ' -f1)" ]]; then
-              echo "::error::Existing release asset $name has a different digest. Publish a new version for a changed build."
+              echo "::error::Release asset $name is missing or has a different digest."
               exit 1
             fi
           done
+          if [[ "$draft" == true ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft=false
+          fi
 
   site:
-    needs: publish
-    if: ${{ !cancelled() && (needs.publish.result == 'success' ||
-      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) }}
+    needs: [request, publish]
+    if: ${{ !cancelled() && needs.request.result == 'success' &&
+      (inputs.release_tag == '' || needs.publish.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -77,12 +133,12 @@ jobs:
           npm test
           npm run build
       - uses: actions/download-artifact@v4
-        if: github.event_name == 'release'
+        if: inputs.release_tag != ''
         with:
           name: xuesu-firmware
           path: flasher/dist
       - name: Reuse the firmware from the deployed release
-        if: github.event_name == 'workflow_dispatch'
+        if: inputs.release_tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,7 +162,8 @@ jobs:
           (cd "$assets" && printf '%s  %s\n' "$digest" "$firmware" | sha256sum --check)
           cp "$assets/$firmware" "flasher/dist/firmware/$digest.bin"
           cp "$assets/LICENSE.txt" flasher/dist/firmware/LICENSE.txt
-      - name: Add GitHub Release notes to the OTA manifest
+      - name: Add GitHub Release date and notes to the OTA manifest
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -114,7 +171,11 @@ jobs:
           manifest=flasher/dist/api/v1/firmware/latest.json
           tag=$(jq -er '.release_tag' "$manifest")
           body="$RUNNER_TEMP/xuesu-release-body.md"
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' > "$body"
+          release=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body,publishedAt)
+          jq -r '.body // ""' <<< "$release" > "$body"
+          published_at=$(jq -er '.publishedAt | select(length > 0)' <<< "$release")
+          jq --arg date "$published_at" '.published_at = $date' "$manifest" > "$manifest.tmp"
+          mv "$manifest.tmp" "$manifest"
           python3 scripts/add_xuesu_release_notes.py "$manifest" "$body"
       - name: Upload GitHub Pages site
         uses: actions/upload-pages-artifact@v4
@@ -123,6 +184,7 @@ jobs:
 
   deploy:
     needs: site
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     permissions:
       pages: write

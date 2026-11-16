@@ -44,9 +44,10 @@ PYTHONUTF8=1 pio run -e xuesu_300
 
 刷机站地址为 [clown145.github.io/snowmux](https://clown145.github.io/snowmux/)，使用 [GitHub Pages 的 GitHub Actions 发布来源](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)。其他项目仓库使用 `https://<owner>.github.io/<repo>/`，账号或组织站点仓库 `<owner>.github.io` 部署在同域名的根路径。
 
-1. 新仓库在 **Settings → Pages → Source** 选 **GitHub Actions**。如果 `github-pages` 环境限制部署来源，在该环境的部署规则中允许标签 `xuesu-v*`。
+1. 新仓库在 **Settings → Pages → Source** 选 **GitHub Actions**。如果 `github-pages` 环境限制部署来源，在部署规则中允许默认分支。
 2. [固件构建工作流](../../.github/workflows/xuesu-build.yml)在针对 `main` 提交 PR 时运行，也可手动运行。通过后可下载 `xuesu-firmware` 工件。若要预览刷机页，先在 `flasher/` 构建网页，再将工件解压到 `flasher/dist/`。
-3. 在 **Releases** 发布形如 `xuesu-v0.1.1` 的版本，标签指向要构建的提交。[发版工作流](../../.github/workflows/xuesu-pages.yml)只构建一次带版本号的固件，把校验过的镜像、SHA-256 文件和许可附到 Release，再用同一工件部署网页和更新清单。只改刷机页时，可从默认分支手动运行发版工作流。它从当前更新清单对应的 Release 下载镜像，校验 SHA-256 后重新部署网页。[波形数据的许可说明](../../licenses/README.md#third-party-material)
+3. 在 **Releases** 保存形如 `xuesu-v0.1.1` 的草稿，写好更新说明并按需勾选预览版。从默认分支手动运行[发版工作流](../../.github/workflows/xuesu-pages.yml)，填写 `release_tag`。工作流以该版本号构建一次固件并回写编译缓存。它将镜像、SHA-256 文件和许可附到草稿，随后发布 Release，并用同一工件部署网页和更新清单。已有标签须指向本次构建的提交。[波形数据的许可说明](../../licenses/README.md#third-party-material)
+4. 只改刷机页时，从默认分支运行发版工作流，留空 `release_tag`。工作流从当前更新清单对应的 Release 下载镜像，校验 SHA-256 后重新部署网页。要演练带版本号的构建和打包，填写 `release_tag` 并勾选 `dry_run`，可在同一分支连续运行以验证缓存复用。
 
 刷机页提供 GitHub Release 附件的代理下载和直连入口。网页刷机先通过 `gh-proxy.com` 读取同一附件并核对 SHA-256，超时、下载失败或校验不符时改从 Pages 下载。
 
