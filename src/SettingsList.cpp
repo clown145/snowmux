@@ -26,6 +26,7 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
     values[CrossPointSettings::CLOCK_FIREWORKS] = StrId::STR_SLEEP_CLOCK_FIREWORKS;
     values[CrossPointSettings::CLOCK_SLOPPY] = StrId::STR_FACE_SLOPPY_CLOCK;
     values[CrossPointSettings::CLOCK_ALMANAC] = StrId::STR_FACE_CHINESE_CALENDAR;
+    values[CrossPointSettings::CLOCK_LANDSCAPE] = StrId::STR_SLEEP_CLOCK_LANDSCAPE;
 #endif
     return values;
   }();

@@ -28,6 +28,9 @@
 #include <esp_sntp.h>
 #endif
 #include <builtinFonts/all.h>
+#if FREEINK_DEVICE_XUESU_300
+#include <builtinFonts/xuesu_clock_digits.h>
+#endif
 #include <esp_heap_caps.h>
 #include <esp_wifi.h>
 #include <time.h>
@@ -741,9 +744,11 @@ static void setupBasicUiFonts() {
   renderer.setFallbackFont(UI_12_FONT_ID, CJK_UI_12_FONT_ID);
 #if FREEINK_DEVICE_XUESU_300
   static const EpdFont clockSmallFont(&notosans_8_regular);
+  static const EpdFont clockDigitsFont(&xuesu_clock_digits);
   renderer.insertFont(xuesu_sleep_clock::fontSmall, EpdFontFamily(8, &clockSmallFont));
   renderer.insertFont(xuesu_sleep_clock::fontBody, ui10FontFamily);
   renderer.insertFont(xuesu_sleep_clock::fontTitle, ui12FontFamily);
+  renderer.insertFont(xuesu_sleep_clock::fontDigits, EpdFontFamily(62, &clockDigitsFont));
   renderer.setFallbackFont(xuesu_sleep_clock::fontSmall, CJK_UI_8_FONT_ID);
   renderer.setFallbackFont(xuesu_sleep_clock::fontBody, CJK_UI_10_FONT_ID);
   renderer.setFallbackFont(xuesu_sleep_clock::fontTitle, CJK_UI_12_FONT_ID);

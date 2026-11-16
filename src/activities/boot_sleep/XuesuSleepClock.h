@@ -14,13 +14,15 @@ namespace xuesu_sleep_clock {
 inline constexpr int fontSmall = 0x58534308;
 inline constexpr int fontBody = 0x58534310;
 inline constexpr int fontTitle = 0x58534312;
+inline constexpr int fontDigits = 0x5853433E;
 
-enum class Layout : uint8_t { MonthGrid, Newspaper, Fireworks, Sloppy, Almanac, Count };
+enum class Layout : uint8_t { MonthGrid, Newspaper, Fireworks, Sloppy, Almanac, Landscape, Count };
 
 inline constexpr uint32_t environmentIntervalSeconds = 5 * 60;
 
 constexpr bool showsEnvironment(const Layout layout) {
-  return layout == Layout::MonthGrid || layout == Layout::Newspaper || layout == Layout::Fireworks;
+  return layout == Layout::MonthGrid || layout == Layout::Newspaper || layout == Layout::Fireworks ||
+         layout == Layout::Landscape;
 }
 
 struct FaceState {
@@ -42,6 +44,7 @@ struct Frame {
 bool isSelected(uint8_t sleepMode);
 std::optional<Layout> layoutForMode(uint8_t sleepMode);
 uint8_t modeForLayout(Layout layout);
+void applyOrientation(GfxRenderer& renderer, Layout layout);
 void clear();
 std::optional<FaceState> takeStandbyResume(bool sleepWake);
 bool drawBeforeSleep(GfxRenderer& renderer, const std::optional<FaceState>& standby = {});

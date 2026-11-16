@@ -19,6 +19,10 @@ done
 
 PYTHON=python bash build-calculator-fonts.sh
 
+# Rasterize the SnowMux clock digits at their on-screen size.
+python fontconvert.py xuesu_clock_digits 62 ../builtinFonts/source/NotoSans/NotoSans-Bold.ttf \
+  --mono --characters '0123456789:' > ../builtinFonts/xuesu_clock_digits.h
+
 UI_FONT_SIZES=(10 12)
 UI_FONT_STYLES=("Regular" "Bold")
 

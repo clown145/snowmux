@@ -25,7 +25,7 @@ namespace {
 constexpr uint32_t kFrameMagic = 0x58534334;  // XSC4
 constexpr uint8_t kFirstMode = CrossPointSettings::CLOCK_MONTH_GRID;
 constexpr uint8_t kModeCount = static_cast<uint8_t>(Layout::Count);
-static_assert(kFirstMode + kModeCount - 1 == CrossPointSettings::CLOCK_ALMANAC);
+static_assert(kFirstMode + kModeCount - 1 == CrossPointSettings::CLOCK_LANDSCAPE);
 
 // ESP32-S3 RTC RAM keeps the inputs needed to reconstruct the old plane. The
 // panel driver already owns that plane, so a timer wake needs no SD cache or
@@ -108,7 +108,10 @@ bool frameChanged(const time_t epoch) {
 }
 
 void drawFrame(GfxRenderer& renderer, const Frame& frame, const bool inverse) {
+  const auto orientation = renderer.getOrientation();
+  applyOrientation(renderer, frame.layout);
   UITheme::drawXuesuSleepClock(renderer, frame);
+  renderer.setOrientation(orientation);
   if (inverse) renderer.invertScreen();
 }
 
@@ -122,6 +125,11 @@ std::optional<Layout> layoutForMode(const uint8_t sleepMode) {
 }
 
 uint8_t modeForLayout(const Layout layout) { return kFirstMode + static_cast<uint8_t>(layout); }
+
+void applyOrientation(GfxRenderer& renderer, const Layout layout) {
+  renderer.setOrientation(layout == Layout::Landscape ? GfxRenderer::Orientation::LandscapeCounterClockwise
+                                                      : GfxRenderer::Orientation::Portrait);
+}
 
 void clear() { retained.magic = 0; }
 
@@ -160,7 +168,6 @@ bool drawBeforeSleep(GfxRenderer& renderer, const std::optional<FaceState>& stan
     return false;
   }
   refreshEnvironment(params, frame);
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   renderer.setRenderMode(GfxRenderer::BW);
   display.setInverted(false);
   drawFrame(renderer, frame, params.inverse);
@@ -202,7 +209,6 @@ void refreshAfterTimerWake(GfxRenderer& renderer) {
     }
     display.begin(true);
     renderer.begin();
-    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
     drawFrame(renderer, previous, retained.inverse);
     display.seedXuesuSleepClockBaseline();
     drawFrame(renderer, current, next.inverse);

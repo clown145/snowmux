@@ -75,12 +75,33 @@ void drawTime(const GfxRenderer& r, const Rect& box, const Frame& frame, const b
   }
 }
 
+void formatDate(char* text, const size_t size, const Frame& frame) {
+  const char* meridiem = !frame.twelveHour ? "" : frame.date.tm_hour < 12 ? "  AM" : "  PM";
+  std::snprintf(text, size, "%04d-%02d-%02d  %s%s", frame.date.tm_year + 1900, frame.date.tm_mon + 1,
+                frame.date.tm_mday, I18N.get(kWeekday[frame.date.tm_wday]), meridiem);
+}
+
 void dateLine(const GfxRenderer& r, const Rect& box, const Frame& frame, const bool black = true) {
   char text[56];
-  const char* meridiem = !frame.twelveHour ? "" : frame.date.tm_hour < 12 ? "  AM" : "  PM";
-  std::snprintf(text, sizeof(text), "%04d-%02d-%02d  %s%s", frame.date.tm_year + 1900, frame.date.tm_mon + 1,
-                frame.date.tm_mday, I18N.get(kWeekday[frame.date.tm_wday]), meridiem);
+  formatDate(text, sizeof(text), frame);
   centered(r, box, text, xuesu_sleep_clock::fontSmall, black);
+}
+
+struct EnvironmentText {
+  char temperature[12] = "--";
+  char humidity[8] = "--";
+};
+
+EnvironmentText formatEnvironment(const hal_environment::Reading& reading) {
+  EnvironmentText text;
+  if (!reading.valid()) return text;
+  const int temp = reading.temperature;
+  const int magnitude = temp < 0 ? -temp : temp;
+  const unsigned rh = reading.humidity;
+  std::snprintf(text.temperature, sizeof(text.temperature), "%s%d.%d°C", temp < 0 ? "-" : "", magnitude / 10,
+                magnitude % 10);
+  std::snprintf(text.humidity, sizeof(text.humidity), "%u.%u%%", rh / 10, rh % 10);
+  return text;
 }
 
 void stats(const GfxRenderer& r, const Rect& box, const Frame& frame, const bool black = true) {
@@ -89,22 +110,105 @@ void stats(const GfxRenderer& r, const Rect& box, const Frame& frame, const bool
                        StrId::STR_SLEEP_CLOCK_BATTERY};
   char charge[8];
   std::snprintf(charge, sizeof(charge), "%u%%", static_cast<unsigned>(frame.battery));
-  char temperature[12] = "--";
-  char humidity[8] = "--";
-  if (frame.environment.valid()) {
-    const int temp = frame.environment.temperature;
-    const int magnitude = temp < 0 ? -temp : temp;
-    const unsigned rh = frame.environment.humidity;
-    std::snprintf(temperature, sizeof(temperature), "%s%d.%d°C", temp < 0 ? "-" : "", magnitude / 10, magnitude % 10);
-    std::snprintf(humidity, sizeof(humidity), "%u.%u%%", rh / 10, rh % 10);
-  }
-  const char* values[]{temperature, humidity, charge};
+  const auto environment = formatEnvironment(frame.environment);
+  const char* values[]{environment.temperature, environment.humidity, charge};
   for (int i = 0; i < 3; ++i) {
     const Rect cell(box.x + i * column, box.y, column, box.height);
     if (i) r.fillRect(cell.x, cell.y + 4, 1, std::max(1, cell.height - 8), black);
     centered(r, band(cell, 0, 50), I18N.get(labels[i]), xuesu_sleep_clock::fontSmall, black);
     centered(r, band(cell, 50, 100), values[i], xuesu_sleep_clock::fontSmall, black, EpdFontFamily::BOLD);
   }
+}
+
+void drawLandscapeTime(const GfxRenderer& r, const Rect& box, const Frame& frame) {
+  constexpr auto font = xuesu_sleep_clock::fontDigits;
+  constexpr auto style = EpdFontFamily::REGULAR;
+  int32_t digitAdvance = 0;
+  int digitTop = 0;
+  for (uint32_t cp = '0'; cp <= '9'; ++cp) {
+    int32_t advance;
+    int top;
+    if (!r.getCodepointMetrics(font, cp, style, advance, top)) return;
+    digitAdvance = std::max(digitAdvance, advance);
+    digitTop = std::max(digitTop, top);
+  }
+  int32_t colonAdvance;
+  int colonTop;
+  if (!r.getCodepointMetrics(font, ':', style, colonAdvance, colonTop) || digitAdvance <= 0 || digitTop <= 0) return;
+
+  // Fixed-width cells keep the unchanged hour and minute digits in place during differential updates.
+  const int32_t width = 4 * digitAdvance + colonAdvance;
+  const int scaleToWidth = fp4::fromPixel(box.width) * 256 / width;
+  const int scale = std::min({256, scaleToWidth, box.height * 256 / digitTop});
+  const int digitWidth = fp4::toPixel(digitAdvance * scale / 256);
+  const int colonWidth = fp4::toPixel(colonAdvance * scale / 256);
+  const int height = digitTop * scale / 256;
+  const int baseline = box.y + (box.height + height) / 2;
+  const int hour = frame.twelveHour ? (frame.date.tm_hour + 11) % 12 + 1 : frame.date.tm_hour;
+  const uint32_t clock[]{'0' + hour / 10u, '0' + hour % 10u, ':', '0' + frame.date.tm_min / 10u,
+                         '0' + frame.date.tm_min % 10u};
+  int x = box.x + (box.width - 4 * digitWidth - colonWidth) / 2;
+  for (const auto cp : clock) {
+    int32_t advance;
+    int top;
+    if (!r.getCodepointMetrics(font, cp, style, advance, top)) return;
+    const int cellWidth = cp == ':' ? colonWidth : digitWidth;
+    const int glyphWidth = fp4::toPixel(advance * scale / 256);
+    r.drawScaledCodepoint(font, cp, style, x + (cellWidth - glyphWidth) / 2, baseline, scale);
+    x += cellWidth;
+  }
+}
+
+// Center the status text together with its 16-pixel icon and return the icon bounds.
+Rect landscapeStatusText(const GfxRenderer& r, const Rect& box, const char* text) {
+  constexpr int iconSize = 16;
+  constexpr int iconGap = 5;
+  constexpr int iconSpace = iconSize + iconGap;
+  const int font = r.getTextWidth(xuesu_sleep_clock::fontBody, text) + iconSpace <= box.width - 4
+                       ? xuesu_sleep_clock::fontBody
+                       : xuesu_sleep_clock::fontSmall;
+  const int x = box.x + std::max(2, (box.width - iconSpace - r.getTextWidth(font, text)) / 2);
+  const GfxRenderer::ClipScope clip(r, box.x + 1, box.y, box.width - 2, box.height);
+  r.drawText(font, x + iconSpace, box.y + (box.height - r.getLineHeight(font)) / 2, text);
+  return Rect(x, box.y + (box.height - iconSize) / 2, iconSize, iconSize);
+}
+
+void landscapeClock(const GfxRenderer& r, const Rect& page, const Frame& frame) {
+  const int timeInset = page.width / 16;
+  const Rect time = band(page, 16, 61);
+  drawLandscapeTime(r, Rect(time.x + timeInset, time.y, time.width - 2 * timeInset, time.height), frame);
+  line(r, band(page, 68, 69));
+
+  const Rect row = band(page, 71, 86);
+  const int dateWidth = row.width * 52 / 100;
+  const int sensorWidth = (row.width - dateWidth) / 2;
+  const int tempX = row.x + dateWidth;
+  const int humidityX = tempX + sensorWidth;
+  r.fillRect(tempX, row.y, 1, row.height);
+  r.fillRect(humidityX, row.y, 1, row.height);
+
+  char date[56];
+  formatDate(date, sizeof(date), frame);
+  const Rect battery = landscapeStatusText(r, Rect(row.x, row.y, dateWidth, row.height), date);
+  r.drawRect(battery.x, battery.y + 4, 14, 8);
+  r.fillRect(battery.x + 14, battery.y + 6, 2, 4);
+  r.fillRect(battery.x + 2, battery.y + 6, std::min<int>(100, frame.battery) / 10, 4);
+
+  const auto environment = formatEnvironment(frame.environment);
+  const Rect temp = landscapeStatusText(r, Rect(tempX, row.y, sensorWidth, row.height), environment.temperature);
+  r.drawRoundedRect(temp.x + 5, temp.y, 6, 12, 1, 3, true);
+  r.fillRect(temp.x + 5, temp.y + 8, 6, 4, false);
+  r.drawRoundedRect(temp.x + 3, temp.y + 7, 10, 9, 1, 4, true);
+  r.fillRect(temp.x + 7, temp.y + 4, 2, 9);
+
+  const Rect wet =
+      landscapeStatusText(r, Rect(humidityX, row.y, row.x + row.width - humidityX, row.height), environment.humidity);
+  const int x = wet.x + 8;
+  const int y = wet.y;
+  r.drawLine(x, y + 1, x - 5, y + 9);
+  r.drawLine(x, y + 1, x + 5, y + 9);
+  r.drawArc(5, x, y + 9, -1, 1, 1, true);
+  r.drawArc(5, x, y + 9, 1, 1, 1, true);
 }
 
 void yearCountdown(const GfxRenderer& r, const Rect& box, const Frame& frame) {
@@ -230,6 +334,9 @@ void UITheme::drawXuesuSleepClock(GfxRenderer& renderer, const Frame& frame, con
 #ifdef ENABLE_CHINESE_VERSION
       ChineseCalendarFace::renderSleep(renderer, viewport, frame.date);
 #endif
+      break;
+    case Layout::Landscape:
+      landscapeClock(renderer, page, frame);
       break;
     case Layout::Count:
       break;

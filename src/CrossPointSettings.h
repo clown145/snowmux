@@ -60,6 +60,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     CLOCK_FIREWORKS = 11,
     CLOCK_SLOPPY = 12,
     CLOCK_ALMANAC = 13,
+    CLOCK_LANDSCAPE = 14,
 #endif
     SLEEP_SCREEN_MODE_COUNT
   };

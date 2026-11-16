@@ -136,6 +136,10 @@ constexpr FaceEntry kFaces[] = {
        return makeUniqueNoThrow<StockClockFace>(Layout::Fireworks, StrId::STR_SLEEP_CLOCK_FIREWORKS);
      },
      [](int sw, int sh) { return sh > sw; }, Layout::Fireworks},
+    {[]() -> std::unique_ptr<StandbyFace> {
+       return makeUniqueNoThrow<StockClockFace>(Layout::Landscape, StrId::STR_SLEEP_CLOCK_LANDSCAPE);
+     },
+     [](int, int) { return true; }, Layout::Landscape},
 #endif
 };
 constexpr uint8_t kFaceCount = static_cast<uint8_t>(sizeof(kFaces) / sizeof(kFaces[0]));
@@ -223,6 +227,7 @@ void StandbyActivity::onEnter() {
   }
   currentFace_->onEnter();
 #if FREEINK_DEVICE_XUESU_300
+  xuesu_sleep_clock::applyOrientation(renderer, kFaces[faceIndex_].layout);
   if (resumedFace_) {
     inverseMode_ = resumedFace_->inverse;
     currentFace_->restoreAppearance(*resumedFace_);
@@ -253,13 +258,20 @@ void StandbyActivity::onExit() {
     currentFace_->onExit();
     currentFace_.reset();
   }
+#if FREEINK_DEVICE_XUESU_300
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+#endif
   LOG_DBG("STANDBY", "onExit free heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
   Activity::onExit();
 }
 
 void StandbyActivity::switchFace(int8_t delta) {
-  const int sw = renderer.getScreenWidth();
-  const int sh = renderer.getScreenHeight();
+  int sw = renderer.getScreenWidth();
+  int sh = renderer.getScreenHeight();
+#if FREEINK_DEVICE_XUESU_300
+  // Check the portrait faces against their own orientation even when leaving the landscape face.
+  if (sw > sh) std::swap(sw, sh);
+#endif
   const uint8_t avail = countAvailableFaces(sw, sh);
   if (avail <= 1) return;
 
@@ -280,6 +292,7 @@ void StandbyActivity::switchFace(int8_t delta) {
   }
   currentFace_->onEnter();
 #if FREEINK_DEVICE_XUESU_300
+  xuesu_sleep_clock::applyOrientation(renderer, kFaces[faceIndex_].layout);
   sleepSaveFailed_ = false;
 #endif
   LOG_DBG("STANDBY", "Selected face %u", static_cast<unsigned>(faceIndex_));
@@ -765,10 +778,15 @@ void StandbyActivity::render(RenderLock&&) {
   }
 
   // Top-right battery icon (no percentage text). Reuses BaseTheme::drawBatteryRight.
-  constexpr int kBatW = 16;
-  constexpr int kBatH = 12;
-  GUI.drawBatteryRight(renderer, Rect{sw - viewRight - kBatW - metrics.contentSidePadding, overlayTop, kBatW, kBatH},
-                       /*showPercentage=*/false);
+#if FREEINK_DEVICE_XUESU_300
+  if (!clockValid || kFaces[faceIndex_].layout != Layout::Landscape)
+#endif
+  {
+    constexpr int kBatW = 16;
+    constexpr int kBatH = 12;
+    GUI.drawBatteryRight(renderer, Rect{sw - viewRight - kBatW - metrics.contentSidePadding, overlayTop, kBatW, kBatH},
+                         /*showPercentage=*/false);
+  }
 
 #if FREEINK_DEVICE_XUESU_300
   const bool selected = SETTINGS.sleepScreen == xuesu_sleep_clock::modeForLayout(kFaces[faceIndex_].layout);

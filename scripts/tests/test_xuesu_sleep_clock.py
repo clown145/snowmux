@@ -21,7 +21,8 @@ class XuesuSleepClockTest(unittest.TestCase):
 #define LOG_INF(...) ((void)0)
 enum class Language : uint8_t { EN, ZH, _COUNT };
 struct CrossPointSettings {
-  enum { COVER = 3, CLOCK_MONTH_GRID = 9, CLOCK_NEWSPAPER, CLOCK_FIREWORKS, CLOCK_SLOPPY, CLOCK_ALMANAC };
+  enum { COVER = 3, CLOCK_MONTH_GRID = 9, CLOCK_NEWSPAPER, CLOCK_FIREWORKS, CLOCK_SLOPPY, CLOCK_ALMANAC,
+         CLOCK_LANDSCAPE };
   uint8_t sleepScreen = CLOCK_MONTH_GRID;
   uint8_t clockDst = 0, clockFormat = 0;
 } SETTINGS;
@@ -69,12 +70,14 @@ Reading nextReading{231, 567};
 Reading sample() { ++sampleCount; return nextReading; }
 }
 struct GfxRenderer {
-  enum class Orientation { Portrait };
+  enum class Orientation { Portrait, LandscapeCounterClockwise };
   enum RenderMode { BW };
   std::vector<HalDisplay::Refresh> updates;
+  Orientation orientation = Orientation::Portrait;
   int inversions = 0;
   void begin() {}
-  void setOrientation(Orientation) {}
+  Orientation getOrientation() const { return orientation; }
+  void setOrientation(Orientation next) { orientation = next; }
   void setRenderMode(RenderMode) {}
   void invertScreen() { ++inversions; }
   void displayBuffer(HalDisplay::Refresh mode) { updates.push_back(mode); }
@@ -95,7 +98,11 @@ struct {
 } powerManager;
 struct UITheme {
   static inline std::vector<xuesu_sleep_clock::Frame> paints;
-  static void drawXuesuSleepClock(const GfxRenderer&, const xuesu_sleep_clock::Frame& frame) {
+  static void drawXuesuSleepClock(const GfxRenderer& gfx, const xuesu_sleep_clock::Frame& frame) {
+    const auto expected = frame.layout == xuesu_sleep_clock::Layout::Landscape
+                              ? GfxRenderer::Orientation::LandscapeCounterClockwise
+                              : GfxRenderer::Orientation::Portrait;
+    assert(gfx.getOrientation() == expected);
     paints.push_back(frame);
   }
 };
@@ -120,10 +127,11 @@ int main() {
     assert(drawBeforeSleep(renderer));
     assert(UITheme::paints.back().layout == static_cast<Layout>(i));
     assert(UITheme::paints.back().battery == 77);
-    assert(UITheme::paints.back().environment.valid() == (i < 3));
+    assert(UITheme::paints.back().environment.valid() == (i < 3 || i == static_cast<uint8_t>(Layout::Landscape)));
     assert(modeForLayout(UITheme::paints.back().layout) == SETTINGS.sleepScreen);
+    assert(renderer.getOrientation() == GfxRenderer::Orientation::Portrait);
   }
-  assert(hal_environment::sampleCount == 3);
+  assert(hal_environment::sampleCount == 4);
   clear();
   SETTINGS.sleepScreen = CrossPointSettings::CLOCK_FIREWORKS;
   assert(drawBeforeSleep(renderer));
@@ -139,6 +147,7 @@ int main() {
   refreshAfterTimerWake(renderer);
   assert(display.begins == 1 && display.seeds == 1 && display.naps == 1);
   assert(UITheme::paints.size() == 2 && renderer.updates.size() == 1);
+  assert(renderer.updates.back() == HalDisplay::HALF_REFRESH);
   assert(UITheme::paints[0].date.tm_mday == 31 && UITheme::paints[0].date.tm_min == 59);
   assert(UITheme::paints[1].date.tm_mday == 1 && UITheme::paints[1].date.tm_min == 0);
   assert(UITheme::paints[0].environment.temperature == 231 && UITheme::paints[1].environment.temperature == 231);
@@ -147,7 +156,7 @@ int main() {
   refreshAfterTimerWake(renderer);
   assert(renderer.updates.back() == HalDisplay::FAST_REFRESH);
   assert(UITheme::paints[2].date.tm_min == 0 && UITheme::paints[3].date.tm_min == 1);
-  assert(hal_environment::sampleCount == 4);
+  assert(hal_environment::sampleCount == 5);
 
   // A confirm held at boot returns to the calling normal-resume code.
   gpio.key = true;
@@ -162,7 +171,7 @@ int main() {
   epoch += 180;
   hal_environment::nextReading = {-1, 731};
   refreshAfterTimerWake(renderer);
-  assert(hal_environment::sampleCount == 5);
+  assert(hal_environment::sampleCount == 6);
   assert(UITheme::paints[4].environment.temperature == 231 && UITheme::paints[4].environment.humidity == 567);
   assert(UITheme::paints[5].environment.temperature == -1 && UITheme::paints[5].environment.humidity == 731);
   epoch += 300;
@@ -232,7 +241,7 @@ int main() {
   // including reconstruction of the old frame and a fresh sensor sample.
   SETTINGS.sleepScreen = CrossPointSettings::CLOCK_SLOPPY;
   hal_environment::nextReading = {247, 402};
-  assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Newspaper}));
+  assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Landscape}));
   UITheme::paints.clear();
   hal_environment::nextReading = {249, 399};
   for (int minute = 1; minute <= 5; ++minute) {
@@ -240,11 +249,12 @@ int main() {
     refreshAfterTimerWake(renderer);
   }
   assert(UITheme::paints.size() == 10);
-  for (const auto& paint : UITheme::paints) assert(paint.layout == Layout::Newspaper);
+  for (const auto& paint : UITheme::paints) assert(paint.layout == Layout::Landscape);
   assert(UITheme::paints[8].environment.humidity == 402 && UITheme::paints[9].environment.humidity == 399);
+  assert(renderer.getOrientation() == GfxRenderer::Orientation::Portrait);
   assert(SETTINGS.sleepScreen == CrossPointSettings::CLOCK_SLOPPY);
   const auto weather = takeStandbyResume(true);
-  assert(weather && weather->layout == Layout::Newspaper);
+  assert(weather && weather->layout == Layout::Landscape);
 
   // An older firmware's retained bytes cannot serve as a differential baseline.
   assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Newspaper}));
