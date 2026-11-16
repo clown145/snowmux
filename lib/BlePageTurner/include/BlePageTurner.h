@@ -110,7 +110,8 @@ struct Host {
   // TRIES the lock: false when it is busy, and the start tries again 10 ms later.
   bool (*releaseCaches)();
   // A remote press for the book in front: NextPage, PrevPage, NextChapter, PrevChapter,
-  // ReaderMenu or SaveQuote. False when the book did not take it. The two shortcuts count as
+  // navigation, ReaderMenu, SaveQuote or Sleep. Sleep queues the host's normal sleep path.
+  // False when the host did not take it. The two reader shortcuts count as
   // user activity whatever the answer.
   bool (*deliver)(Action);
   // Asked right before the radio starts on a shown page: the book frees what it can build

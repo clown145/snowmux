@@ -479,6 +479,9 @@ bool deliver(const bleturner::Action action) {
       return activityManager.remoteShortcut(true);
     case bleturner::Action::SaveQuote:
       return activityManager.remoteShortcut(false);
+    case bleturner::Action::Sleep:
+      activityManager.requestSleep();
+      return true;
     case bleturner::Action::None:
       return false;
   }
@@ -1425,6 +1428,12 @@ void loop() {
     return;
   }
 
+  // A remote sleep press uses the normal save/shutdown path before any more input or rendering.
+  if (activityManager.takeSleepRequest()) {
+    enterDeepSleep();
+    return;
+  }
+
   // After the exclusive-storage return: it saves settings to the SD card.
 #if FREEINK_DEVICE_XUESU_300
   if (!scene.wifiOn && !activityManager.isSwitchPending() && !activityManager.deferBluetoothStart() &&
@@ -1558,11 +1567,6 @@ void loop() {
     lastX4ProPowerClickAt = 0;
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
-    return;
-  }
-
-  if (activityManager.takeSleepRequest()) {
-    enterDeepSleep();
     return;
   }
 

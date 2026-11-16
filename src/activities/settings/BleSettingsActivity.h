@@ -31,7 +31,7 @@ class BleSettingsActivity final : public UiListActivity {
   void activateIndex(int index) override;
   const char* headerTitle() const override;
 
-  enum class View { Menu, Scan, Paired, Mapping };
+  enum class View { Menu, Scan, Paired, Mapping, Gesture };
   View view = View::Menu;
   void onBackButton() override;
   void showView(View target);
@@ -40,7 +40,7 @@ class BleSettingsActivity final : public UiListActivity {
   // Button mapping reads the linked remote's button edges and stores them in its table.
   void startLearning(int index);
   void stepLearning();
-  void keepLearned(bool hold);
+  void keepLearned();
   void onRowLongPress(int index) override;
   void clearMapping(int index);
 
@@ -52,10 +52,11 @@ class BleSettingsActivity final : public UiListActivity {
   uint32_t radioVisit = 0;
   unsigned long lastPollMs = 0;
   bleturner::Action learnAction = bleturner::Action::None;
+  bleturner::Gesture learnGesture = bleturner::Gesture::Tap;
+  int mappingIndex = -1;
   char learnAddr[18]{};
-  char mappingValues[8][24]{};
-  uint32_t learnCode = 0;     // the pressed button, kept until its release
-  uint32_t learnPressMs = 0;  // when it went down (the remote's clock), to tell a hold from a tap
+  char mappingValues[bleturner::kMaxBindings][24]{};
+  uint32_t learnCode = 0;  // the pressed button, kept until its release
   unsigned long learnSinceMs = 0;
   const char* learnNote = nullptr;
 };

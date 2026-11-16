@@ -19,6 +19,8 @@ TEST(BleActionNumbersTest, ActionValuesNeverChange) {
   EXPECT_EQ(static_cast<int>(Action::SaveQuote), 6);
   EXPECT_EQ(static_cast<int>(Action::Confirm), 7);
   EXPECT_EQ(static_cast<int>(Action::Back), 8);
+  EXPECT_EQ(static_cast<int>(Action::Right), 12);
+  EXPECT_EQ(static_cast<int>(Action::Sleep), 13);
   EXPECT_EQ(makeBinding(0x030102, false, Action::NextChapter), 0x30030102u);
   EXPECT_EQ(makeBinding(0x030008, true, Action::PrevChapter), 0x41030008u);
 }
@@ -45,7 +47,7 @@ TEST(BleBindingTableTest, FullTableRefusesAndGarbageIsNotValid) {
   EXPECT_TRUE(learn(t, Action::NextPage, 0x030000 + 32 + 2, false));
   EXPECT_EQ(lookup(t, 0x030000 + 32 + 2, false), Action::NextPage);
   EXPECT_EQ(t.count, 3);
-  // A full table (eight slots read back from the card) says so instead of overwriting.
+  // A full table says so instead of overwriting.
   t.count = kMaxBindings;
   for (uint8_t i = 0; i < t.count; ++i) {
     t.bindings[i] = makeBinding(0x010000 + i + 1, (i & 1) != 0, Action::NextPage);
@@ -56,8 +58,9 @@ TEST(BleBindingTableTest, FullTableRefusesAndGarbageIsNotValid) {
 
   EXPECT_TRUE(valid(makeBinding(0x030102, true, Action::PrevChapter)));
   EXPECT_FALSE(valid(makeBinding(0x030102, false, Action::None)));
-  EXPECT_FALSE(valid(0xD0030102u)) << "action out of range";
-  EXPECT_FALSE(valid(0x18030102u)) << "unknown bit";
+  EXPECT_TRUE(valid(makeBinding(0x030102, false, Action::Sleep)));
+  EXPECT_FALSE(valid(0xE0030102u)) << "action out of range";
+  EXPECT_FALSE(valid(0x1C030102u)) << "conflicting gesture bits";
   EXPECT_FALSE(valid(makeBinding(0x030100, false, Action::NextPage))) << "a zero value is a release, not a button";
 }
 
@@ -136,6 +139,51 @@ TEST(BleBindingTableTest, MappingOneActionPreservesOtherButtonsAndRemotes) {
   Binding binding;
   EXPECT_FALSE(find(*first, Action::NextPage, binding));
   EXPECT_EQ(lookup(*second, 0x030001, false), Action::NextPage);
+}
+
+TEST(BleBindingTableTest, FourGesturesCoexistAndRebindingOnlyReplacesThatGesture) {
+  RemoteTable table{};
+  constexpr uint32_t code = 0x030001;
+  ASSERT_TRUE(learn(table, Action::NextPage, code, Gesture::Tap));
+  ASSERT_TRUE(learn(table, Action::PrevPage, code, Gesture::DoubleTap));
+  ASSERT_TRUE(learn(table, Action::ReaderMenu, code, Gesture::TripleTap));
+  ASSERT_TRUE(learn(table, Action::Sleep, code, Gesture::Hold));
+  ASSERT_EQ(table.count, 4);
+  EXPECT_EQ(lookup(table, code, Gesture::Tap), Action::NextPage);
+  EXPECT_EQ(lookup(table, code, Gesture::DoubleTap), Action::PrevPage);
+  EXPECT_EQ(lookup(table, code, Gesture::TripleTap), Action::ReaderMenu);
+  EXPECT_EQ(lookup(table, code, Gesture::Hold), Action::Sleep);
+  ASSERT_TRUE(learn(table, Action::SaveQuote, code, Gesture::DoubleTap));
+  EXPECT_EQ(table.count, 4);
+  EXPECT_EQ(lookup(table, code, Gesture::DoubleTap), Action::SaveQuote);
+  EXPECT_EQ(lookup(table, code, Gesture::Tap), Action::NextPage);
+  EXPECT_EQ(lookup(table, code, Gesture::TripleTap), Action::ReaderMenu);
+  EXPECT_EQ(lookup(table, code, Gesture::Hold), Action::Sleep);
+  EXPECT_FALSE(learn(table, Action::Sleep, code, static_cast<Gesture>(99)));
+  EXPECT_EQ(lookup(table, code, Gesture::Hold), Action::Sleep);
+  ASSERT_TRUE(clearAction(table, Action::SaveQuote));
+  EXPECT_EQ(lookup(table, code, Gesture::DoubleTap), Action::None);
+  EXPECT_EQ(lookup(table, code, Gesture::TripleTap), Action::ReaderMenu);
+}
+
+TEST(BleBindingTableTest, GestureBitsKeepOldSlotsAndWildcardReportsDistinct) {
+  constexpr uint32_t code = 0x030001;
+  EXPECT_EQ(makeBinding(code, Gesture::Tap, Action::NextPage), 0x10030001u);
+  EXPECT_EQ(makeBinding(code, Gesture::Hold, Action::NextPage), 0x11030001u);
+  EXPECT_EQ(makeBinding(code, Gesture::DoubleTap, Action::NextPage), 0x14030001u);
+  EXPECT_EQ(makeBinding(code, Gesture::TripleTap, Action::NextPage), 0x18030001u);
+  for (const auto gesture : {Gesture::Tap, Gesture::DoubleTap, Gesture::TripleTap, Gesture::Hold}) {
+    const auto binding = makeBinding(code, gesture, Action::NextPage) | kAnyReportBit;
+    EXPECT_TRUE(valid(binding));
+    EXPECT_EQ(gestureOf(binding), gesture);
+    EXPECT_TRUE(matches(binding, 0x070001, gesture));
+    for (const auto other : {Gesture::Tap, Gesture::DoubleTap, Gesture::TripleTap, Gesture::Hold}) {
+      EXPECT_EQ(matches(binding, code, other), other == gesture);
+    }
+  }
+  for (const uint32_t invalid : {kHoldBit | kDoubleBit, kHoldBit | kTripleBit, kDoubleBit | kTripleBit, kGestureMask}) {
+    EXPECT_FALSE(valid(makeBinding(code, Gesture::Tap, Action::NextPage) | invalid));
+  }
 }
 
 TEST(BlePageActionTest, DefaultKeysTurnUntilADirectionIsLearned) {

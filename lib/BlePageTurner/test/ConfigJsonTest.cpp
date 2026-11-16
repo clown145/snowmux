@@ -1,5 +1,5 @@
 // The page turner's keys in settings.json. Moved from the app's BleRemoteSettingsTest: four
-// remotes round-trip intact, garbage slots are dropped, a table past 8 slots is cut, a fifth
+// remotes round-trip intact, garbage slots are dropped, an oversized table is cut, a fifth
 // remote is dropped, an empty table keeps its address; plus the keys of a file read off a
 // device, loaded as they are.
 
@@ -122,8 +122,8 @@ TEST(BleConfigJsonTest, GarbageSlotsAreDroppedAndOversizedTablesCut) {
   a["addr"] = "AA:BB:CC:DD:EE:01";
   JsonArray binds = a["binds"].to<JsonArray>();
   binds.add(kNextChapterTap);
-  binds.add(0x70030102u);                                     // action out of range
-  binds.add(0x18030102u);                                     // unknown bit
+  binds.add(0xE0030102u);                                     // action out of range
+  binds.add(0x1C030102u);                                     // conflicting gesture bits
   binds.add("text");                                          // not a number
   binds.add(makeBinding(0x030100, false, Action::NextPage));  // zero value
   for (uint32_t i = 1; i <= 12; ++i) binds.add(makeBinding(0x020000 + i, false, Action::NextPage));
@@ -181,7 +181,7 @@ TEST(BleConfigJsonTest, ReaderShortcutActionsRoundTripAndOldSlotsStay) {
   ASSERT_EQ(c.remotes[0].count, 3);
   EXPECT_EQ(c.remotes[0].bindings[1], menuTap);
   EXPECT_EQ(c.remotes[0].bindings[2], quoteHold);
-  EXPECT_FALSE(valid(makeBinding(0x030001, false, static_cast<Action>(13))))
+  EXPECT_FALSE(valid(makeBinding(0x030001, false, static_cast<Action>(14))))
       << "an action past the list still reads as garbage";
 }
 
@@ -201,6 +201,44 @@ TEST(BleConfigJsonTest, ConfirmAndBackRoundTripWithoutChangingPageBindings) {
   EXPECT_EQ(lookup(loaded.remotes[0], 0x030001, false), Action::NextPage);
   EXPECT_EQ(lookup(loaded.remotes[0], 0x030002, false), Action::Confirm);
   EXPECT_EQ(lookup(loaded.remotes[0], 0x030004, false), Action::Back);
+}
+
+TEST(BleConfigJsonTest, SleepFitsAlongsideAllEightExistingMappingActions) {
+  Config config;
+  auto* table = editableTable(config.remotes, config.remoteCount, "AA:BB:CC:DD:EE:09", "Remote");
+  ASSERT_NE(table, nullptr);
+  constexpr Action actions[] = {Action::NextPage,    Action::PrevPage,  Action::NextChapter,
+                                Action::PrevChapter, Action::Confirm,   Action::Back,
+                                Action::ReaderMenu,  Action::SaveQuote, Action::Sleep};
+  for (uint8_t i = 0; i < std::size(actions); ++i) {
+    ASSERT_TRUE(learn(*table, actions[i], 0x030001 + i, false));
+  }
+  JsonDocument doc;
+  writeJson(config, doc);
+  Config loaded;
+  readJson(loaded, doc.as<JsonVariantConst>());
+  ASSERT_EQ(loaded.remoteCount, 1);
+  ASSERT_EQ(loaded.remotes[0].count, std::size(actions));
+  for (uint8_t i = 0; i < std::size(actions); ++i) {
+    EXPECT_EQ(lookup(loaded.remotes[0], 0x030001 + i, false), actions[i]);
+  }
+}
+
+TEST(BleConfigJsonTest, AllGesturesRoundTripAlongsideLegacyTapAndHoldSlots) {
+  Config original;
+  auto* table = editableTable(original.remotes, original.remoteCount, "AA:BB:CC:DD:EE:10", "Remote");
+  ASSERT_NE(table, nullptr);
+  ASSERT_TRUE(learn(*table, Action::NextPage, 0x030001, Gesture::Tap));
+  ASSERT_TRUE(learn(*table, Action::PrevPage, 0x030001, Gesture::DoubleTap));
+  ASSERT_TRUE(learn(*table, Action::ReaderMenu, 0x030001, Gesture::TripleTap));
+  ASSERT_TRUE(learn(*table, Action::Sleep, 0x030001, Gesture::Hold));
+  JsonDocument doc;
+  writeJson(original, doc);
+  Config loaded;
+  readJson(loaded, doc.as<JsonVariantConst>());
+  ASSERT_EQ(loaded.remoteCount, 1);
+  ASSERT_EQ(loaded.remotes[0].count, 4);
+  for (uint8_t i = 0; i < table->count; ++i) EXPECT_EQ(loaded.remotes[0].bindings[i], table->bindings[i]);
 }
 
 }  // namespace

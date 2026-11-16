@@ -8,7 +8,7 @@
 
 // The page turner's settings in the host's settings.json, under the keys blePageTurnerEnabled,
 // blePick, blePeerAddr, blePeerName, blePrevKeyUsage, bleNextKeyUsage and bleRemotes (an array of at
-// most 4 {addr, binds[<= 8]}). Files written before these keys load unchanged. Inline: the
+// most 4 {addr, binds[<= 9]}). Files written before these keys load unchanged. Inline: the
 // host's own settings code is the one caller, and compiled there the JSON helpers inline as
 // they did before this moved into the module.
 namespace bleturner {

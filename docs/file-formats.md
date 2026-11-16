@@ -1099,3 +1099,34 @@ The transparent overlay has its own target `/sleep-overlay.bmp` and independent
 version 1 three-byte schema. Recovery checks both targets; committing a normal
 sleep image and committing an overlay never overwrite one another's image or
 transaction files.
+
+## Bluetooth button bindings in `settings.json`
+
+The `bleRemotes` JSON array contains up to four `{ "addr": "...", "binds": [...] }`
+entries. Each remote has at most nine unsigned 32-bit binding values. This is a
+JSON settings extension; EPUB binary cache layouts and versions are unchanged.
+
+| Bits | Meaning |
+| --- | --- |
+| 0–7 | Nonzero raw button value |
+| 8–15 | Byte index (`0xFF` for a decoded-only button) |
+| 16–23 | HID report ID |
+| 24 | Hold gesture |
+| 25 | Match any report ID (built-in profiles) |
+| 26 | Double-click gesture |
+| 27 | Triple-click gesture |
+| 28–31 | Action: 1 next page, 2 previous page, 3 next chapter, 4 previous chapter, 5 reader menu, 6 save clipping, 7 confirm, 8 back, 9 up, 10 down, 11 left, 12 right, 13 sleep |
+
+No gesture bits means single click. At most one of bits 24, 26 and 27 may be
+set; conflicting bits, a zero value, action 0 and actions above 13 are rejected.
+Old single/hold bindings retain their exact values. Firmware predating multi-click
+support rejects bits 26/27 instead of misinterpreting them as single clicks.
+Firmware predating sleep rejects action 13; firmware with eight-slot capacity
+reads only eight valid bindings. A downgrade followed by saving settings can
+therefore discard unsupported mappings.
+
+An action has one binding per remote; a button plus gesture names one action.
+Mapping one gesture preserves other gestures on that button and other remotes.
+An empty table retains its address to suppress the named profile's automatic
+bindings; generic decoded page-key fallback remains available. `BleKeyBinding.h`
+and `BlePageTurnerJson.h` own validation and serialization.

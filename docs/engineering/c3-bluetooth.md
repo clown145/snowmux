@@ -43,6 +43,87 @@ distinct from missing coverage and must not become a cached missing glyph.
 Font formats, rendering preferences and antialiasing are unchanged. No extra
 reconnect loop, SDK public API, persistent setting or reader menu is introduced.
 
+## Default mappings and remote sleep
+
+`bleturner::pageActionFor` already supplies generic decoded-key defaults:
+Right, Down, Page Down, Space, Enter, Volume Up and Scan Next advance a page;
+Left, Up, Page Up, Backspace, Volume Down and Scan Previous go back. Free3 and
+BOOX Keypage also have SDK-owned raw-report profiles. No manual learning is
+required for these supported codes. The mapping screen shows **Default** with
+representative keys when no saved raw or legacy page binding is present, and
+shows saved bindings first. Other actions remain unassigned until learned;
+adding sleep does not silently repurpose a page key or erase a user's mapping.
+
+Each function opens a **Choose Gesture** list: single click, double click,
+triple click, or hold. After choosing, press and release the remote button once
+to identify it; the gesture is selected explicitly, not inferred while learning.
+The mapping row shows the button code and gesture. Different gestures on the
+same button can run different functions; rebinding one leaves the others intact.
+Each function still has one binding, with nine total slots per remote.
+
+Consecutive clicks must begin less than 350 ms after the preceding release.
+A button with double/triple bindings defers its single click until that window
+expires. Double click also waits when triple click is configured; otherwise it
+fires on the second release. Triple click fires on the third release. Hold
+fires at 700 ms and consumes its release, including when it follows one or two
+short clicks. Unassigned gestures do nothing (a double click with only triple
+configured does not run the single-click action). Without multi-click or hold
+bindings, the existing single-click action still fires on press.
+
+**Sleep Now** is the ninth mapping row and supports all four gestures. A completed
+sleep gesture requests the normal `ActivityManager::requestSleep()` path before
+further input dispatch. A dedicated single-click sleep key stays immediate;
+sharing that key with multi-click or hold actions requires gesture recognition
+first. Remaining queued remote events are drained, so the same gesture cannot
+also turn a page. The normal
+sleep path still saves reading state, stops BLE, processes configured sleep
+events and renders the selected sleep screen before entering deep sleep. Thus
+"immediate" means sleep starts once the selected gesture is recognized, without
+an inactivity timer; it does not bypass persistence or promise zero shutdown
+latency. A remote that only identifies its button on release retains that
+hardware/decoder limitation. Reliable hold needs real press/release reports;
+remotes that always send a short synthetic click cannot expose held duration.
+
+Remote actions remain scoped to the active reader and its supported menus.
+The mapping screen captures keys without running sleep; Home and unrelated
+screens keep their existing input policy. BLE is off in deep sleep, so wake
+still uses the device's own supported wake sources.
+
+The action is appended as value 13 in the existing four-bit JSON binding field;
+older action numbers are unchanged. Capacity grows from eight to nine slots so
+all mapping rows can coexist: four fixed remote tables cost 16 additional bytes,
+and mapping value buffers cost 24 additional bytes only while the settings
+Activity exists. The existing row vector reserves its bounded required capacity
+before appending and reuses it until Activity destruction. It holds at most
+`max(9, found + 1, bonds)` rows (25 `ListItem`s with the SDK's 24-device scan
+limit), instead of allocating permanent storage for the largest scan on every
+visit. The new mapping row adds at most one `ListItem` to the requested mapping
+capacity. No input-path heap allocation, new task or dependency is added.
+Gesture routing uses nine fixed 16-byte states (144 bytes, replacing the old
+12-byte hold state). It uses event timestamps when draining queued reports,
+keeps separate button sequences, and cancels pending gestures on disconnect,
+screen changes and exclusive storage. Settings reuse the existing list and
+value buffers; only the selected gesture and action index are added.
+The existing JSON slots use previously unused bits 26/27 for double/triple;
+old tap/hold encodings stay identical. Older firmware rejects the new gesture
+bits and sleep action and truncates to its eight-slot capacity. See
+[binding format](../file-formats.md#bluetooth-button-bindings-in-settingsjson).
+
+Host coverage: `BlePageTurnerPolicyTest`, `BlePageTurnerRuntimeTest`, and
+`BlePageTurnerConfigTest` cover defaults, press/hold/release behavior, queue
+draining, capture/storage exclusion, independent buttons, timestamp wrap,
+queued events, and all four gestures/nine bindings surviving JSON reload.
+On hardware, connect a supported remote, check default page turns, assign Sleep
+Now to a spare key, reopen a book and press once. Verify the sleep screen and
+saved position after a local wake, repeat with a held key, and check all reader
+orientations. Reboot and reconnect to verify persistence; remap/clear the sleep
+key and verify the old gesture no longer sleeps. Bind the same button's single,
+double, triple and hold to four different functions; test each with no intermediate
+single/double action, including a long second press, slow separate clicks,
+rapid alternating buttons, disconnect and cancellation during learning. Repeat
+after reboot, with the SDK's generic and named remote profiles. Record free internal heap and
+largest blocks using `MEM` logs; host tests do not establish physical acceptance.
+
 ## Network memory
 
 Wi-Fi startup already stops BLE and returns its dynamic heap; the linked host

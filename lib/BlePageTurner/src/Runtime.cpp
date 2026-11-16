@@ -256,7 +256,7 @@ bool serveReader() {
   readerStartDeferred.store(false, std::memory_order_relaxed);
   armReconnectOnce();
   port::poll();
-  // A remote with a table goes by RAW edges: each edge checks at most 8 slots of the linked
+  // A remote with a table goes by RAW edges: each edge checks at most 9 slots of the linked
   // remote's table, and a button the table does not name falls back to the key mapping.
   // Without a table the raw ring is only drained and the key path below decides.
   port::RawEdge raw;
@@ -272,8 +272,26 @@ bool serveReader() {
     router.chosen = true;
   }
   const bool viaTable = routes(router.table);
+  const auto pollPending = [&](const uint32_t atMs) {
+    for (auto& wait : router.waits) {
+      const Action action = pollGesture(wait, atMs);
+      acted = act(action) || acted;
+      if (action != Action::None) say(false, "raw gesture -> %s\n", actionName(action));
+      if (action == Action::Sleep) {
+        router.waits = {};
+        drainRemote();
+        return true;
+      }
+    }
+    return false;
+  };
   while (port::popRaw(raw)) {
     if (!viaTable) continue;
+    if (raw.wasRest) {
+      if (auto* wait = router.waitFor(raw.code())) *wait = {};
+      continue;
+    }
+    if (pollPending(raw.atMs)) return acted;
     // User-saved raw bindings have priority; a built-in profile must not hide a
     // key the fork's existing directional map explicitly assigned.
     const Action legacy = host->legacyKeyAction ? host->legacyKeyAction(raw.keycode, raw.mods) : Action::None;
@@ -281,16 +299,19 @@ bool serveReader() {
     for (uint8_t i = 0; i < config->remoteCount; ++i) savedTable |= router.table == &config->remotes[i];
     static constexpr RemoteTable emptyTable{};
     const auto& table = !savedTable && legacy != Action::None ? emptyTable : *router.table;
-    const Action a = onRawEdge(table, raw.code(), raw.pressed, raw.atMs, keyAction(raw.keycode, raw.mods), router.wait);
+    auto* wait = router.waitFor(raw.code());
+    if (!wait) continue;
+    const Action a = onRawEdge(table, raw.code(), raw.pressed, raw.atMs, keyAction(raw.keycode, raw.mods), *wait);
     acted = act(a) || acted;  // act first, log after: the log line is not on the page's clock
     say(false, "raw %u:%u=%02X %s -> %s\n", raw.reportId, raw.byteIndex, raw.value, raw.pressed ? "down" : "up",
         actionName(a));
+    if (a == Action::Sleep) {
+      router.waits = {};
+      drainRemote();  // Do not turn another page after requesting sleep in this pass.
+      return acted;
+    }
   }
-  if (viaTable) {
-    const Action held = pollHold(router.wait, port::nowMs());
-    acted = act(held) || acted;
-    if (held != Action::None) say(false, "raw hold -> %s\n", actionName(held));
-  }
+  if (viaTable && pollPending(port::nowMs())) return acted;
   while (port::popKey(key)) {
     // With a table the raw edge already decided this frame: its key event is only logged.
     const Action a = viaTable ? Action::None : keyAction(key.keycode, key.mods);
@@ -430,6 +451,7 @@ bool tick(const Scene& s) {
   }
   // The card is taken (USB drive, file transfer): before anything else, radio off.
   if (s.storageBusy) {
+    router.waits = {};
     idleSinceMs = 0;
     idleClockRunning = false;
     detail::suspend(0);

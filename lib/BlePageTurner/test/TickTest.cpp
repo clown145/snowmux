@@ -13,6 +13,7 @@ namespace {
 using bleturner::Action;
 using bleturner::BuildRelease;
 using bleturner::Config;
+using bleturner::Gesture;
 using bleturner::Scene;
 using fake::host;
 using fake::radio;
@@ -57,6 +58,24 @@ class TickTest : public ::testing::Test {
       if (line.find(text) != std::string::npos) return true;
     }
     return false;
+  }
+  void gestureKey() {
+    running();
+    link("Some Remote");
+    auto* table = bleturner::editableTable(config.remotes, config.remoteCount, radio().addr.c_str(), "Some Remote");
+    ASSERT_NE(table, nullptr);
+    ASSERT_TRUE(bleturner::learn(*table, Action::NextPage, 0x030001, Gesture::Tap));
+    ASSERT_TRUE(bleturner::learn(*table, Action::PrevPage, 0x030001, Gesture::DoubleTap));
+    ASSERT_TRUE(bleturner::learn(*table, Action::ReaderMenu, 0x030001, Gesture::TripleTap));
+    ASSERT_TRUE(bleturner::learn(*table, Action::Sleep, 0x030001, Gesture::Hold));
+    pass(fake::reading());
+  }
+  void click(const uint32_t code = 0x030001) {
+    edge(code, true);
+    pass(fake::reading());
+    radio().now += 40;
+    edge(code, false);
+    pass(fake::reading());
   }
   Config config;
 };
@@ -576,6 +595,230 @@ TEST_F(TickTest, ShortcutsCountAsActivityWhateverTheBookSays) {
   edge(0x030001, true);
   EXPECT_TRUE(pass(fake::reading()));
   EXPECT_EQ(host().delivered, (std::vector<Action>{Action::ReaderMenu}));
+}
+
+TEST_F(TickTest, SleepActsOnPressAndDropsQueuedNavigationAndRelease) {
+  running();
+  link("Some Remote");
+  auto* t = bleturner::editableTable(config.remotes, config.remoteCount, "7d:de:5c:bd:ae:ca", "Some Remote");
+  ASSERT_TRUE(t && bleturner::learn(*t, Action::Sleep, 0x030001, false));
+  pass(fake::reading());
+  edge(0x030001, true, bleturner::kUsageRight);
+  edge(0x030002, true, bleturner::kUsageLeft);
+  radio().keys = {{bleturner::kUsageRight, 0, true}};
+  EXPECT_TRUE(pass(fake::reading()));
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::Sleep}));
+  EXPECT_TRUE(radio().keys.empty());
+  EXPECT_TRUE(radio().raw.empty());
+  radio().now += bleturner::kHoldMs;
+  EXPECT_FALSE(pass(fake::reading()));
+  edge(0x030001, false);
+  EXPECT_FALSE(pass(fake::reading()));
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::Sleep}));
+}
+
+TEST_F(TickTest, OneButtonSingleDoubleTripleAndHoldEachEmitExactlyTheirAction) {
+  gestureKey();
+  click();
+  EXPECT_TRUE(host().delivered.empty());
+  radio().now += bleturner::kMultiClickMs - 1;
+  EXPECT_FALSE(pass(fake::reading()));
+  ++radio().now;
+  EXPECT_TRUE(pass(fake::reading()));
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::NextPage}));
+
+  host().delivered.clear();
+  click();
+  radio().now += 100;
+  click();
+  EXPECT_TRUE(host().delivered.empty());
+  radio().now += bleturner::kMultiClickMs;
+  EXPECT_TRUE(pass(fake::reading()));
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::PrevPage}));
+
+  host().delivered.clear();
+  for (int i = 0; i < 3; ++i) {
+    radio().now += 100;
+    click();
+  }
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::ReaderMenu}));
+  radio().now += bleturner::kMultiClickMs;
+  EXPECT_FALSE(pass(fake::reading()));
+
+  host().delivered.clear();
+  edge(0x030001, true);
+  pass(fake::reading());
+  radio().now += bleturner::kHoldMs - 1;
+  EXPECT_FALSE(pass(fake::reading()));
+  ++radio().now;
+  EXPECT_TRUE(pass(fake::reading()));
+  edge(0x030001, false);
+  pass(fake::reading());
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::Sleep}));
+}
+
+TEST_F(TickTest, DoubleClickDoesNotWaitForAnUnconfiguredTripleClick) {
+  gestureKey();
+  bleturner::clearAction(config.remotes[0], Action::ReaderMenu);
+  click();
+  radio().now += 100;
+  click();
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::PrevPage}));
+}
+
+TEST_F(TickTest, HoldingTheSecondClickConsumesTheWholeSequence) {
+  gestureKey();
+  click();
+  radio().now += 100;
+  edge(0x030001, true);
+  pass(fake::reading());
+  radio().now += bleturner::kHoldMs;
+  EXPECT_TRUE(pass(fake::reading()));
+  edge(0x030001, false);
+  pass(fake::reading());
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::Sleep}));
+}
+
+TEST_F(TickTest, DuplicateEdgesAndLongHoldDoNotRepeatOrCountAsMultipleClicks) {
+  gestureKey();
+  // Use a non-sleep hold, so the runtime remains active after delivery.
+  ASSERT_TRUE(bleturner::learn(config.remotes[0], Action::SaveQuote, 0x030001, Gesture::Hold));
+  edge(0x030001, true);
+  pass(fake::reading());
+  radio().now += 200;
+  edge(0x030001, true);
+  pass(fake::reading());
+  radio().now += bleturner::kHoldMs - 200;
+  pass(fake::reading());
+  radio().now += 1000;
+  edge(0x030001, true);
+  pass(fake::reading());
+  edge(0x030001, false);
+  edge(0x030001, false);
+  pass(fake::reading());
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::SaveQuote}));
+}
+
+TEST_F(TickTest, QueuedEdgesUseTheirArrivalTimeAndDoNotMergeSlowClicks) {
+  gestureKey();
+  edge(0x030001, true);
+  radio().now += 40;
+  edge(0x030001, false);
+  radio().now += bleturner::kMultiClickMs;
+  edge(0x030001, true);
+  radio().now += 40;
+  edge(0x030001, false);
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::NextPage, Action::NextPage}));
+}
+
+TEST_F(TickTest, TwoButtonsKeepIndependentPendingClicks) {
+  gestureKey();
+  ASSERT_TRUE(bleturner::learn(config.remotes[0], Action::NextChapter, 0x030002, Gesture::Tap));
+  ASSERT_TRUE(bleturner::learn(config.remotes[0], Action::PrevChapter, 0x030002, Gesture::DoubleTap));
+  click();
+  radio().now += 100;
+  click(0x030002);
+  EXPECT_TRUE(host().delivered.empty());
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::NextPage, Action::NextChapter}));
+}
+
+TEST_F(TickTest, DisconnectAndReaderExitCancelPendingClicks) {
+  gestureKey();
+  click();
+  radio().connected = false;
+  pass(fake::reading());
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_TRUE(host().delivered.empty());
+  link("Some Remote");
+  pass(fake::reading());
+  click();
+  Scene away = fake::reading();
+  away.where = bleturner::Where::Elsewhere;
+  pass(away);
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_TRUE(host().delivered.empty());
+}
+
+TEST_F(TickTest, MultiClickClockWrapAndRestFramesAreHandled) {
+  gestureKey();
+  radio().now = UINT32_MAX - 100;
+  click();
+  radio().now += 100;
+  click();
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::PrevPage}));
+  host().delivered.clear();
+  edge(0x030001, true);
+  pass(fake::reading());
+  radio().now += 50;
+  edge(0x030001, false);
+  radio().raw.back().wasRest = true;
+  pass(fake::reading());
+  radio().now += bleturner::kHoldMs;
+  pass(fake::reading());
+  EXPECT_TRUE(host().delivered.empty());
+}
+
+TEST_F(TickTest, SleepCanBeDoubleClickWithoutFiringTheSingleClick) {
+  gestureKey();
+  ASSERT_TRUE(bleturner::learn(config.remotes[0], Action::Sleep, 0x030001, Gesture::DoubleTap));
+  bleturner::clearAction(config.remotes[0], Action::ReaderMenu);
+  click();
+  radio().now += 100;
+  click();
+  EXPECT_EQ(host().delivered, (std::vector<Action>{Action::Sleep}));
+}
+
+TEST_F(TickTest, UnassignedDoubleClickDoesNotFallBackToSingleClick) {
+  gestureKey();
+  bleturner::clearAction(config.remotes[0], Action::PrevPage);
+  click();
+  radio().now += 100;
+  click();
+  radio().now += bleturner::kMultiClickMs;
+  pass(fake::reading());
+  EXPECT_TRUE(host().delivered.empty());
+}
+
+TEST_F(TickTest, ExclusiveStorageCancelsPendingClicksBeforeResumingTheSameReader) {
+  gestureKey();
+  click();
+  auto storage = fake::reading();
+  storage.storageBusy = true;
+  pass(storage);
+  radio().now += bleturner::kMultiClickMs;
+  ASSERT_TRUE(bleturner::switchOn());
+  link("Some Remote");
+  pass(fake::reading());
+  EXPECT_TRUE(host().delivered.empty());
+}
+
+TEST_F(TickTest, SleepBindingDoesNotActOnTheMappingScreenOrWithExclusiveStorage) {
+  running();
+  link("Some Remote");
+  auto* t = bleturner::editableTable(config.remotes, config.remoteCount, "7d:de:5c:bd:ae:ca", "Some Remote");
+  ASSERT_TRUE(t && bleturner::learn(*t, Action::Sleep, 0x030001, false));
+  Scene pairing = fake::reading();
+  pairing.where = bleturner::Where::PairingScreen;
+  edge(0x030001, true);
+  EXPECT_FALSE(pass(pairing));
+  EXPECT_TRUE(host().delivered.empty());
+  pass(fake::reading());  // The press inherited from learning is discarded.
+  EXPECT_TRUE(host().delivered.empty());
+  Scene storage = fake::reading();
+  storage.storageBusy = true;
+  edge(0x030001, true);
+  EXPECT_FALSE(pass(storage));
+  EXPECT_TRUE(host().delivered.empty());
 }
 
 TEST_F(TickTest, HeapRestartOnlyFromAQuietShownPage) {

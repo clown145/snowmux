@@ -11,7 +11,7 @@
 // RAW HID frame (report id, byte index, value; see freeink::RawButtonEvent). The
 // decoded usage is too lossy for that: the decoder drops the second byte of the
 // three-button remote and cuts 16-bit usages to 8 bits. Each remote (by BLE address) has one table of at
-// most 8 slots, saved in settings.json and applied again on reconnect.
+// most 9 slots, saved in settings.json and applied again on reconnect.
 //
 // Binding policy is shared by the runtime, settings screen and tests. Device-specific
 // report profiles come from the SDK; reader actions and saved overrides stay here.
@@ -22,6 +22,9 @@ inline constexpr uint32_t kWaitMs = 15000;
 // Held this long or more is a "hold". A host whose own buttons skip chapters on a
 // hold should use the same number and pin it with a static_assert.
 inline constexpr uint32_t kHoldMs = 700;
+// Maximum release-to-next-press gap in a multi-click gesture.
+inline constexpr uint32_t kMultiClickMs = 350;
+enum class Gesture : uint8_t { Tap, DoubleTap, TripleTap, Hold };
 
 // Stored by value in settings.json (bits 28-31 of a slot): new actions go last, and the
 // numbers never change (a test pins them). The four moves are the remote's own;
@@ -39,19 +42,24 @@ enum class Action : uint8_t {
   Up,
   Down,
   Left,
-  Right
+  Right,
+  Sleep
 };
 
 // One slot: bits 0-23 the button code (value | byte index << 8 | report id << 16),
 // bit 24 "hold", bit 25 "any report id" (built-in defaults only, since that remote's
-// report id has not been measured), bits 28-31 the action.
+// report id has not been measured), bit 26 "double", bit 27 "triple", bits 28-31 the action.
+// Tap/hold encodings stay unchanged; only one gesture bit may be set.
 using Binding = uint32_t;
 inline constexpr uint32_t kCodeMask = 0x00FFFFFFu;
 inline constexpr uint32_t kHoldBit = 1u << 24;
 inline constexpr uint32_t kAnyReportBit = 1u << 25;
+inline constexpr uint32_t kDoubleBit = 1u << 26;
+inline constexpr uint32_t kTripleBit = 1u << 27;
+inline constexpr uint32_t kGestureMask = kHoldBit | kDoubleBit | kTripleBit;
 inline constexpr uint8_t kActionShift = 28;
 
-inline constexpr uint8_t kMaxBindings = 8;  // 4 buttons x tap/hold
+inline constexpr uint8_t kMaxBindings = 9;  // All nine actions offered by the mapping screen.
 inline constexpr uint8_t kMaxRemotes = 4;   // = BleKeyboardHost::kMaxBonds
 
 struct RemoteTable {
@@ -60,8 +68,37 @@ struct RemoteTable {
   Binding bindings[kMaxBindings];
 };
 
+constexpr uint32_t gestureBits(const Gesture gesture) {
+  switch (gesture) {
+    case Gesture::Tap:
+      return 0;
+    case Gesture::DoubleTap:
+      return kDoubleBit;
+    case Gesture::TripleTap:
+      return kTripleBit;
+    case Gesture::Hold:
+      return kHoldBit;
+  }
+  return kGestureMask;  // Invalid enum values cannot become valid saved bindings.
+}
+constexpr Gesture gestureOf(const Binding b) {
+  switch (b & kGestureMask) {
+    case kDoubleBit:
+      return Gesture::DoubleTap;
+    case kTripleBit:
+      return Gesture::TripleTap;
+    case kHoldBit:
+      return Gesture::Hold;
+    default:
+      return Gesture::Tap;  // Callers only pass validated slots.
+  }
+}
+constexpr Binding makeBinding(const uint32_t code, const Gesture gesture, const Action action) {
+  return (code & kCodeMask) | gestureBits(gesture) | static_cast<uint32_t>(action) << kActionShift;
+}
+// Keep the existing tap/hold callers and their persisted numbers compatible.
 constexpr Binding makeBinding(const uint32_t code, const bool hold, const Action action) {
-  return (code & kCodeMask) | (hold ? kHoldBit : 0u) | static_cast<uint32_t>(action) << kActionShift;
+  return makeBinding(code, hold ? Gesture::Hold : Gesture::Tap, action);
 }
 constexpr Action actionOf(const Binding b) { return static_cast<Action>(b >> kActionShift); }
 
@@ -69,21 +106,28 @@ constexpr Action actionOf(const Binding b) { return static_cast<Action>(b >> kAc
 // in range, a non-zero value, no unknown bit. Garbage is dropped rather than turned
 // into a button that does something odd.
 constexpr bool valid(const Binding b) {
-  return (b & ~(kCodeMask | kHoldBit | kAnyReportBit | 0xF0000000u)) == 0 && (b & 0xFFu) != 0 &&
-         actionOf(b) != Action::None && static_cast<uint8_t>(actionOf(b)) <= static_cast<uint8_t>(Action::Right);
+  const uint32_t gesture = b & kGestureMask;
+  return (gesture == 0 || gesture == kHoldBit || gesture == kDoubleBit || gesture == kTripleBit) && (b & 0xFFu) != 0 &&
+         actionOf(b) != Action::None && static_cast<uint8_t>(actionOf(b)) <= static_cast<uint8_t>(Action::Sleep);
 }
 
+constexpr bool matches(const Binding b, const uint32_t code, const Gesture gesture) {
+  const uint32_t mask = ((b & kAnyReportBit) ? 0x0000FFFFu : kCodeMask) | kGestureMask;
+  return ((b ^ ((code & kCodeMask) | gestureBits(gesture))) & mask) == 0;
+}
 constexpr bool matches(const Binding b, const uint32_t code, const bool hold) {
-  const uint32_t mask = (b & kAnyReportBit) ? 0x0100FFFFu : 0x01FFFFFFu;
-  return ((b ^ (code | (hold ? kHoldBit : 0u))) & mask) == 0;
+  return matches(b, code, hold ? Gesture::Hold : Gesture::Tap);
 }
 
-// Lookup: at most 8 compares over 32 contiguous bytes, no allocation.
-inline Action lookup(const RemoteTable& t, const uint32_t code, const bool hold) {
+// Lookup: at most 9 compares over 36 contiguous bytes, no allocation.
+inline Action lookup(const RemoteTable& t, const uint32_t code, const Gesture gesture) {
   for (uint8_t i = 0; i < t.count; ++i) {
-    if (matches(t.bindings[i], code, hold)) return actionOf(t.bindings[i]);
+    if (matches(t.bindings[i], code, gesture)) return actionOf(t.bindings[i]);
   }
   return Action::None;
+}
+inline Action lookup(const RemoteTable& t, const uint32_t code, const bool hold) {
+  return lookup(t, code, hold ? Gesture::Hold : Gesture::Tap);
 }
 
 inline bool find(const RemoteTable& t, const Action action, Binding& out) {
@@ -99,8 +143,8 @@ inline bool find(const RemoteTable& t, const Action action, Binding& out) {
 inline const char* actionName(const Action action) {
   static const char* const kNames[] = {"none",        "next",       "prev",    "next_chapter", "prev_chapter",
                                        "reader_menu", "save_quote", "confirm", "back",         "up",
-                                       "down",        "left",       "right"};
-  return kNames[static_cast<uint8_t>(action) <= static_cast<uint8_t>(Action::Right) ? static_cast<uint8_t>(action) : 0];
+                                       "down",        "left",       "right",   "sleep"};
+  return kNames[static_cast<uint8_t>(action) <= static_cast<uint8_t>(Action::Sleep) ? static_cast<uint8_t>(action) : 0];
 }
 
 // "3:1=02" (report id 3, byte 1, value 0x02); "1=02" for an any-report default slot;
@@ -189,60 +233,112 @@ inline bool clearAction(RemoteTable& t, const Action action) {
   return changed;
 }
 
-// Store a learned button. An action has one button and a gesture (button + tap or
-// hold) does one thing: the old slots of both go. false when the table is full,
+// Store a learned button. An action has one button and each button + gesture
+// does one thing: the old slots of both go. false when the table is full,
 // never a silent overwrite.
-inline bool learn(RemoteTable& t, const Action action, const uint32_t code, const bool hold) {
-  clearAction(t, action);
+inline bool learn(RemoteTable& t, const Action action, const uint32_t code, const Gesture gesture) {
+  const Binding binding = makeBinding(code, gesture, action);
+  if (!valid(binding)) return false;
+  uint8_t needed = 1;
+  for (uint8_t i = 0; i < t.count; ++i) {
+    if (actionOf(t.bindings[i]) != action && !matches(t.bindings[i], code, gesture)) ++needed;
+  }
+  if (needed > kMaxBindings) return false;
   uint8_t kept = 0;
   for (uint8_t i = 0; i < t.count; ++i) {
-    if (!matches(t.bindings[i], code, hold)) t.bindings[kept++] = t.bindings[i];
+    if (actionOf(t.bindings[i]) != action && !matches(t.bindings[i], code, gesture)) t.bindings[kept++] = t.bindings[i];
   }
   t.count = kept;
-  if (t.count >= kMaxBindings) return false;
-  t.bindings[t.count++] = makeBinding(code, hold, action);
+  t.bindings[t.count++] = binding;
   return true;
+}
+inline bool learn(RemoteTable& t, const Action action, const uint32_t code, const bool hold) {
+  return learn(t, action, code, hold ? Gesture::Hold : Gesture::Tap);
 }
 
 // --- Decision for each raw edge ------------------------------------------------
 
-// A press still waiting to become a tap or a hold. Only for a button WITH a hold slot.
-struct HoldWait {
+enum class GesturePhase : uint8_t { Idle, Pressed, BetweenClicks, Consumed };
+
+// Fixed-size state for one button; independent buttons never steal each other's pending clicks.
+struct GestureWait {
   uint32_t code = 0;
   uint32_t atMs = 0;
   Action tap = Action::None;
+  Action doubleTap = Action::None;
+  Action tripleTap = Action::None;
   Action hold = Action::None;
-  bool active = false;
-};
+  uint8_t clicks = 0;
+  GesturePhase phase = GesturePhase::Idle;
 
-// The ONE decision for a raw edge of a remote with a table. `legacy` is what the old
-// usage mapping gives the key read from the same frame: a button the table does not
-// name keeps turning pages the way it always did.
-//   - Press, no hold slot for the button: act now (page turns stay at 1-2 ms).
-//   - Press, the button has a hold slot: wait; a release before kHoldMs is a tap,
-//     later is a hold.
-//   - Release: only ends a wait.
-inline Action onRawEdge(const RemoteTable& t, const uint32_t code, const bool pressed, const uint32_t atMs,
-                        const Action legacy, HoldWait& w) {
-  if (pressed) {
-    const Action tap = lookup(t, code, false);
-    const Action now = tap != Action::None ? tap : legacy;
-    const Action hold = lookup(t, code, true);
-    if (hold == Action::None) return now;
-    w = HoldWait{code, atMs, now, hold, true};
-    return Action::None;
+  uint8_t maxClicks() const { return tripleTap != Action::None ? 3 : doubleTap != Action::None ? 2 : 1; }
+  Action clicked() const {
+    switch (clicks) {
+      case 1:
+        return tap;
+      case 2:
+        return doubleTap;
+      case 3:
+        return tripleTap;
+      default:
+        return Action::None;  // No completed click.
+    }
   }
-  if (!w.active || w.code != code) return Action::None;
-  w.active = false;
-  return atMs - w.atMs < kHoldMs ? w.tap : w.hold;
+  Action finish(const Action action) {
+    *this = {};
+    return action;
+  }
+};
+static_assert(sizeof(GestureWait) == 16);
+
+// Poll before each queued edge using its timestamp, then once at the current time.
+// This keeps a delayed main loop from merging clicks that were physically far apart.
+inline Action pollGesture(GestureWait& w, const uint32_t nowMs) {
+  switch (w.phase) {
+    case GesturePhase::Pressed:
+      if (w.hold != Action::None && nowMs - w.atMs >= kHoldMs) {
+        w.phase = GesturePhase::Consumed;
+        return w.hold;
+      }
+      break;
+    case GesturePhase::BetweenClicks:
+      if (nowMs - w.atMs >= kMultiClickMs) return w.finish(w.clicked());
+      break;
+    case GesturePhase::Idle:
+    case GesturePhase::Consumed:
+      break;
+  }
+  return Action::None;
 }
 
-// Called every pass: a waiting button still down after kHoldMs is a hold, acted on
-// now without waiting for the release.
-inline Action pollHold(HoldWait& w, const uint32_t nowMs) {
-  if (!w.active || nowMs - w.atMs < kHoldMs) return Action::None;
-  w.active = false;
-  return w.hold;
+// Buttons without multi-click/hold bindings keep their immediate press action.
+// Other buttons emit only their completed gesture, never intermediate single clicks.
+inline Action onRawEdge(const RemoteTable& t, const uint32_t code, const bool pressed, const uint32_t atMs,
+                        const Action legacy, GestureWait& w) {
+  if (pressed) {
+    if (w.phase == GesturePhase::Pressed || w.phase == GesturePhase::Consumed) return Action::None;
+    if (w.phase == GesturePhase::Idle) {
+      w.code = code;
+      const Action tap = lookup(t, code, Gesture::Tap);
+      w.tap = tap != Action::None ? tap : legacy;
+      w.doubleTap = lookup(t, code, Gesture::DoubleTap);
+      w.tripleTap = lookup(t, code, Gesture::TripleTap);
+      w.hold = lookup(t, code, Gesture::Hold);
+      if (w.maxClicks() == 1 && w.hold == Action::None) return w.finish(w.tap);
+    }
+    w.phase = GesturePhase::Pressed;
+    w.atMs = atMs;
+    return Action::None;
+  }
+  if (w.code != code) return Action::None;
+  if (w.phase == GesturePhase::Consumed) return w.finish(Action::None);
+  if (w.phase != GesturePhase::Pressed) return Action::None;
+  if (w.hold != Action::None && atMs - w.atMs >= kHoldMs) return w.finish(w.hold);
+  ++w.clicks;
+  if (w.clicks >= w.maxClicks()) return w.finish(w.clicked());
+  w.phase = GesturePhase::BetweenClicks;
+  w.atMs = atMs;
+  return Action::None;
 }
 
 // Tick state: the table is picked ONCE per link (off the hot path) and forgotten
@@ -251,7 +347,18 @@ struct Router {
   const RemoteTable* table = nullptr;
   bool chosen = false;
   bool linked = false;
-  HoldWait wait;
+  // At most one pending sequence per configured button; no allocation in the input path.
+  std::array<GestureWait, kMaxBindings> waits{};
+
+  GestureWait* waitFor(const uint32_t code) {
+    for (auto& wait : waits) {
+      if (wait.phase != GesturePhase::Idle && wait.code == code) return &wait;
+    }
+    for (auto& wait : waits) {
+      if (wait.phase == GesturePhase::Idle) return &wait;
+    }
+    return nullptr;
+  }
 
   void follow(const bool isLinked) {
     if (isLinked == linked) return;
