@@ -1428,7 +1428,7 @@ void loop() {
     return;
   }
 
-  // A remote sleep press uses the normal save/shutdown path before any more input or rendering.
+  // Activity and remote sleep requests share the normal save/shutdown path.
   if (activityManager.takeSleepRequest()) {
     enterDeepSleep();
     return;

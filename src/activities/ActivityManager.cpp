@@ -146,6 +146,9 @@ void ActivityManager::renderTaskLoop() {
 
 void ActivityManager::loop() {
   if (mappedInput.consumeSuppressedRelease()) {
+#if FREEINK_DEVICE_XUESU_300
+    mappedInput.resetXuesuConfirmShortcut();
+#endif
     resetHomeStandbyInput();
     return;
   }
@@ -164,8 +167,13 @@ void ActivityManager::loop() {
   if (currentActivity && pendingAction.load() == PendingAction::None) {
 #if FREEINK_DEVICE_XUESU_300
     const char* quickAction = currentActivity->xuesuQuickActionLabel();
-    const bool doubleConfirm =
-        mappedInput.resolveXuesuConfirmShortcut(quickAction || currentActivity->allowsXuesuQuickPanel(), screenVisit);
+    const bool allowsQuickPanel = currentActivity->allowsXuesuQuickPanel();
+    using ConfirmMode = XuesuConfirmInput::Mode;
+    using ConfirmAction = XuesuConfirmInput::Action;
+    auto mode = quickAction || allowsQuickPanel ? ConfirmMode::Double : ConfirmMode::Disabled;
+    if (allowsQuickPanel && !currentActivity->preventAutoSleep()) mode = ConfirmMode::Triple;
+    const auto confirmShortcut = mappedInput.resolveXuesuConfirmShortcut(mode);
+    const bool doubleConfirm = confirmShortcut == ConfirmAction::Double;
 #else
     constexpr bool doubleConfirm = false;
 #endif
@@ -181,6 +189,13 @@ void ActivityManager::loop() {
       goHome();
       return;
     }
+#if FREEINK_DEVICE_XUESU_300
+    if (confirmShortcut == ConfirmAction::Triple) {
+      resetHomeStandbyInput();
+      requestSleep();
+      return;
+    }
+#endif
 
     // Touch users can also open the global control center from the status bar.
     bool statusBarTap = false;
@@ -230,6 +245,9 @@ void ActivityManager::loop() {
   }
 
   while (pendingAction.load() != PendingAction::None) {
+#if FREEINK_DEVICE_XUESU_300
+    mappedInput.resetXuesuConfirmShortcut();
+#endif
     const bool keepReaderLink = (pendingAction.load() == PendingAction::Push && keepsBluetoothAlive() &&
                                  pendingActivity && !pendingActivity->requiresExclusiveStorageLoop()) ||
                                 (pendingAction.load() == PendingAction::Pop && !stackActivities.empty() &&

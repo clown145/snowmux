@@ -202,32 +202,167 @@ int main() {
 #include <cassert>
 int main() {
  using Action = XuesuConfirmInput::Action;
+ using Mode = XuesuConfirmInput::Mode;
  XuesuConfirmInput input;
+ const auto update = [&](uint32_t now, bool clicked, bool held, bool interrupted) {
+   return input.update(now, clicked, held, interrupted, Mode::Double);
+ };
 
- assert(input.update(100, true, false, false) == Action::None);
- assert(input.update(400, false, false, false) == Action::None);
- assert(input.update(401, false, false, false) == Action::Single);
- assert(input.update(402, false, false, false) == Action::None);
+ assert(update(100, true, false, false) == Action::None);
+ assert(update(400, false, false, false) == Action::None);
+ assert(update(401, false, false, false) == Action::Single);
+ assert(update(402, false, false, false) == Action::None);
 
- assert(input.update(500, true, false, false) == Action::None);
- assert(input.update(700, true, false, false) == Action::Double);
- assert(input.update(850, false, false, false) == Action::None);
+ assert(update(500, true, false, false) == Action::None);
+ assert(update(700, true, false, false) == Action::Double);
+ assert(update(850, false, false, false) == Action::None);
 
- assert(input.update(900, true, false, false) == Action::None);
- assert(input.update(1150, false, true, false) == Action::None);
- assert(input.update(1220, true, false, false) == Action::Double);
+ assert(update(900, true, false, false) == Action::None);
+ assert(update(1150, false, true, false) == Action::None);
+ assert(update(1220, true, false, false) == Action::Double);
 
- assert(input.update(1400, true, false, false) == Action::None);
- assert(input.update(1500, false, true, false) == Action::None);
- assert(input.update(2000, false, true, true) == Action::None);
- assert(input.update(2010, false, false, true) == Action::None);
- assert(input.update(2400, false, false, false) == Action::None);
+ assert(update(1400, true, false, false) == Action::None);
+ assert(update(1500, false, true, false) == Action::None);
+ assert(update(2000, false, true, true) == Action::None);
+ assert(update(2010, false, false, true) == Action::None);
+ assert(update(2400, false, false, false) == Action::None);
 
- assert(input.update(2500, true, false, false) == Action::None);
+ assert(update(2500, true, false, false) == Action::None);
  input.reset();
- assert(input.update(2900, false, false, false) == Action::None);
+ assert(update(2900, false, false, false) == Action::None);
 }
 ''', include_dirs=(ROOT / 'src',))
+
+    def test_xuesu_confirm_triple_preserves_single_double_and_long_press(self):
+        run_cpp(r'''
+#include "util/XuesuConfirmInput.h"
+#include <cassert>
+int main() {
+ using Action = XuesuConfirmInput::Action;
+ using Mode = XuesuConfirmInput::Mode;
+ XuesuConfirmInput input;
+ const auto click = [&](uint32_t now) { return input.update(now, true, false, false, Mode::Triple); };
+ const auto idle = [&](uint32_t now) { return input.update(now, false, false, false, Mode::Triple); };
+
+ assert(click(100) == Action::None);
+ assert(idle(400) == Action::None);
+ assert(idle(401) == Action::Single);
+ assert(idle(402) == Action::None);
+
+ assert(click(500) == Action::None);
+ assert(click(800) == Action::None);
+ assert(idle(1100) == Action::None);
+ assert(idle(1101) == Action::Double);
+ assert(idle(1102) == Action::None);
+
+ assert(click(1200) == Action::None);
+ assert(click(1470) == Action::None);
+ assert(input.update(1750, false, true, false, Mode::Triple) == Action::None);
+ assert(click(1810) == Action::Triple);
+ assert(idle(2111) == Action::None);
+
+ // A third press after the gap is a separate gesture even if a frame was late.
+ assert(click(2200) == Action::None);
+ assert(click(2250) == Action::None);
+ assert(click(2551) == Action::Double);
+ assert(idle(2852) == Action::Single);
+
+ // Holding the third contact routes Back and cancels the entire click sequence.
+ assert(click(3000) == Action::None);
+ assert(click(3100) == Action::None);
+ assert(input.update(3300, false, true, false, Mode::Triple) == Action::None);
+ assert(input.update(3700, false, true, true, Mode::Triple) == Action::None);
+ assert(input.update(3750, false, false, true, Mode::Triple) == Action::None);
+ assert(idle(4200) == Action::None);
+
+ assert(click(4300) == Action::None);
+ assert(click(4400) == Action::None);
+ assert(input.update(4500, false, false, true, Mode::Triple) == Action::None);
+ assert(idle(4800) == Action::None);
+
+ // On a popup or a different activity no part of the pending gesture survives.
+ assert(click(4900) == Action::None);
+ assert(click(5000) == Action::None);
+ input.reset();
+ assert(click(5100) == Action::None);
+ assert(idle(5401) == Action::Single);
+ assert(input.update(5500, true, false, false, Mode::Disabled) == Action::None);
+ assert(idle(5900) == Action::None);
+
+ // A sampled contact without a click edge must not keep the pair pending.
+ assert(click(6000) == Action::None);
+ assert(click(6100) == Action::None);
+ assert(input.update(6350, false, true, false, Mode::Triple) == Action::None);
+ assert(idle(6450) == Action::None);
+ assert(idle(6451) == Action::Double);
+}
+''', include_dirs=(ROOT / 'src',))
+
+    def test_xuesu_confirm_release_does_not_cross_input_owners(self):
+        source = (ROOT / 'src/MappedInputManager.cpp').read_text()
+        program = r'''
+#include "util/XuesuConfirmInput.h"
+#include <cassert>
+using Mode = XuesuConfirmInput::Mode;
+using Action = XuesuConfirmInput::Action;
+uint32_t now;
+uint32_t millis() { return now; }
+struct HalGPIO {
+  bool held = false, clicked = false;
+  bool isXuesuConfirmHeld() const { return held; }
+  bool wasReleased() const { return clicked; }
+};
+struct MappedInputManager {
+  enum class Button { Confirm, Back, Up, Down };
+  HalGPIO gpio;
+  mutable XuesuConfirmInput xuesuConfirmInput;
+  mutable Mode xuesuConfirmMode = Mode::Disabled;
+  mutable bool xuesuConfirmReleasePending = false;
+  mutable bool xuesuConfirmFiltered = false;
+  mutable bool xuesuConfirmSingle = false;
+  bool isPressed(Button) const { return false; }
+  bool wasReleased(Button b) const {
+    return b == Button::Confirm && (xuesuConfirmFiltered ? xuesuConfirmSingle : gpio.clicked);
+  }
+  bool hasRemoteClick() const { return false; }
+  bool mapButton(Button b, bool (HalGPIO::*query)() const) const {
+    return b == Button::Confirm && (gpio.*query)();
+  }
+  void resetXuesuConfirmShortcut() const;
+  Action resolveXuesuConfirmShortcut(Mode) const;
+  Action frame(uint32_t timestamp, Mode mode, bool clicked, bool held = false) {
+    now = timestamp;
+    gpio = {.held = held, .clicked = clicked};
+    xuesuConfirmSingle = xuesuConfirmFiltered = false;
+    return resolveXuesuConfirmShortcut(mode);
+  }
+};
+''' + '\n'.join(method(source, signature) for signature in (
+            'void MappedInputManager::resetXuesuConfirmShortcut(',
+            'XuesuConfirmInput::Action MappedInputManager::resolveXuesuConfirmShortcut(',
+        )) + r'''
+int main() {
+  MappedInputManager input;
+  using Button = MappedInputManager::Button;
+  assert(input.frame(100, Mode::Triple, true) == Action::None);
+  assert(input.frame(200, Mode::Triple, true) == Action::None);
+  assert(input.frame(250, Mode::Triple, false, true) == Action::None);
+  input.resetXuesuConfirmShortcut();
+  assert(input.frame(300, Mode::Disabled, true) == Action::None);
+  assert(!input.wasReleased(Button::Confirm));
+  assert(input.frame(350, Mode::Disabled, true) == Action::None);
+  assert(input.wasReleased(Button::Confirm));
+
+  assert(input.frame(400, Mode::Triple, true) == Action::None);
+  assert(input.frame(500, Mode::Triple, true) == Action::None);
+  assert(input.frame(550, Mode::Disabled, false, true) == Action::None);
+  assert(input.frame(600, Mode::Disabled, true) == Action::None);
+  assert(!input.wasReleased(Button::Confirm));
+  assert(input.frame(700, Mode::Triple, true) == Action::None);
+  assert(input.frame(1001, Mode::Triple, false) == Action::Single);
+}
+'''
+        run_cpp(program, include_dirs=(ROOT / 'src',))
 
     def test_xuesu_editors_only_submit_from_save_row(self):
         loops = '\n'.join(

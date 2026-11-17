@@ -500,19 +500,35 @@ bool MappedInputManager::injectRemoteClick(const RemoteButton button) {
 }
 
 #if FREEINK_DEVICE_XUESU_300
-bool MappedInputManager::resolveXuesuConfirmShortcut(const bool enabled, const uint32_t screenVisit) const {
-  if (!enabled || xuesuConfirmVisit != screenVisit) xuesuConfirmInput.reset();
-  xuesuConfirmVisit = screenVisit;
-  xuesuConfirmFiltered = enabled;
-  if (!enabled) return false;
+void MappedInputManager::resetXuesuConfirmShortcut() const {
+  xuesuConfirmInput.reset();
+  xuesuConfirmReleasePending = gpio.isXuesuConfirmHeld();
+}
 
-  const bool interrupted = gpio.isPressed(HalGPIO::BTN_BACK) || gpio.wasReleased(HalGPIO::BTN_BACK) ||
-                           gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_DOWN) || hasRemoteClick();
+XuesuConfirmInput::Action MappedInputManager::resolveXuesuConfirmShortcut(const XuesuConfirmInput::Mode mode) const {
+  using Mode = XuesuConfirmInput::Mode;
   using Action = XuesuConfirmInput::Action;
-  const auto action = xuesuConfirmInput.update(millis(), mapButton(Button::Confirm, &HalGPIO::wasReleased),
-                                               gpio.isXuesuConfirmHeld(), interrupted);
+  const bool held = gpio.isXuesuConfirmHeld();
+  if (xuesuConfirmMode != mode) {
+    xuesuConfirmInput.reset();
+    xuesuConfirmReleasePending |= held;
+    xuesuConfirmMode = mode;
+  }
+  if (xuesuConfirmReleasePending) {
+    xuesuConfirmFiltered = true;
+    xuesuConfirmReleasePending = held;
+    return Action::None;
+  }
+  xuesuConfirmFiltered = mode != Mode::Disabled;
+  if (!xuesuConfirmFiltered) return Action::None;
+
+  const bool interrupted = isPressed(Button::Back) || wasReleased(Button::Back) || isPressed(Button::Up) ||
+                           wasReleased(Button::Up) || isPressed(Button::Down) || wasReleased(Button::Down) ||
+                           hasRemoteClick();
+  const auto action =
+      xuesuConfirmInput.update(millis(), mapButton(Button::Confirm, &HalGPIO::wasReleased), held, interrupted, mode);
   xuesuConfirmSingle = action == Action::Single;
-  return action == Action::Double;
+  return action;
 }
 #endif
 

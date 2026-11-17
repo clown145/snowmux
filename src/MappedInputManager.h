@@ -61,7 +61,8 @@ class MappedInputManager {
   bool injectRemoteClick(RemoteButton button);
   bool hasRemoteClick() const { return remoteInput.button != RemoteButton::None; }
 #if FREEINK_DEVICE_XUESU_300
-  bool resolveXuesuConfirmShortcut(bool enabled, uint32_t screenVisit) const;
+  XuesuConfirmInput::Action resolveXuesuConfirmShortcut(XuesuConfirmInput::Mode mode) const;
+  void resetXuesuConfirmShortcut() const;
 #endif
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
@@ -192,7 +193,8 @@ class MappedInputManager {
   mutable uint8_t bleCapturedValue = 0;
 #if FREEINK_DEVICE_XUESU_300
   mutable XuesuConfirmInput xuesuConfirmInput;
-  mutable uint32_t xuesuConfirmVisit = 0;
+  mutable XuesuConfirmInput::Mode xuesuConfirmMode = XuesuConfirmInput::Mode::Disabled;
+  mutable bool xuesuConfirmReleasePending = false;
   mutable bool xuesuConfirmFiltered = false;
   mutable bool xuesuConfirmSingle = false;
 #endif

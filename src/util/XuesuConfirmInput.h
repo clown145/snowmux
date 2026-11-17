@@ -4,40 +4,56 @@
 
 class XuesuConfirmInput {
  public:
-  enum class Action : uint8_t { None, Single, Double };
-  static constexpr uint32_t doubleClickMs = 300;
+  enum class Mode : uint8_t { Disabled, Double, Triple };
+  enum class Action : uint8_t { None, Single, Double, Triple };
+  static constexpr uint32_t clickGapMs = 300;
 
-  Action update(const uint32_t now, const bool clicked, const bool held, const bool interrupted) {
+  Action update(const uint32_t now, const bool clicked, const bool held, const bool interrupted, const Mode mode) {
+    if (mode == Mode::Disabled) {
+      reset();
+      return Action::None;
+    }
     if (interrupted) {
       reset();
       return clicked ? Action::Single : Action::None;
     }
 
-    if (pending) {
-      if (!secondContact && now - clickedAt > doubleClickMs) {
-        pending = clicked;
+    if (pending != Action::None) {
+      if (!nextContact && now - clickedAt > clickGapMs) {
+        const auto action = pending;
+        pending = clicked ? Action::Single : Action::None;
         clickedAt = now;
-        return Action::Single;
+        return action;
       }
-      if (clicked) {
+      if (!clicked) {
+        nextContact = held;
+        return Action::None;
+      }
+      if (pending == Action::Double) {
+        reset();
+        return Action::Triple;
+      }
+      if (mode == Mode::Double) {
         reset();
         return Action::Double;
       }
-      secondContact |= held;
+      pending = Action::Double;
+      clickedAt = now;
+      nextContact = false;
     } else if (clicked) {
-      pending = true;
+      pending = Action::Single;
       clickedAt = now;
     }
     return Action::None;
   }
 
   void reset() {
-    pending = false;
-    secondContact = false;
+    pending = Action::None;
+    nextContact = false;
   }
 
  private:
   uint32_t clickedAt = 0;
-  bool pending = false;
-  bool secondContact = false;
+  Action pending = Action::None;
+  bool nextContact = false;
 };
