@@ -27,16 +27,16 @@ class HalClock {
   ClockSyncState _syncState = ClockSyncState::Idle;
   unsigned long _lastSyncMs = 0;
 
-  bool restoreSystemTimeFromRtc();
   bool updateRtcFromSystemTime();
   bool startSntp();
   void stopSntp();
   void completeSync();
 
  public:
-  // The POSIX UTC system clock is the runtime source on every device. An
-  // external RTC, when present, is used only to restore time after power loss.
+  // The POSIX UTC system clock is the runtime source. Xuesu also restores it
+  // from the board RTC on sleep-clock wakes.
   void begin();
+  bool refreshFromRtc();
   void update();
   bool isAvailable() const { return _rtcAvailable; }
   void setTimezone(const char* posixTz);

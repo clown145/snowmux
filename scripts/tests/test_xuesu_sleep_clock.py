@@ -19,6 +19,7 @@ class XuesuSleepClockTest(unittest.TestCase):
 
 #define RTC_NOINIT_ATTR
 #define LOG_INF(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
 enum class Language : uint8_t { EN, ZH, _COUNT };
 struct CrossPointSettings {
   enum { COVER = 3, CLOCK_MONTH_GRID = 9, CLOCK_NEWSPAPER, CLOCK_FIREWORKS, CLOCK_SLOPPY, CLOCK_ALMANAC,
@@ -47,7 +48,18 @@ void applyToClock(uint8_t zone, uint8_t dst) { assert(zone == 8 && dst == 0); }
 }
 static time_t epoch = 1704067199; // 2023-12-31 23:59:59 UTC
 static int usec = 550000;
-struct { time_t nowUtc() const { return epoch; } } halClock;
+struct {
+  time_t rtcEpoch = 0;
+  unsigned reads = 0;
+  bool refreshFromRtc() {
+    ++reads;
+    if (!rtcEpoch) return false;
+    epoch = rtcEpoch;
+    usec = 0;
+    return true;
+  }
+  time_t nowUtc() const { return epoch; }
+} halClock;
 struct FakeTimeval { time_t tv_sec; int tv_usec; };
 void fakeGettimeofday(FakeTimeval* out, void*) { *out = {epoch, usec}; }
 tm* fakeLocaltime(const time_t* ts, tm* out) { *out = *std::gmtime(ts); return out; }
@@ -255,6 +267,29 @@ int main() {
   assert(SETTINGS.sleepScreen == CrossPointSettings::CLOCK_SLOPPY);
   const auto weather = takeStandbyResume(true);
   assert(weather && weather->layout == Layout::Landscape);
+
+  // Even a valid but fast ESP clock must give way to the board on every wake.
+  halClock.rtcEpoch = 1704067200;
+  epoch = halClock.rtcEpoch + 240;
+  assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Landscape}));
+  assert(retained.epoch == halClock.rtcEpoch && epoch == halClock.rtcEpoch);
+  assert(UITheme::paints.back().date.tm_min == 0);
+  UITheme::paints.clear();
+  const unsigned readsBeforeWake = halClock.reads;
+  epoch += 300;
+  halClock.rtcEpoch += 60;
+  refreshAfterTimerWake(renderer);
+  assert(halClock.reads == readsBeforeWake + 1);
+  assert(UITheme::paints[0].date.tm_min == 0 && UITheme::paints[1].date.tm_min == 1);
+  assert(powerManager.laterDelay == 60200000);
+  halClock.rtcEpoch -= 120;
+  refreshAfterTimerWake(renderer);
+  assert(UITheme::paints.back().date.tm_min == 59);
+
+  halClock.rtcEpoch = 0;
+  epoch += 60;
+  refreshAfterTimerWake(renderer);
+  assert(UITheme::paints.back().date.tm_min == 0);
 
   // An older firmware's retained bytes cannot serve as a differential baseline.
   assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Newspaper}));

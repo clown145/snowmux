@@ -28,7 +28,7 @@ index 0003b7b..b18375c 100644
      // Newer X4 / X4 Pro batches swap the SSD1677 for an UltraChip part.
      // Which silicon a unit carries is decided before begin() by the boot-time
 diff --git a/libs/hardware/BoardConfig/include/BoardConfig.h b/libs/hardware/BoardConfig/include/BoardConfig.h
-index 31adca2..0dbfea0 100644
+index 31adca2..1507cdc 100644
 --- a/libs/hardware/BoardConfig/include/BoardConfig.h
 +++ b/libs/hardware/BoardConfig/include/BoardConfig.h
 @@ -95,6 +95,13 @@
@@ -63,8 +63,12 @@ index 31adca2..0dbfea0 100644
  #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
  #if (FREEINK_MCU_C3 + FREEINK_MCU_C61 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
  #error \
-@@ -408,7 +415,7 @@
-    FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO)
+@@ -405,10 +412,10 @@
+   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC ||           \
+    FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || \
+    FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_METALIO_EINK4 ||             \
+-   FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO)
++   FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_XUESU_300)
  #endif
  #ifndef FREEINK_CAP_TEMP_HUMIDITY
 -#define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
@@ -115,7 +119,7 @@ index 31adca2..0dbfea0 100644
    uint8_t imuAddr;           // LSM6DS3TR-C = 0x6A, QMI8658 = 0x6B/0x6A, BMI270 = 0x68/0x69; 0 = none
    uint8_t i2cBus = 0;        // 0 = Wire, 1 = Wire1 on multi-bus SoCs
    RtcType rtcType = RtcType::None;
-@@ -2361,18 +2372,57 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES_COMPILED_IN = cmax(cmax(cmax(cmax(FREEI
+@@ -2361,18 +2372,58 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES_COMPILED_IN = cmax(cmax(cmax(cmax(FREEI
                               FREEINK_DEVICE_METALIO_EINK4 ? panelBytes(METALIO_EINK4) : 0u))))),
        FREEINK_DEVICE_WS397 ? panelBytes(WS_EPAPER_397) : 0u);
 
@@ -147,7 +151,8 @@ index 31adca2..0dbfea0 100644
 +    .sdmmc = {xuesu300::sdPins.clk, xuesu300::sdPins.cmd, xuesu300::sdPins.d0,
 +              xuesu300::sdPins.d1, xuesu300::sdPins.d2, xuesu300::sdPins.d3, 4},
 +    .batteryGauge = NO_GAUGE,
-+    .sensors = {.i2cSda = 13, .i2cScl = 12, .i2cHz = 100000, .rtcAddr = 0, .tempHumidityAddr = 0x38, .imuAddr = 0},
++    .sensors = {.i2cSda = 13, .i2cScl = 12, .i2cHz = 100000, .rtcAddr = 0x32, .tempHumidityAddr = 0x38,
++                .rtcType = RtcType::Rx8130},
 +    .grayscaleLevels = 4,
 +};
 +static_assert(panelBytes(XUESU_300) == 15000);
@@ -175,7 +180,7 @@ index 31adca2..0dbfea0 100644
  constexpr BoardProfile DEFAULT_DEVICE = METALIO_EINK4;
  #elif FREEINK_DEVICE_WS397
  constexpr BoardProfile DEFAULT_DEVICE = WS_EPAPER_397;
-@@ -2589,6 +2639,11 @@ inline bool selectDevice(Board which) {
+@@ -2589,6 +2640,11 @@ inline bool selectDevice(Board which) {
      case Board::Picco:
        ACTIVE = PICCO;
        break;
@@ -187,8 +192,36 @@ index 31adca2..0dbfea0 100644
  #endif
      default:
        return false;
+diff --git a/libs/hardware/BoardConfig/include/I2cBusLock.h b/libs/hardware/BoardConfig/include/I2cBusLock.h
+index 0268c09..8fd13cc 100644
+--- a/libs/hardware/BoardConfig/include/I2cBusLock.h
++++ b/libs/hardware/BoardConfig/include/I2cBusLock.h
+@@ -3,18 +3,18 @@
+ // the battery gauge here). Two transfers in flight at once fail with ESP_ERR_INVALID_STATE, so
+ // every helper holds this lock for one complete transfer. Recursive: helpers may nest.
+ //
+-// Only the Metalio enables it (see metalio::ensureBooted()); on every other board it does
+-// nothing until it has been tested there.
+-#if defined(ESP_PLATFORM) && FREEINK_DEVICE_METALIO_EINK4
++// Xuesu uses it from the first RTC/AHT20 access. Metalio enables it during
++// bring-up (see metalio::ensureBooted()). It is a no-op on other boards.
++#if defined(ESP_PLATFORM) && (FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_XUESU_300)
+ #include <freertos/FreeRTOS.h>
+ #include <freertos/semphr.h>
+ #endif
+
+ namespace freeink {
+
+-#if defined(ESP_PLATFORM) && FREEINK_DEVICE_METALIO_EINK4
++#if defined(ESP_PLATFORM) && (FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_XUESU_300)
+ inline bool& i2cBusLockEnabled() {
+-  static bool enabled = false;
++  static bool enabled = FREEINK_DEVICE_XUESU_300;
+   return enabled;
+ }
+
 diff --git a/libs/hardware/EnvironmentSensor/include/EnvironmentSensor.h b/libs/hardware/EnvironmentSensor/include/EnvironmentSensor.h
-index d9a6a36..574a8bb 100644
+index d9a6a36..b7c9ed0 100644
 --- a/libs/hardware/EnvironmentSensor/include/EnvironmentSensor.h
 +++ b/libs/hardware/EnvironmentSensor/include/EnvironmentSensor.h
 @@ -1,6 +1,6 @@
@@ -204,7 +237,7 @@ index d9a6a36..574a8bb 100644
    bool present() const { return begun_; }
 
 +#if FREEINK_DEVICE_XUESU_300
-+  // Release the dedicated sensor bus before the board returns to deep sleep.
++  // End the sample session. The RTC continues to use the shared bus.
 +  void end();
 +#endif
 +
@@ -212,12 +245,17 @@ index d9a6a36..574a8bb 100644
    // tempC is degrees Celsius; humidityPct is 0-100 %RH (clamped).
    bool read(float& tempC, float& humidityPct);
 diff --git a/libs/hardware/EnvironmentSensor/src/EnvironmentSensor.cpp b/libs/hardware/EnvironmentSensor/src/EnvironmentSensor.cpp
-index 495de24..fe1ffaa 100644
+index 495de24..7c9087c 100644
 --- a/libs/hardware/EnvironmentSensor/src/EnvironmentSensor.cpp
 +++ b/libs/hardware/EnvironmentSensor/src/EnvironmentSensor.cpp
-@@ -8,6 +8,86 @@
+@@ -7,7 +7,98 @@
+ #include <Wire.h>
  #include <soc/soc_caps.h>
 
++#if FREEINK_DEVICE_XUESU_300
++#include <I2cBusLock.h>
++#endif
++
  namespace freeink {
 +
 +#if FREEINK_DEVICE_XUESU_300
@@ -227,12 +265,14 @@ index 495de24..fe1ffaa 100644
 +constexpr uint8_t kCalibrated = 0x08;
 +
 +bool sendAhtCommand(const uint8_t address, const uint8_t* bytes, const size_t count) {
++  const I2cBusLock busLock;
 +  Wire.beginTransmission(address);
 +  Wire.write(bytes, count);
 +  return Wire.endTransmission() == 0;
 +}
 +
 +bool ahtReady(const uint8_t address) {
++  const I2cBusLock busLock;
 +  if (Wire.requestFrom(address, 1) != 1) return false;
 +  return (Wire.read() & (kBusy | kCalibrated)) == kCalibrated;
 +}
@@ -253,8 +293,11 @@ index 495de24..fe1ffaa 100644
 +bool EnvironmentSensor::begin() {
 +  if (begun_) return true;
 +  const auto& sensor = BoardConfig::ACTIVE.sensors;
-+  if (!Wire.begin(sensor.i2cSda, sensor.i2cScl, sensor.i2cHz)) return false;
-+  Wire.setTimeOut(15);
++  {
++    const I2cBusLock busLock;
++    if (!Wire.begin(sensor.i2cSda, sensor.i2cScl, sensor.i2cHz)) return false;
++    Wire.setTimeOut(15);
++  }
 +  begun_ = true;
 +  if (ahtReady(sensor.tempHumidityAddr)) return true;
 +
@@ -274,8 +317,7 @@ index 495de24..fe1ffaa 100644
 +}
 +
 +void EnvironmentSensor::end() {
-+  if (!begun_) return;
-+  Wire.end();
++  // The RTC shares this bus and continues to use it after the sample.
 +  begun_ = false;
 +}
 +
@@ -287,8 +329,11 @@ index 495de24..fe1ffaa 100644
 +  delay(85);
 +
 +  uint8_t data[7];
-+  if (Wire.requestFrom(address, sizeof(data)) != sizeof(data)) return false;
-+  for (auto& byte : data) byte = Wire.read();
++  {
++    const I2cBusLock busLock;
++    if (Wire.requestFrom(address, sizeof(data)) != sizeof(data)) return false;
++    for (auto& byte : data) byte = Wire.read();
++  }
 +  if ((data[0] & (kBusy | kCalibrated)) != kCalibrated || ahtCrc(data, 6) != data[6]) return false;
 +
 +  const uint32_t humidityRaw = uint32_t{data[1]} << 12 | uint32_t{data[2]} << 4 | (data[3] >> 4);
@@ -302,7 +347,7 @@ index 495de24..fe1ffaa 100644
  namespace {
 
  // SHT40 commands (datasheet). 0xFD = measure T+RH, high precision.
-@@ -94,6 +174,7 @@ bool EnvironmentSensor::read(float& tempC, float& humidityPct) {
+@@ -94,6 +185,7 @@ bool EnvironmentSensor::read(float& tempC, float& humidityPct) {
    return true;
  }
 

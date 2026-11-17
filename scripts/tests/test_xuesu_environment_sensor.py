@@ -35,7 +35,7 @@ struct MockWire {
   std::deque<std::vector<uint8_t>> responses;
   std::deque<uint8_t> data;
   bool begin(int sda, int scl, uint32_t hz) {
-    assert(!open && sda == 13 && scl == 12 && hz == 100000);
+    assert(sda == 13 && scl == 12 && hz == 100000);
     return open = true;
   }
   bool end() { assert(open); open = false; return true; }
@@ -65,6 +65,7 @@ MockWire Wire;
 std::vector<unsigned long> delays;
 void delay(unsigned long ms) { delays.push_back(ms); }
 int main() {
+  assert(Wire.begin(13, 12, 100000));  // The RTC may already own the bus.
   EnvironmentSensor sensor;
   Wire.responses = {{0}, {8}, {8, 128, 0, 0, 64, 0, 138}, {8, 128, 0, 0, 64, 0, 139},
                     {136, 128, 0, 0, 64, 0, 102}};
@@ -79,13 +80,14 @@ int main() {
   assert(!sensor.read(temperature, humidity));  // Damaged CRC.
   assert(!sensor.read(temperature, humidity));  // Still busy, even with a correct CRC.
   sensor.end();
-  assert(!Wire.open && !sensor.present());
+  assert(Wire.open && !sensor.present());
   Wire.commands.clear();
   Wire.responses = {{8}};
   assert(sensor.begin() && Wire.commands.empty());  // No reset on a routine wake.
   sensor.end();
   Wire.responses = {{0}, {0}};
-  assert(!sensor.begin() && !Wire.open);  // Release the bus after failed initialization.
+  assert(!sensor.begin() && Wire.open);  // Failed AHT20 initialization also leaves the RTC bus usable.
 }
-''', include_dirs=(fake, driver / 'include'), defines=('FREEINK_DEVICE_XUESU_300=1',),
+''', include_dirs=(fake, driver / 'include', driver.parent / 'BoardConfig/include'),
+                    defines=('FREEINK_DEVICE_XUESU_300=1',),
                     extra_sources=(driver / 'src/EnvironmentSensor.cpp',))

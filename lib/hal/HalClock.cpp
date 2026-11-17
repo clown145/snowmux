@@ -1,5 +1,6 @@
 #include "HalClock.h"
 
+#include <BoardConfig.h>
 #include <Logging.h>
 #include <WiFi.h>
 #include <esp_netif.h>
@@ -23,7 +24,11 @@ namespace {
 constexpr time_t MIN_TRUSTED_EPOCH = 1704016800;  // 2023-12-31 10:00 UTC
 constexpr uint16_t MIN_TRUSTED_YEAR = 2023;
 constexpr uint16_t MAX_RTC_YEAR = 2099;
+constexpr int64_t MAX_RTC_CALENDAR_SECONDS = 4102444799;  // 2099-12-31 23:59:59
 constexpr time_t MAX_RTC_WRITE_SKEW_SECONDS = 2;
+// Share the factory RTC's CST-8 default across firmware slots. The selected
+// CrossMux timezone is applied separately when displaying the UTC system clock.
+constexpr int32_t RTC_UTC_OFFSET_SECONDS = FREEINK_DEVICE_XUESU_300 ? 8 * 3600 : 0;
 
 int32_t daysFromCivil(int year, const unsigned month, const unsigned day) {
   year -= month <= 2;
@@ -43,11 +48,14 @@ bool rtcDateTimeToEpoch(const Rtc::DateTime& rtcTime, time_t& epoch) {
   const int64_t seconds = static_cast<int64_t>(daysFromCivil(rtcTime.year, rtcTime.month, rtcTime.day)) * 86400 +
                           static_cast<int64_t>(rtcTime.hour) * 3600 + static_cast<int64_t>(rtcTime.minute) * 60 +
                           rtcTime.second;
-  const time_t converted = static_cast<time_t>(seconds);
-  if (converted < MIN_TRUSTED_EPOCH || static_cast<int64_t>(converted) != seconds) return false;
+  const auto utcSeconds = seconds - RTC_UTC_OFFSET_SECONDS;
+  const time_t converted = static_cast<time_t>(utcSeconds);
+  if (converted < MIN_TRUSTED_EPOCH || static_cast<int64_t>(converted) != utcSeconds) return false;
 
+  const time_t rtcSeconds = static_cast<time_t>(seconds);
   struct tm roundTrip{};
-  if (!gmtime_r(&converted, &roundTrip) || roundTrip.tm_year != static_cast<int>(rtcTime.year) - 1900 ||
+  if (static_cast<int64_t>(rtcSeconds) != seconds || !gmtime_r(&rtcSeconds, &roundTrip) ||
+      roundTrip.tm_year != static_cast<int>(rtcTime.year) - 1900 ||
       roundTrip.tm_mon != static_cast<int>(rtcTime.month) - 1 || roundTrip.tm_mday != rtcTime.day ||
       roundTrip.tm_hour != rtcTime.hour || roundTrip.tm_min != rtcTime.minute || roundTrip.tm_sec != rtcTime.second) {
     return false;
@@ -58,31 +66,32 @@ bool rtcDateTimeToEpoch(const Rtc::DateTime& rtcTime, time_t& epoch) {
 }
 
 bool epochToRtcDateTime(const time_t epoch, Rtc::DateTime& rtcTime) {
-  if (epoch < MIN_TRUSTED_EPOCH) return false;
+  if (epoch < MIN_TRUSTED_EPOCH || epoch > MAX_RTC_CALENDAR_SECONDS - RTC_UTC_OFFSET_SECONDS) return false;
+  const auto seconds = static_cast<int64_t>(epoch) + RTC_UTC_OFFSET_SECONDS;
+  const auto rtcSeconds = static_cast<time_t>(seconds);
+  struct tm calendar{};
+  if (static_cast<int64_t>(rtcSeconds) != seconds || !gmtime_r(&rtcSeconds, &calendar)) return false;
 
-  struct tm utcTime{};
-  if (!gmtime_r(&epoch, &utcTime)) return false;
-
-  const int year = utcTime.tm_year + 1900;
+  const int year = calendar.tm_year + 1900;
   if (year < MIN_TRUSTED_YEAR || year > MAX_RTC_YEAR) return false;
 
   rtcTime.year = static_cast<uint16_t>(year);
-  rtcTime.month = static_cast<uint8_t>(utcTime.tm_mon + 1);
-  rtcTime.day = static_cast<uint8_t>(utcTime.tm_mday);
-  rtcTime.hour = static_cast<uint8_t>(utcTime.tm_hour);
-  rtcTime.minute = static_cast<uint8_t>(utcTime.tm_min);
-  rtcTime.second = static_cast<uint8_t>(utcTime.tm_sec);
-  rtcTime.weekday = static_cast<uint8_t>(utcTime.tm_wday);
+  rtcTime.month = static_cast<uint8_t>(calendar.tm_mon + 1);
+  rtcTime.day = static_cast<uint8_t>(calendar.tm_mday);
+  rtcTime.hour = static_cast<uint8_t>(calendar.tm_hour);
+  rtcTime.minute = static_cast<uint8_t>(calendar.tm_min);
+  rtcTime.second = static_cast<uint8_t>(calendar.tm_sec);
+  rtcTime.weekday = static_cast<uint8_t>(calendar.tm_wday);
   return true;
 }
 
 }  // namespace
 
 void HalClock::begin() {
-  _rtcAvailable = _sdkRtc.begin();
+  if (!_rtcAvailable) _rtcAvailable = _sdkRtc.begin();
   LOG_INF("CLK", _rtcAvailable ? "External RTC found" : "Using software clock");
 
-  if (!hasValidTime() && restoreSystemTimeFromRtc()) {
+  if (_rtcAvailable && (FREEINK_DEVICE_XUESU_300 || !hasValidTime()) && refreshFromRtc()) {
     LOG_INF("CLK", "System UTC clock restored from external RTC");
   }
 }
@@ -94,7 +103,8 @@ time_t HalClock::nowUtc() const {
 
 bool HalClock::hasValidTime() const { return nowUtc() != 0; }
 
-bool HalClock::restoreSystemTimeFromRtc() {
+bool HalClock::refreshFromRtc() {
+  if (!_rtcAvailable) _rtcAvailable = _sdkRtc.begin();
   if (!_rtcAvailable) return false;
 
   Rtc::DateTime rtcTime{};
@@ -110,7 +120,12 @@ bool HalClock::restoreSystemTimeFromRtc() {
 }
 
 bool HalClock::updateRtcFromSystemTime() {
+#if FREEINK_DEVICE_XUESU_300
+  if (!_rtcAvailable) _rtcAvailable = _sdkRtc.begin();
+  if (!_rtcAvailable) return false;
+#else
   if (!_rtcAvailable) return true;
+#endif
 
   const time_t now = nowUtc();
   Rtc::DateTime rtcTime{};
@@ -119,7 +134,7 @@ bool HalClock::updateRtcFromSystemTime() {
     return false;
   }
   if (!_sdkRtc.set(rtcTime)) {
-    LOG_ERR("CLK", "Failed to write UTC date and time to external RTC");
+    LOG_ERR("CLK", "Failed to write date and time to external RTC");
     return false;
   }
 
@@ -135,10 +150,10 @@ bool HalClock::updateRtcFromSystemTime() {
     return false;
   }
 
-  LOG_INF("CLK", "External RTC set to %04u-%02u-%02u %02u:%02u:%02u UTC", static_cast<unsigned>(verifiedTime.year),
+  LOG_INF("CLK", "External RTC set to %04u-%02u-%02u %02u:%02u:%02u UTC%+d", static_cast<unsigned>(verifiedTime.year),
           static_cast<unsigned>(verifiedTime.month), static_cast<unsigned>(verifiedTime.day),
           static_cast<unsigned>(verifiedTime.hour), static_cast<unsigned>(verifiedTime.minute),
-          static_cast<unsigned>(verifiedTime.second));
+          static_cast<unsigned>(verifiedTime.second), RTC_UTC_OFFSET_SECONDS / 3600);
   return true;
 }
 

@@ -78,7 +78,9 @@ bool makeFrame(const time_t epoch, const RetainedFrame& params, Frame& frame) {
 
 void refreshEnvironment(RetainedFrame& params, Frame& frame) {
   if (!showsEnvironment(params.layout)) return;
-  if (params.environmentSampledAt && params.epoch - params.environmentSampledAt < environmentIntervalSeconds) return;
+  if (params.environmentSampledAt && params.epoch >= params.environmentSampledAt &&
+      params.epoch - params.environmentSampledAt < environmentIntervalSeconds)
+    return;
   frame.environment = hal_environment::sample();
   params.temperature = frame.environment.temperature;
   params.humidity = frame.environment.humidity;
@@ -147,6 +149,7 @@ bool drawBeforeSleep(GfxRenderer& renderer, const std::optional<FaceState>& stan
   const auto selected = layoutForMode(SETTINGS.sleepScreen);
   if (!standby && !selected) return false;
   const FaceState face = standby ? *standby : FaceState{.layout = *selected};
+  if (!halClock.refreshFromRtc()) LOG_ERR("SLC", "Board RTC read failed; using system time for sleep screen");
   RetainedFrame params{.epoch = halClock.nowUtc(),
                        .magic = kFrameMagic,
                        .styleSeed = face.styleSeed,
@@ -185,8 +188,15 @@ void armFirstTimer() {
 }
 
 void refreshAfterTimerWake(GfxRenderer& renderer) {
+  if (!hasRetainedFrame() || gpio.xuesuClockWakeKeyPending()) {
+    gpio.endXuesuClockWakeWatch();
+    return;
+  }
+
+  const bool rtcRead = halClock.refreshFromRtc();
+  if (!rtcRead) LOG_ERR("SLC", "Board RTC read failed; using system time after timer wake");
   const time_t epoch = halClock.nowUtc();
-  if (!hasRetainedFrame() || epoch < retained.epoch || gpio.xuesuClockWakeKeyPending()) {
+  if (!epoch || (!rtcRead && epoch < retained.epoch) || gpio.xuesuClockWakeKeyPending()) {
     gpio.endXuesuClockWakeWatch();
     return;
   }
