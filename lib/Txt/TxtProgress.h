@@ -3,6 +3,8 @@
 #include <HalStorage.h>
 
 #include <cstdint>
+#include <optional>
+#include <string>
 
 namespace txt_progress {
 constexpr uint32_t MAGIC = 0x4D545854;  // "TXTM"
@@ -26,6 +28,9 @@ static_assert(sizeof(Header) == 16 && sizeof(Record) == 12);
 
 enum class LegacyResult : uint8_t { Absent, Restored, Failed };
 LegacyResult readLegacySource(const char* cachePath, uint32_t sourceSize, uint32_t& sourceOffset);
+// Preserve the old reflow page's exact text position before discarding its layout cache.
+bool preserveReflowProgress(const std::string& cachePath,
+                            std::optional<uint32_t> (*readPageOffset)(const std::string&, uint16_t));
 bool resolve(HalFile& mapping, uint32_t sourceSize, uint32_t sourceOffset, uint32_t& visibleOffset);
 bool sourceForVisible(HalFile& mapping, uint32_t sourceSize, uint32_t visibleOffset, uint32_t& sourceOffset);
 }  // namespace txt_progress

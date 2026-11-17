@@ -26,6 +26,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Epub/Section.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -593,24 +594,28 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     return false;
   }
 
-  // Try to load existing cache first
-  if (bookMetadataCache->load()) {
-    if (Txt::isTxtOrMd(filepath)) {
-      if (!Txt::validateCache(filepath, cachePath, getCumulativeSpineItemSize(0))) {
-        LOG_DBG("EBP", "TXT/MD cache invalid or outdated: %s", filepath.c_str());
-        if (!buildIfMissing) {
-          return false;
-        }
-        bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
-        if (!bookMetadataCache) {
-          LOG_ERR("EBP", "OOM: TXT/MD metadata cache");
-          return false;
-        }
-        return Txt::buildTxtCache(filepath, cachePath, bookMetadataCache);
-      }
+  const bool cachedMetadata = bookMetadataCache->load();
+  if (Txt::isTxtOrMd(filepath)) {
+    if (cachedMetadata && Txt::validateCache(filepath, cachePath, getCumulativeSpineItemSize(0))) {
       LOG_DBG("EBP", "Loaded TXT/MD from cache: %s", filepath.c_str());
       return true;
     }
+    if (!buildIfMissing) return false;
+    if (cachedMetadata) {
+      bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
+      if (!bookMetadataCache) {
+        LOG_ERR("EBP", "OOM: TXT/MD metadata cache");
+        return false;
+      }
+    }
+    if (!txt_progress::preserveReflowProgress(cachePath, Section::readVisibleTextOffsetForPage)) {
+      LOG_ERR("EBP", "Failed to preserve progress before rebuilding TXT/MD cache: %s", filepath.c_str());
+      return false;
+    }
+    return Txt::buildTxtCache(filepath, cachePath, bookMetadataCache);
+  }
+
+  if (cachedMetadata) {
     if (!skipLoadingCss) {
       const CssParser::CacheStatus cacheStatus = cssParser->inspectCache();
       CssParser::CacheLoadResult cacheLoadResult = CssParser::CacheLoadResult::Invalid;
@@ -668,10 +673,6 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   // If we didn't load from cache above and we aren't allowed to build, fail now
   if (!buildIfMissing) {
     return false;
-  }
-
-  if (Txt::isTxtOrMd(filepath)) {
-    return Txt::buildTxtCache(filepath, cachePath, bookMetadataCache);
   }
 
   // Cache doesn't exist or is invalid, build it

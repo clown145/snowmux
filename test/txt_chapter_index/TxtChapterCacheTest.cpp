@@ -111,7 +111,9 @@ TEST_F(TxtChapterCacheTest, CachesAnEmptyChapterList) {
 }
 
 TEST_F(TxtChapterCacheTest, DetectsAndCachesGbkChapterTitles) {
-  const std::string gbkBook = "ASCII preface\n\xB5\xDA\xD2\xBB\xD5\xC2 \xBF\xAA\xCA\xBC\n";
+  const std::string gbkBook =
+      "ASCII preface\n\xB5\xDA\xD2\xBB\xD5\xC2 \xBF\xAA\xCA\xBC\n"
+      "\xA1\xA1\xA1\xBE\xB5\xDA\xA3\xB1\xA3\xB2\xD5\xC2\xA1\xBF\n";
   writeBook(gbkBook);
   Txt txt("/book.txt", "/.crosspoint");
   ASSERT_TRUE(txt.load());
@@ -121,7 +123,7 @@ TEST_F(TxtChapterCacheTest, DetectsAndCachesGbkChapterTitles) {
   uint32_t count = 0;
   ASSERT_TRUE(txt.buildChapterIndex(encoding, scratch.data(), scratch.size(), count));
   ASSERT_EQ(encoding, txt_encoding::Encoding::Gbk);
-  ASSERT_EQ(count, 1U);
+  ASSERT_EQ(count, 2U);
 
   HalFile cache;
   ASSERT_TRUE(txt.openChapterIndex(cache, encoding, count));
@@ -129,6 +131,50 @@ TEST_F(TxtChapterCacheTest, DetectsAndCachesGbkChapterTitles) {
   ASSERT_TRUE(txt.readChapter(cache, count, 0, chapter));
   EXPECT_STREQ(chapter.title, "第一章 开始");
   EXPECT_EQ(chapter.sourceOffset, gbkBook.find("\xB5\xDA"));
+  ASSERT_TRUE(txt.readChapter(cache, count, 1, chapter));
+  EXPECT_STREQ(chapter.title, "【第１２章】");
+  EXPECT_EQ(chapter.sourceOffset, gbkBook.find("\xA1\xA1"));
+}
+
+TEST_F(TxtChapterCacheTest, RebuildsV1IndexAndRequiresNumberedHeadingsToHaveASequence) {
+  const std::string contents =
+      "序章\r\n"
+      "1. 条目\n2. 条目\n3. 条目\n"
+      "4\n　\n5\n6\n"
+      "【第１章】\n"
+      "41\n正文\n43\n正文\n44\n正文\n"
+      "尾声\n" +
+      std::string(300, 'a') + "\n００７\n正文\n008 [重逢]\n正文\n009. 第三天\n正文\n010";
+  writeBook(contents);
+  Txt txt("/book.txt", "/.crosspoint");
+  ASSERT_TRUE(txt.load());
+  std::array<uint8_t, 1024> scratch{};
+  txt_encoding::Encoding encoding = txt_encoding::Encoding::Unknown;
+  uint32_t count = 0;
+  ASSERT_TRUE(txt.buildChapterIndex(encoding, scratch.data(), scratch.size(), count));
+
+  {
+    const auto path = hostPath(txt.getCachePath() + "/chapters.bin");
+    std::fstream oldIndex(path, std::ios::binary | std::ios::in | std::ios::out);
+    ASSERT_TRUE(oldIndex.good());
+    oldIndex.seekp(14);
+    oldIndex.put(1);
+  }
+  {
+    HalFile oldIndex;
+    EXPECT_FALSE(txt.openChapterIndex(oldIndex, encoding, count));
+  }
+  ASSERT_TRUE(txt.buildChapterIndex(encoding, scratch.data(), scratch.size(), count));
+  HalFile cache;
+  ASSERT_TRUE(txt.openChapterIndex(cache, encoding, count));
+  const std::array expected = {"序章", "【第１章】", "尾声", "００７", "008 [重逢]", "009. 第三天", "010"};
+  ASSERT_EQ(count, expected.size());
+  for (uint32_t i = 0; i < count; ++i) {
+    txt_chapter_index::Record chapter;
+    ASSERT_TRUE(txt.readChapter(cache, count, i, chapter));
+    EXPECT_STREQ(chapter.title, expected[i]);
+    EXPECT_EQ(chapter.sourceOffset, contents.find(expected[i]));
+  }
 }
 
 }  // namespace

@@ -13,7 +13,7 @@
 
 namespace {
 constexpr uint32_t CHAPTER_INDEX_MAGIC = 0x43545854;  // "TXTC"
-constexpr uint8_t CHAPTER_INDEX_VERSION = 1;
+constexpr uint8_t CHAPTER_INDEX_VERSION = 2;
 constexpr size_t INDEX_YIELD_BYTES = 64 * 1024;
 
 struct ChapterIndexHeader {
@@ -282,10 +282,8 @@ bool Txt::openChapterIndex(HalFile& file, txt_encoding::Encoding& encoding, uint
   uint32_t previousOffset = 0;
   for (uint32_t i = 0; i < header.count; ++i) {
     txt_chapter_index::Record chapter;
-    if (!readChapter(file, header.count, i, chapter) || (i > 0 && chapter.sourceOffset <= previousOffset) ||
-        txt_chapter_index::chapterTitle(chapter.title).empty()) {
-      return false;
-    }
+    if (!readChapter(file, header.count, i, chapter) || (i > 0 && chapter.sourceOffset <= previousOffset)) return false;
+    if (txt_chapter_index::matchHeading(chapter.title).title.empty()) return false;
     previousOffset = chapter.sourceOffset;
   }
   if (encoding == txt_encoding::Encoding::Unknown) encoding = header.encoding;
@@ -295,8 +293,13 @@ bool Txt::openChapterIndex(HalFile& file, txt_encoding::Encoding& encoding, uint
 
 bool Txt::buildChapterIndex(txt_encoding::Encoding& encoding, uint8_t* scratch, const size_t scratchSize,
                             uint32_t& count) const {
+  constexpr size_t MIN_SCRATCH_SIZE = 1024;
+  constexpr uint32_t MIN_NUMBERED_RUN = 3;
+  constexpr size_t PENDING_BYTES = (MIN_NUMBERED_RUN - 1) * sizeof(txt_chapter_index::Record);
+  static_assert(MIN_SCRATCH_SIZE / 2 > PENDING_BYTES);
   count = 0;
-  if (!loaded || !scratch || scratchSize < 1024 || fileSize > std::numeric_limits<uint32_t>::max()) return false;
+  if (!loaded || !scratch || scratchSize < MIN_SCRATCH_SIZE || fileSize > std::numeric_limits<uint32_t>::max())
+    return false;
 
   setupCacheDir();
   const std::string finalPath = cachePath + "/chapters.bin";
@@ -307,11 +310,13 @@ bool Txt::buildChapterIndex(txt_encoding::Encoding& encoding, uint8_t* scratch, 
   HalFile source;
   if (!Storage.openFileForRead("TXT", filepath, source)) return false;
 
-  const size_t readCapacity = scratchSize / 2;
-  uint8_t* const lineBuffer = scratch + readCapacity;
-  const size_t lineCapacity = scratchSize - readCapacity;
+  // Reserve space for unconfirmed titles while keeping at least 512 bytes for in-place GBK conversion.
+  uint8_t* const readBuffer = scratch + PENDING_BYTES;
+  const size_t readCapacity = std::min(scratchSize / 2, scratchSize - PENDING_BYTES - MIN_SCRATCH_SIZE / 2);
+  uint8_t* const lineBuffer = readBuffer + readCapacity;
+  const size_t lineCapacity = scratchSize - PENDING_BYTES - readCapacity;
   if (encoding == txt_encoding::Encoding::Unknown) {
-    encoding = detectEncoding(source, scratch, readCapacity, fileSize);
+    encoding = detectEncoding(source, scratch, scratchSize / 2, fileSize);
     if (!source.seek(0)) return false;
   }
   if (!txt_encoding::isSupported(encoding)) return false;
@@ -331,9 +336,25 @@ bool Txt::buildChapterIndex(txt_encoding::Encoding& encoding, uint8_t* scratch, 
     size_t lineStartOffset = 0;
     size_t sourceOffset = 0;
     bool lineTooLong = false;
+    uint32_t numberedRunLength = 0;
+    uint32_t previousNumber = 0;
+    bool hasBodyBetweenNumbers = false;
+
+    const auto writeRecords = [&](const void* records, const uint32_t recordCount) {
+      const size_t bytes = recordCount * sizeof(txt_chapter_index::Record);
+      if (recordCount > static_cast<uint32_t>(std::numeric_limits<int>::max()) - header.count ||
+          output.write(records, bytes) != bytes)
+        return false;
+      header.count += recordCount;
+      return true;
+    };
 
     const auto appendChapter = [&]() {
-      if (lineTooLong || lineLength == 0) return true;
+      if (lineTooLong) {
+        hasBodyBetweenNumbers = true;
+        return true;
+      }
+      if (lineLength == 0) return true;
 
       size_t utf8Length = lineLength;
       if (encoding == txt_encoding::Encoding::Gbk) {
@@ -344,28 +365,48 @@ bool Txt::buildChapterIndex(txt_encoding::Encoding& encoding, uint8_t* scratch, 
         lineBuffer[utf8Length] = '\0';
       }
 
-      const auto title =
-          txt_chapter_index::chapterTitle(std::string_view(reinterpret_cast<const char*>(lineBuffer), utf8Length));
-      if (title.empty()) return true;
+      using txt_chapter_index::HeadingKind;
+      const auto heading =
+          txt_chapter_index::matchHeading(std::string_view(reinterpret_cast<const char*>(lineBuffer), utf8Length));
+      switch (heading.kind) {
+        case HeadingKind::Empty:
+          return true;
+        case HeadingKind::Body:
+          hasBodyBetweenNumbers = true;
+          return true;
+        case HeadingKind::Standalone:
+          numberedRunLength = 0;
+          break;
+        case HeadingKind::Numbered:
+          if (!hasBodyBetweenNumbers || heading.number != previousNumber + 1) numberedRunLength = 0;
+          previousNumber = heading.number;
+          hasBodyBetweenNumbers = false;
+          break;
+      }
 
       txt_chapter_index::Record chapter;
       chapter.sourceOffset = static_cast<uint32_t>(lineStartOffset);
-      memcpy(chapter.title, title.data(), title.size());
-      chapter.title[title.size()] = '\0';
-      if (header.count >= static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-          output.write(&chapter, sizeof(chapter)) != sizeof(chapter)) {
-        return false;
+      memcpy(chapter.title, heading.title.data(), heading.title.size());
+      if (heading.kind == HeadingKind::Standalone) return writeRecords(&chapter, 1);
+
+      if (numberedRunLength < MIN_NUMBERED_RUN - 1) {
+        memcpy(scratch + numberedRunLength * sizeof(chapter), &chapter, sizeof(chapter));
+        ++numberedRunLength;
+        return true;
       }
-      ++header.count;
-      return true;
+      if (numberedRunLength == MIN_NUMBERED_RUN - 1) {
+        if (!writeRecords(scratch, numberedRunLength)) return false;
+        ++numberedRunLength;
+      }
+      return writeRecords(&chapter, 1);
     };
 
     while (sourceOffset < fileSize) {
       const size_t chunkSize = std::min(readCapacity, fileSize - sourceOffset);
-      const int bytesRead = source.read(scratch, chunkSize);
+      const int bytesRead = source.read(readBuffer, chunkSize);
       if (bytesRead <= 0) break;
       for (int i = 0; i < bytesRead; ++i) {
-        const uint8_t value = scratch[i];
+        const uint8_t value = readBuffer[i];
         if (value == '\n') {
           if (!appendChapter()) return false;
           lineLength = 0;

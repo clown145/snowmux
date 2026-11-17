@@ -14,8 +14,15 @@ struct Record {
 };
 static_assert(sizeof(Record) == 196);
 
-// Returns the trimmed line when it is a supported chapter heading, or an empty
-// view otherwise. The input must be UTF-8 (ASCII is valid UTF-8).
-std::string_view chapterTitle(std::string_view line);
+enum class HeadingKind : uint8_t { Empty, Body, Standalone, Numbered };
+
+struct Heading {
+  HeadingKind kind;
+  std::string_view title = {};
+  uint32_t number = 0;
+};
+
+// The input is UTF-8. Numbered candidates need a sequence before they can enter the index.
+Heading matchHeading(std::string_view line);
 
 }  // namespace txt_chapter_index

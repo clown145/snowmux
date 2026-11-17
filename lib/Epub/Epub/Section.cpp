@@ -1173,9 +1173,12 @@ std::optional<uint32_t> Section::getVisibleTextOffsetForPage(const uint16_t page
   if (build_ && page < build_->lut.size()) {
     return build_->lut[page].visibleTextOffset;
   }
+  return readVisibleTextOffsetForPage(filePath, page);
+}
 
+std::optional<uint32_t> Section::readVisibleTextOffsetForPage(const std::string& sectionPath, const uint16_t page) {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+  if (!Storage.openFileForRead("SCT", sectionPath, f) || f.size() < HEADER_SIZE) {
     return std::nullopt;
   }
 

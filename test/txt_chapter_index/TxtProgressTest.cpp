@@ -29,6 +29,10 @@ class TxtProgressTest : public ::testing::Test {
     std::ofstream out(root / name, std::ios::binary);
     out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   }
+  std::vector<uint8_t> read(const char* name) const {
+    std::ifstream input(root / name, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), {}};
+  }
   static void u32(std::vector<uint8_t>& bytes, uint32_t value) {
     for (int n = 0; n < 4; ++n) bytes.push_back(value >> (n * 8));
   }
@@ -77,6 +81,55 @@ TEST_F(TxtProgressTest, ReadsOneLegacyPageForEverySupportedLayout) {
     write("old/index.bin", index);
     EXPECT_EQ(txt_progress::readLegacySource("/old", 1000, offset), txt_progress::LegacyResult::Failed);
   }
+}
+
+TEST_F(TxtProgressTest, UpgradesPageOnlyReflowProgressBeforeRebuildingLayout) {
+  const auto readPageOffset = [](const std::string& section, uint16_t page) -> std::optional<uint32_t> {
+    EXPECT_EQ(section, "/old/sections/0.bin");
+    EXPECT_EQ(page, 42);
+    return 0x30001;
+  };
+  for (const std::vector<uint8_t>& saved : {std::vector<uint8_t>{0, 0, 42, 0}, {0, 0, 42, 0, 74, 0}}) {
+    write("old/progress.bin", saved);
+    ASSERT_TRUE(txt_progress::preserveReflowProgress("/old", readPageOffset));
+    auto expected = saved;
+    expected.resize(6);
+    u32(expected, 0x30001);
+    EXPECT_EQ(read("old/progress.bin"), expected);
+    EXPECT_FALSE(std::filesystem::exists(root / "old/progress.bin.txt-rebuild.bak"));
+  }
+}
+
+TEST_F(TxtProgressTest, RecoversInterruptedUpgradeAndRetainsExistingFallbacks) {
+  const auto noOffset = [](const std::string&, uint16_t) -> std::optional<uint32_t> { return std::nullopt; };
+  const std::vector<uint8_t> pageOnly = {0, 0, 14, 0, 22, 0};
+  write("old/progress.bin.txt-rebuild.bak", pageOnly);
+  ASSERT_TRUE(txt_progress::preserveReflowProgress("/old", noOffset));
+  EXPECT_EQ(read("old/progress.bin"), pageOnly);
+
+  auto positioned = pageOnly;
+  u32(positioned, 41);
+  write("old/progress.bin", positioned);
+  const auto unexpectedLookup = [](const std::string&, uint16_t) -> std::optional<uint32_t> {
+    ADD_FAILURE() << "A saved visible-text offset needs no lookup";
+    return std::nullopt;
+  };
+  ASSERT_TRUE(txt_progress::preserveReflowProgress("/old", unexpectedLookup));
+  EXPECT_EQ(read("old/progress.bin"), positioned);
+}
+
+TEST_F(TxtProgressTest, FailedUpgradeLeavesTheSavedPageAvailableForRetry) {
+  const std::vector<uint8_t> saved = {0, 0, 42, 0, 74, 0};
+  write("old/progress.bin", saved);
+  ASSERT_TRUE(std::filesystem::create_directory(root / "old/progress.bin.txt-rebuild.tmp"));
+  const auto readPageOffset = [](const std::string&, uint16_t) -> std::optional<uint32_t> { return 42; };
+  EXPECT_FALSE(txt_progress::preserveReflowProgress("/old", readPageOffset));
+  EXPECT_EQ(read("old/progress.bin"), saved);
+  ASSERT_TRUE(std::filesystem::remove(root / "old/progress.bin.txt-rebuild.tmp"));
+  EXPECT_TRUE(txt_progress::preserveReflowProgress("/old", readPageOffset));
+  auto expected = saved;
+  u32(expected, 42);
+  EXPECT_EQ(read("old/progress.bin"), expected);
 }
 
 TEST_F(TxtProgressTest, ResolvesAsciiGbkAndUtf8SpansIncludingMidCharacterAndEnd) {

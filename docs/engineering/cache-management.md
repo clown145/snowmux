@@ -55,9 +55,11 @@ partial pagination because missing glyphs now occupy an ascender-scaled outline
 box. Reopening a book rebuilds pagination automatically; metadata, chapter
 indexes and source-offset reading progress are retained.
 
-TXT `chapters.bin` version 1 is an optional source-offset chapter index built
-the first time the chapter list opens. It is independent of pagination and is
-invalidated by file size, encoding, or chapter-index version.
+TXT `chapters.bin` version 2 is a source-offset chapter index built on demand.
+It is independent of pagination and is invalidated by file size, encoding, or
+chapter-index version. Version 2 expands heading recognition. Numeric-only
+headings and numeric prefixes such as `001 [Title]` enter the index only in a
+run of at least three consecutive numbers separated by body text.
 
 TXT `progress.bin` stores the current source offset so a chapter jump can be
 restored without extending the page index through all intervening text. Legacy
@@ -164,7 +166,7 @@ struct PageLine {
 TXT and Markdown now use the EPUB reader and section format. Conversion is
 streaming: two checked 8KiB buffers, plus one disk-backed chapter record; the
 8KiB chapter-index workspace is released before conversion. The HTML and metadata
-conversion markers are version 2. `txt-map.bin` version 1 records source byte to
+conversion markers are version 3. `txt-map.bin` version 1 records source byte to
 visible codepoint runs (see `docs/file-formats.md`). Chapters are processed one at
 a time and parser boundary IDs do not accumulate in the anchor table. The inverse
 map resolves the page's visible offset to a source position, then binary-searches
@@ -176,7 +178,12 @@ Old `txt_<hash>/progress.bin` remains untouched until and after successful migra
 Eight-byte source offsets map to their containing reflowed page. Four-byte old page
 numbers use their old version 4–8 offset index. A missing/corrupt conversion or
 unresolved page fails the open with an error and never overwrites progress at page 0.
-New reflow progress lives in the EPUB cache. Both cache directories relocate with
+Reflow progress lives in the EPUB cache. Opening a book with an older conversion
+marker rebuilds its chapter metadata, HTML and pagination on demand. Chapter
+anchors add no visible text, so existing visible offsets remain valid. A 4- or
+6-byte reflow progress record is upgraded using the old page's visible-offset
+lookup when available. The temporary file and backup keep the original record
+recoverable during replacement. Both cache directories relocate with
 TXT/Markdown when the file is renamed. Explicit paragraph indentation remains
 Auto/Indent/NoIndent; forced Western width uses 0–5 spaces (default 3), Chinese
 remains two characters, and CSS/paragraph spacing retain their independent rules.

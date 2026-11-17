@@ -55,6 +55,57 @@ LegacyResult readLegacySource(const char* cachePath, const uint32_t sourceSize, 
   return LegacyResult::Restored;
 }
 
+bool preserveReflowProgress(const std::string& cachePath,
+                            std::optional<uint32_t> (*readPageOffset)(const std::string&, uint16_t)) {
+  const std::string path = cachePath + "/progress.bin";
+  const std::string backup = path + ".txt-rebuild.bak";
+  if (!Storage.exists(path.c_str())) {
+    if (!Storage.exists(backup.c_str())) return true;
+    if (!Storage.rename(backup.c_str(), path.c_str())) return false;
+  }
+
+  uint8_t data[10] = {};
+  {
+    HalFile progress;
+    if (!Storage.openFileForRead("TXT", path, progress)) return false;
+    const auto size = progress.fileSize64();
+    if (size != 4 && size != 6) return true;  // Existing visible-offset or unrecognized progress.
+    if (progress.read(data, size) != static_cast<int>(size)) return false;
+  }
+
+  if (data[0] || data[1]) return true;  // Text books have one spine item.
+  const auto page = static_cast<uint16_t>(data[2] | (data[3] << 8));
+  const auto offset = readPageOffset(cachePath + "/sections/0.bin", page);
+  if (!offset) return true;  // Keep the existing page-number/ratio fallback if the old layout is unavailable.
+  for (size_t i = 0; i < sizeof(*offset); ++i) {
+    data[6 + i] = static_cast<uint8_t>(*offset >> (8 * i));
+  }
+
+  // Keep the old file recoverable until the upgraded record is in place.
+  const std::string temp = path + ".txt-rebuild.tmp";
+  {
+    HalFile output;
+    if (!Storage.openFileForWrite("TXT", temp, output) || output.write(data, sizeof(data)) != sizeof(data))
+      return false;
+    output.flush();
+  }
+  {
+    HalFile check;
+    uint8_t saved[sizeof(data)];
+    if (!Storage.openFileForRead("TXT", temp, check) || check.fileSize64() != sizeof(saved) ||
+        check.read(saved, sizeof(saved)) != sizeof(saved) || memcmp(data, saved, sizeof(data)) != 0)
+      return false;
+  }
+  if (Storage.exists(backup.c_str()) && !Storage.remove(backup.c_str())) return false;
+  if (!Storage.rename(path.c_str(), backup.c_str())) return false;
+  if (!Storage.rename(temp.c_str(), path.c_str())) {
+    Storage.rename(backup.c_str(), path.c_str());
+    return false;
+  }
+  Storage.remove(backup.c_str());
+  return true;
+}
+
 namespace {
 bool readMapping(HalFile& mapping, uint32_t sourceSize, Header& header, Record& end) {
   if (!mapping.seek(0) || mapping.read(&header, sizeof(header)) != sizeof(header) || header.magic != MAGIC ||

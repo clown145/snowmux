@@ -1,73 +1,131 @@
 #include "TxtChapterIndex.h"
 
-#include <array>
 #include <cctype>
 
 namespace txt_chapter_index {
 namespace {
 
+constexpr std::string_view FULLWIDTH_SPACE = "　";
+
 bool isAsciiSpace(const char value) {
   return value == ' ' || value == '\t' || value == '\r' || value == '\n' || value == '\f' || value == '\v';
 }
 
-std::string_view trim(std::string_view line) {
-  while (!line.empty() && isAsciiSpace(line.front())) line.remove_prefix(1);
-  while (!line.empty() && isAsciiSpace(line.back())) line.remove_suffix(1);
-  constexpr std::string_view UTF8_BOM = "\xEF\xBB\xBF";
-  if (line.compare(0, UTF8_BOM.size(), UTF8_BOM) == 0) line.remove_prefix(UTF8_BOM.size());
-  return line;
+bool startsWithSpace(const std::string_view text) {
+  return !text.empty() && (isAsciiSpace(text.front()) || text.starts_with(FULLWIDTH_SPACE));
 }
 
-bool consume(std::string_view text, size_t& pos, const std::string_view token) {
-  if (text.compare(pos, token.size(), token) != 0) return false;
-  pos += token.size();
+void skipSpaces(std::string_view& text) {
+  while (startsWithSpace(text)) text.remove_prefix(isAsciiSpace(text.front()) ? 1 : FULLWIDTH_SPACE.size());
+}
+
+std::string_view trim(std::string_view text) {
+  skipSpaces(text);
+  while (!text.empty()) {
+    if (isAsciiSpace(text.back())) {
+      text.remove_suffix(1);
+    } else if (text.ends_with(FULLWIDTH_SPACE)) {
+      text.remove_suffix(FULLWIDTH_SPACE.size());
+    } else {
+      break;
+    }
+  }
+  return text;
+}
+
+bool consume(std::string_view& text, const std::string_view token) {
+  if (!text.starts_with(token)) return false;
+  text.remove_prefix(token.size());
   return true;
 }
 
-void skipAsciiSpaces(const std::string_view text, size_t& pos) {
-  while (pos < text.size() && isAsciiSpace(text[pos])) ++pos;
+int consumeDigit(std::string_view& text) {
+  if (text.empty()) return -1;
+  if (text.front() >= '0' && text.front() <= '9') {
+    const int digit = text.front() - '0';
+    text.remove_prefix(1);
+    return digit;
+  }
+  if (text.size() >= 3 && text.starts_with("\xEF\xBC")) {
+    const auto last = static_cast<unsigned char>(text[2]);
+    if (last >= 0x90 && last <= 0x99) {
+      text.remove_prefix(3);
+      return last - 0x90;
+    }
+  }
+  return -1;
 }
 
-bool isChineseHeading(const std::string_view title) {
-  constexpr std::array<std::string_view, 14> NUMERALS = {"零", "〇", "一", "二", "三", "四", "五",
-                                                         "六", "七", "八", "九", "十", "百", "千"};
-  constexpr std::array<std::string_view, 4> LARGE_NUMERALS = {"万", "亿", "两", "廿"};
-  constexpr std::array<std::string_view, 6> UNITS = {"章", "节", "回", "卷", "部", "篇"};
-
-  size_t pos = 0;
-  if (!consume(title, pos, "第")) return false;
-  skipAsciiSpaces(title, pos);
-
-  bool hasNumber = false;
-  while (pos < title.size()) {
-    if (title[pos] >= '0' && title[pos] <= '9') {
-      hasNumber = true;
-      ++pos;
-      continue;
-    }
-    bool matched = false;
-    for (const auto numeral : NUMERALS) {
-      if (consume(title, pos, numeral)) {
-        matched = true;
-        hasNumber = true;
-        break;
-      }
-    }
-    if (!matched) {
-      for (const auto numeral : LARGE_NUMERALS) {
-        if (consume(title, pos, numeral)) {
-          matched = true;
-          hasNumber = true;
-          break;
-        }
-      }
-    }
-    if (!matched) break;
+bool consumeChineseNumeral(std::string_view& text) {
+  static constexpr std::string_view NUMERALS[] = {"零", "〇", "一", "二", "三", "四", "五", "六", "七", "八", "九",
+                                                  "十", "百", "千", "万", "萬", "亿", "億", "两", "兩", "廿"};
+  for (const auto numeral : NUMERALS) {
+    if (consume(text, numeral)) return true;
   }
-  if (!hasNumber) return false;
-  skipAsciiSpaces(title, pos);
+  return false;
+}
+
+bool consumeChineseNumber(std::string_view& text) {
+  const size_t originalSize = text.size();
+  while (consumeDigit(text) >= 0 || consumeChineseNumeral(text)) {
+  }
+  return text.size() < originalSize;
+}
+
+struct Bracket {
+  std::string_view open;
+  std::string_view close;
+};
+
+constexpr Bracket BRACKETS[] = {{"【", "】"}, {"〖", "〗"}, {"〔", "〕"}, {"［", "］"}, {"（", "）"},
+                                {"「", "」"}, {"『", "』"}, {"《", "》"}, {"[", "]"},   {"(", ")"}};
+
+std::string_view headingText(const std::string_view title) {
+  for (const auto& [open, close] : BRACKETS) {
+    if (title.starts_with(open)) {
+      const size_t end = title.find(close, open.size());
+      if (end != std::string_view::npos) return trim(title.substr(open.size(), end - open.size()));
+      break;
+    }
+  }
+  return title;
+}
+
+bool isChineseHeading(std::string_view text) {
+  if (!consume(text, "第")) return false;
+  skipSpaces(text);
+  if (!consumeChineseNumber(text)) return false;
+  skipSpaces(text);
+
+  static constexpr std::string_view PROSE_PREFIXES[] = {"节课", "節課", "回合", "部分", "集合"};
+  for (const auto prefix : PROSE_PREFIXES) {
+    if (text.starts_with(prefix)) return false;
+  }
+  static constexpr std::string_view UNITS[] = {"章", "节", "節", "回", "卷", "部", "篇", "集", "话", "話", "册", "冊"};
   for (const auto unit : UNITS) {
-    if (title.compare(pos, unit.size(), unit) == 0) return true;
+    if (text.starts_with(unit)) return true;
+  }
+  return false;
+}
+
+bool endsTitleWord(const std::string_view text) {
+  if (text.empty() || startsWithSpace(text)) return true;
+  static constexpr std::string_view SEPARATORS[] = {":", "：", "-", "－", "—", "、", "(", "（"};
+  for (const auto separator : SEPARATORS) {
+    if (text.starts_with(separator)) return true;
+  }
+  return false;
+}
+
+bool isSpecialHeading(std::string_view text) {
+  if (consume(text, "番外")) {
+    if (!consume(text, "篇")) consumeChineseNumber(text);
+    return endsTitleWord(text);
+  }
+  static constexpr std::string_view TITLES[] = {"序章", "楔子", "引子", "前言", "终章", "終章",
+                                                "尾声", "尾聲", "后记", "後記", "附录", "附錄"};
+  for (const auto title : TITLES) {
+    if (text.starts_with(title) && endsTitleWord(text.substr(title.size()))) return true;
   }
   return false;
 }
@@ -80,43 +138,65 @@ bool equalsAsciiCaseInsensitive(const std::string_view text, const std::string_v
   return true;
 }
 
-bool isEnglishHeading(const std::string_view title) {
-  constexpr std::array<std::string_view, 3> PREFIXES = {"chapter", "book", "part"};
-  size_t pos = 0;
+bool isEnglishHeading(std::string_view text) {
+  static constexpr std::string_view PREFIXES[] = {"chapter", "book", "part", "volume"};
   for (const auto prefix : PREFIXES) {
-    if (equalsAsciiCaseInsensitive(title, prefix) && title.size() > prefix.size() &&
-        isAsciiSpace(title[prefix.size()])) {
-      pos = prefix.size();
-      break;
-    }
-  }
-  if (pos == 0) return false;
-  skipAsciiSpaces(title, pos);
+    if (!equalsAsciiCaseInsensitive(text, prefix)) continue;
+    text.remove_prefix(prefix.size());
+    if (!startsWithSpace(text)) return false;
+    skipSpaces(text);
 
-  const size_t numberStart = pos;
-  while (pos < title.size() && title[pos] >= '0' && title[pos] <= '9') ++pos;
-  if (pos == numberStart) {
-    while (pos < title.size()) {
-      const char value = static_cast<char>(std::tolower(static_cast<unsigned char>(title[pos])));
-      if (value != 'i' && value != 'v' && value != 'x' && value != 'l' && value != 'c' && value != 'd' &&
-          value != 'm') {
-        break;
+    const size_t originalSize = text.size();
+    while (consumeDigit(text) >= 0) {
+    }
+    if (text.size() == originalSize) {
+      while (!text.empty() && std::string_view("ivxlcdm").find(
+                                  std::tolower(static_cast<unsigned char>(text.front()))) != std::string_view::npos) {
+        text.remove_prefix(1);
       }
-      ++pos;
+    }
+    return text.size() < originalSize && (endsTitleWord(text) || text.starts_with('.') || text.starts_with("．"));
+  }
+  return false;
+}
+
+bool readHeadingNumber(std::string_view text, uint32_t& number) {
+  constexpr size_t MAX_DIGITS = 5;
+  size_t digits = 0;
+  for (int digit = consumeDigit(text); digit >= 0; digit = consumeDigit(text)) {
+    if (++digits > MAX_DIGITS) return false;
+    number = number * 10 + static_cast<uint32_t>(digit);
+  }
+  if (!digits) return false;
+  if (text.empty() || startsWithSpace(text)) return true;
+
+  static constexpr std::string_view SEPARATORS[] = {".", "．", ":", "：", "、", "-", "－", "—"};
+  for (const auto separator : SEPARATORS) {
+    if (consume(text, separator)) {
+      // Reject decimals, timestamps and numeric date components.
+      return !text.empty() && consumeDigit(text) < 0;
     }
   }
-  if (pos == numberStart) return false;
-  if (pos == title.size() || isAsciiSpace(title[pos])) return true;
-  return title[pos] == '.' || title[pos] == ':' || title[pos] == '-' || title.compare(pos, 3, "：") == 0 ||
-         title.compare(pos, 3, "—") == 0;
+  for (const auto& [open, close] : BRACKETS) {
+    if (text.starts_with(open)) return text.ends_with(close) && text.size() > open.size() + close.size();
+  }
+  return false;
 }
 
 }  // namespace
 
-std::string_view chapterTitle(std::string_view line) {
+Heading matchHeading(std::string_view line) {
   line = trim(line);
-  if (line.empty() || line.size() >= TITLE_CAPACITY) return {};
-  return isChineseHeading(line) || isEnglishHeading(line) ? line : std::string_view{};
+  if (consume(line, "\xEF\xBB\xBF")) line = trim(line);
+  if (line.empty()) return {HeadingKind::Empty};
+  if (line.size() >= TITLE_CAPACITY || line.find('\0') != std::string_view::npos) return {HeadingKind::Body};
+  const auto text = headingText(line);
+  if (isChineseHeading(text) || isSpecialHeading(text) || isEnglishHeading(text)) {
+    return {HeadingKind::Standalone, line};
+  }
+  uint32_t number = 0;
+  if (readHeadingNumber(text, number)) return {HeadingKind::Numbered, line, number};
+  return {HeadingKind::Body};
 }
 
 }  // namespace txt_chapter_index

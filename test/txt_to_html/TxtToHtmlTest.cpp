@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "Print.h"
 #include "TxtToHtml.h"
@@ -25,7 +27,7 @@ class StringPrint : public Print {
 
 const std::string kHeader =
     "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-    "<!-- TXT_CACHE_VERSION: 2 -->\n"
+    "<!-- TXT_CACHE_VERSION: 3 -->\n"
     "<!DOCTYPE html>\n<html>\n<head><title>test</title></head>\n<body>\n";
 const std::string kFooter = "\n</body>\n</html>\n";
 
@@ -48,11 +50,11 @@ TEST(TxtToHtmlTest, MidLineConsecutiveSpaces) {
   EXPECT_EQ(convert("Four    spaces"), kHeader + "Four&#160;&#160;&#160; spaces" + kFooter);
 }
 
-TEST(TxtToHtmlTest, PreservesCacheVersionTagsForBothFormats) {
+TEST(TxtToHtmlTest, EmitsCurrentCacheVersionTagsForBothFormats) {
   StringPrint out;
   ASSERT_TRUE(TxtToHtml::stream("test.MD", "text", out));
   EXPECT_EQ(out.str,
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- MD_CACHE_VERSION: 2 -->\n"
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- MD_CACHE_VERSION: 3 -->\n"
             "<!DOCTYPE html>\n<html>\n<head><title>test</title></head>\n<body>\ntext" +
                 kFooter);
   EXPECT_NE(out.str.find(TxtToHtml::cacheVersionTag("test.MD")), std::string::npos);
@@ -169,5 +171,40 @@ TEST(TxtToHtmlStream, EmitsSourceMappingAndChapterAnchorsInSourceOrder) {
   EXPECT_EQ(context.chapter, 1U);
   EXPECT_EQ(context.lastSource, book.size());
   EXPECT_EQ(context.lastVisible, 1U + 5U + 9U + 2U + 4U);
+}
+
+TEST(TxtToHtmlStream, AdditionalChapterBoundariesPreserveEverySourceToTextOffset) {
+  const std::string book = "序章  \r\n　正文 &\n【第１章】\n下一段";
+  const std::array<uint32_t, 2> boundaries = {0, static_cast<uint32_t>(book.find("【第１章】"))};
+  struct Context {
+    const std::array<uint32_t, 2>& boundaries;
+    size_t next;
+    std::vector<std::array<uint32_t, 4>> positions;
+  };
+  Context withoutAnchors{boundaries, boundaries.size(), {}};
+  Context withAnchors{boundaries, 0, {}};
+  for (auto* context : {&withoutAnchors, &withAnchors}) {
+    context->positions.reserve(book.size() + 1);
+    ChunkReader reader{book};
+    StringPrint out;
+    TxtToHtml::Options options;
+    options.context = context;
+    options.chapterOffset = [](void* p) {
+      const auto& context = *static_cast<Context*>(p);
+      return context.next < context.boundaries.size() ? context.boundaries[context.next] : UINT32_MAX;
+    };
+    options.nextChapter = [](void* p) {
+      ++static_cast<Context*>(p)->next;
+      return true;
+    };
+    options.map = [](void* p, uint32_t source, uint32_t visible, uint8_t width, uint8_t step) {
+      static_cast<Context*>(p)->positions.push_back({source, visible, width, step});
+      return true;
+    };
+    ASSERT_TRUE(TxtToHtml::stream("test.txt", &reader, ChunkReader::read, out, options));
+    EXPECT_EQ(context->next, boundaries.size());
+    EXPECT_EQ(out.str.find("<div id=\"txt-0\"></div>序章") != std::string::npos, context == &withAnchors);
+  }
+  EXPECT_EQ(withAnchors.positions, withoutAnchors.positions);
 }
 }  // namespace

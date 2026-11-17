@@ -648,15 +648,18 @@ records produced by still older firmware used only the low 16 bits. Legacy
 progress newer than the last partial-index checkpoint recalculates at most the
 next 31 pages before rendering resumes.
 
-`chapters.bin` version 1 is a little-endian, fixed-record chapter index. Its
+`chapters.bin` version 2 is a little-endian, fixed-record chapter index. Its
 16-byte header stores, in order: `uint32 magic` (`TXTC`, `0x43545854`), `uint32
 fileSize`, `uint32 chapterCount`, `uint16 recordSize` (`196`), `uint8 version`
-(`1`), and `uint8 encoding` (`0` unknown/ASCII, `1` UTF-8, `2` GBK). Each record
+(`2`), and `uint8 encoding` (`0` unknown/ASCII, `1` UTF-8, `2` GBK). Each record
 contains a `uint32` source-file byte offset followed by a NUL-terminated
-`char title[192]` in UTF-8. The file is built on first chapter-menu use through
+`char title[192]` in UTF-8. The file is built on demand through
 `chapters.bin.tmp`, flushed, and swapped into place with a recoverable `.bak`.
 A wrong header, unsupported encoding, changed file size, record-size mismatch,
 truncated payload, invalid offset, or unterminated title rejects the cache.
+Version 2 rebuilds version 1 indexes to add fullwidth forms, bracketed and
+special titles, and runs of at least three consecutive numeric headings with
+body text between them. The record layout is unchanged.
 Chapter offsets are independent of pagination. Selecting an offset outside the
 known page-index prefix opens it directly and keeps a fixed 32-page local
 navigation history, so jumping does not synchronously paginate the intervening
@@ -664,12 +667,16 @@ text or grow RAM with book length.
 
 ## Reflowed TXT/Markdown source map
 
-Reflowed TXT/Markdown metadata and HTML use conversion marker 2 and the EPUB
+Reflowed TXT/Markdown metadata and HTML use conversion marker 3 and the EPUB
 book/section formats above. Generated chapter IDs are `txt-<source-byte-offset>`.
 Titles stay disk-backed; each chapter boundary is consumed during parsing without
 retaining the full chapter list. Old source progress is never deleted or rewritten
 by migration. Old page-number progress resolves through version 4–8 legacy indexes.
 Failed conversion, invalid maps or unresolved target pages preserve old progress.
+Before reflowed metadata and layout are rebuilt, saved reflow progress with only a
+page number can gain a visible-text offset from the existing section cache.
+If that lookup is unavailable, the page number and any stored page-count ratio
+remain available as a fallback. This upgrade does not change the source map format.
 
 `txt-map.bin` version 1 is little-endian. Its 16-byte header is:
 

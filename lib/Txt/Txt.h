@@ -23,7 +23,6 @@ class Txt {
  public:
   static bool isTxtOrMd(std::string_view path);
   static bool validateCache(const std::string& filepath, const std::string& cachePath, size_t cachedSize);
-  static void invalidateCache(const std::string& cachePath);
   static bool streamTxtToHtml(const std::string& filepath, Print& out, const std::string& cachePath);
   static int tocIndexForPosition(const std::string& filepath, const std::string& cachePath, uint32_t visibleOffset,
                                  uint8_t* chapterProgress = nullptr);

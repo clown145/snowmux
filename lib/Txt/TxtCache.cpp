@@ -15,6 +15,8 @@
 #include "TxtToHtml.h"
 
 namespace {
+constexpr char METADATA_VERSION[] = "3";
+
 bool openChapters(Txt& txt, HalFile& chapters, txt_encoding::Encoding& encoding, uint32_t& count) {
   if (!txt.load()) return false;
   if (txt.openChapterIndex(chapters, encoding, count)) return true;
@@ -238,16 +240,12 @@ txt_progress::LegacyResult Txt::restoreLegacyProgress(const std::string& filepat
   return txt_progress::LegacyResult::Failed;
 }
 
-void Txt::invalidateCache(const std::string& cachePath) {
-  Storage.removeDir((cachePath + "/html").c_str());
-  Storage.removeDir((cachePath + "/sections").c_str());
-}
-
 bool Txt::validateCache(const std::string& filepath, const std::string& cachePath, size_t cachedSize) {
   char metadataVersion[4] = {};
   const std::string marker = cachePath + "/txt-cache-version";
-  bool valid = Storage.readFileToBuffer(marker.c_str(), metadataVersion, sizeof(metadataVersion)) == 1 &&
-               metadataVersion[0] == '2';
+  bool valid = Storage.readFileToBuffer(marker.c_str(), metadataVersion, sizeof(metadataVersion)) ==
+                   sizeof(METADATA_VERSION) - 1 &&
+               strcmp(metadataVersion, METADATA_VERSION) == 0;
 
   // 1. If html/0.html exists, check its embedded version comment
   const std::string htmlPath = cachePath + "/html/0.html";
@@ -284,11 +282,6 @@ bool Txt::validateCache(const std::string& filepath, const std::string& cachePat
     }
   }
 
-  if (!valid) {
-    LOG_DBG("TXT", "Cache invalid for %s, wiping html and sections", filepath.c_str());
-    invalidateCache(cachePath);
-  }
-
   return valid;
 }
 
@@ -299,7 +292,10 @@ bool Txt::buildTxtCache(const std::string& filepath, const std::string& cachePat
   if (!Storage.exists(cachePath.c_str())) {
     Storage.mkdir(cachePath.c_str());
   } else {
-    invalidateCache(cachePath);
+    for (const char* directory : {"/html", "/sections"}) {
+      const std::string path = cachePath + directory;
+      if (Storage.exists(path.c_str()) && !Storage.removeDir(path.c_str())) return false;
+    }
   }
 
   if (!bookMetadataCache->beginWrite()) {
@@ -371,6 +367,6 @@ bool Txt::buildTxtCache(const std::string& filepath, const std::string& cachePat
     return false;
   }
 
-  if (!Storage.writeFile((cachePath + "/txt-cache-version").c_str(), "2")) return false;
+  if (!Storage.writeFile((cachePath + "/txt-cache-version").c_str(), METADATA_VERSION)) return false;
   return true;
 }
