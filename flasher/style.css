@@ -330,7 +330,17 @@ code {
   text-decoration: none;
   background: #f5f7ee;
 }
-.download:hover {
+button.download {
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+button.download:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.download:hover:not(:disabled) {
   background: #fff;
 }
 .small-link {

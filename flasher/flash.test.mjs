@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { crc32 } from 'node:zlib';
 import {
   backupFlash,
   downloadFirmware,
   firmwarePath,
-  firmwareProxyUrl,
   firmwareReleaseUrl,
   FLASH_SIZE,
   inspectDevice,
@@ -78,27 +78,93 @@ const manifest = {
   ],
 };
 const release = validateRelease(manifest);
+const mirrorHosts = ['gh.dpik.top', 'gh-proxy.com', 'hk.gh-proxy.org', 'edgeone.gh-proxy.org'];
+const mirrorUrls = mirrorHosts.map((host) => `https://${host}/${firmwareReleaseUrl(release)}`);
 
-test('web flashing downloads the same versioned Release file offered by the proxy link', async () => {
+test('samples all four mirrors in parallel and downloads the first to finish the sample', async () => {
   assert.equal(firmwareReleaseUrl(release), 'https://github.com/test/snowmux/releases/download/xuesu-v0.1.0/xuesu-v0.1.0-ota1.bin');
-  const bytes = await downloadFirmware(release, async (url, { signal }) => {
-    assert.equal(url, `https://gh-proxy.com/${firmwareReleaseUrl(release)}`);
-    assert.ok(signal instanceof AbortSignal);
-    return new Response(image);
+  const largeImage = Buffer.alloc(160 * 1024);
+  largeImage.set(image);
+  const largeRelease = { ...release, bytes: largeImage.length, sha256: await sha256(largeImage) };
+  const samples = [];
+  const inFlightSampleCounts = [];
+  const transfers = [];
+  const sources = [];
+  let cancelled = false;
+  const bytes = await downloadFirmware(largeRelease, {
+    async request(url, { headers, signal }) {
+      if (!headers) {
+        transfers.push(url);
+        return new Response(largeImage);
+      }
+      samples.push([url, headers.Range, signal instanceof AbortSignal]);
+      await Promise.resolve();
+      inFlightSampleCounts.push(samples.length);
+      if (url !== mirrorUrls[3]) {
+        await delay(25);
+        return new Response(largeImage.subarray(0, 64 * 1024), { status: 206 });
+      }
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(largeImage.subarray(0, 8));
+          controller.enqueue(largeImage.subarray(8, 80 * 1024));
+        },
+        cancel() { cancelled = true; },
+      }));
+    },
+    onSource: (source) => sources.push(source),
   });
+  assert.deepEqual(samples, mirrorUrls.map((url) => [url, 'bytes=0-65535', true]));
+  assert.deepEqual(inFlightSampleCounts, [4, 4, 4, 4]);
+  assert.deepEqual(transfers, [mirrorUrls[3]]);
+  assert.deepEqual(sources, [mirrorHosts[3]]);
+  assert.equal(cancelled, true);
+  assert.deepEqual(Buffer.from(bytes), largeImage);
+});
+
+test('tries the next sampled mirror after bad hash and falls back to Pages after HTTP failure', async () => {
+  const corrupt = Buffer.from(image);
+  corrupt[35] ^= 0xff;
+  const transfers = [];
+  const sources = [];
+  const bytes = await downloadFirmware(release, {
+    async request(url, { headers } = {}) {
+      if (headers) {
+        if (url === mirrorUrls[0]) return new Response(image, { status: 206 });
+        if (url === mirrorUrls[1]) {
+          await delay(25);
+          return new Response(image, { status: 206 });
+        }
+        return new Response('Not a firmware image');
+      }
+      transfers.push(url);
+      if (url === mirrorUrls[0]) return new Response(corrupt);
+      if (url === mirrorUrls[1]) return new Response(null, { status: 503 });
+      return new Response(image);
+    },
+    onSource: (source) => sources.push(source),
+  });
+  assert.deepEqual(transfers, [mirrorUrls[0], mirrorUrls[1], firmwarePath(release)]);
+  assert.deepEqual(sources, [mirrorHosts[0], mirrorHosts[1], 'GitHub Pages']);
   assert.deepEqual(Buffer.from(bytes), image);
 });
 
-test('web flashing retries from Pages if the proxy serves a corrupt image', async () => {
-  const corrupt = Buffer.from(image);
-  corrupt[35] ^= 0xff;
-  const urls = [];
-  const bytes = await downloadFirmware(release, async (url) => {
-    urls.push(url);
-    return new Response(url === firmwareProxyUrl(release) ? corrupt : image);
-  });
-  assert.deepEqual(urls, [firmwareProxyUrl(release), firmwarePath(release)]);
-  assert.deepEqual(Buffer.from(bytes), image);
+test('unreadable, timed-out and invalid samples are skipped and Pages still requires a valid image', async () => {
+  const transfers = [];
+  const invalidHeader = Buffer.alloc(image.length);
+  await assert.rejects(downloadFirmware(release, {
+    async request(url, { headers } = {}) {
+      if (headers) {
+        if (url === mirrorUrls[0]) throw new TypeError('CORS blocked');
+        if (url === mirrorUrls[1]) throw new DOMException('Probe timed out', 'TimeoutError');
+        if (url === mirrorUrls[2]) return new Response(image.subarray(0, 16), { status: 206 });
+        return new Response(invalidHeader);
+      }
+      transfers.push(url);
+      return new Response(invalidHeader);
+    },
+  }), /SHA-256/);
+  assert.deepEqual(transfers, [firmwarePath(release)]);
 });
 
 function mockLoader({ bootData = selectors(), failReadback = false } = {}) {

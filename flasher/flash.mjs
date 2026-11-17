@@ -12,6 +12,15 @@ const WEB_SELECTOR_LABEL = new TextEncoder().encode('SnowMux');
 const SLOT_SIZE = 0x730000;
 const FLASH_READ_CHUNK = 256 * 1024;
 const PARTITION_SHA256 = '6bc034d19c972844b71b0bc45ef77401b018cc2ec08cc7440193c87fd11149ab';
+const FIRMWARE_MIRRORS = [
+  'https://gh.dpik.top',
+  'https://gh-proxy.com',
+  'https://hk.gh-proxy.org',
+  'https://edgeone.gh-proxy.org',
+];
+const MIRROR_SAMPLE_BYTES = 64 * 1024;
+const MIRROR_PROBE_TIMEOUT_MS = 4_000;
+const MIRROR_DOWNLOAD_TIMEOUT_MS = 20_000;
 
 export const FLASH_SIZE = 16 * 1024 * 1024;
 export const RELEASE_MANIFEST = './api/v1/firmware/latest.json';
@@ -63,32 +72,74 @@ export function firmwareReleaseUrl(release) {
   return `https://github.com/${release.repository}/releases/download/${release.releaseTag}/${release.releaseTag}-ota1.bin`;
 }
 
-export function firmwareProxyUrl(release) {
-  return `https://gh-proxy.com/${firmwareReleaseUrl(release)}`;
+function hasEsp32S3Header(bytes) {
+  return bytes.length >= 14 && bytes[0] === 0xe9 && bytes[12] === 9 && bytes[13] === 0;
 }
 
-export async function downloadFirmware(release, request = fetch) {
+async function probeMirror(url, sampleSize, request) {
+  const started = performance.now();
+  let reader;
+  try {
+    const response = await request(url, {
+      headers: { Range: `bytes=0-${sampleSize - 1}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(MIRROR_PROBE_TIMEOUT_MS),
+    });
+    reader = response.body?.getReader();
+    if (!response.ok || !reader) return null;
+
+    const sample = new Uint8Array(sampleSize);
+    let received = 0;
+    while (received < sampleSize) {
+      const { done, value } = await reader.read();
+      if (done) return null;
+      const chunk = value.subarray(0, sampleSize - received);
+      sample.set(chunk, received);
+      received += chunk.length;
+    }
+    return hasEsp32S3Header(sample) ? { url, elapsed: performance.now() - started } : null;
+  } catch {
+    return null;
+  } finally {
+    // Some mirrors ignore Range and respond with the entire image.
+    void reader?.cancel().catch(() => {});
+  }
+}
+
+export async function downloadFirmware(release, { request = fetch, onSource = () => {} } = {}) {
   const download = async (url, options) => {
     const response = await request(url, options);
-    if (!response.ok) throw new Error(`固件下载失败（HTTP ${response.status}）。`);
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      throw new Error(`固件下载失败（HTTP ${response.status}）。`);
+    }
     const bytes = new Uint8Array(await response.arrayBuffer());
     await validateFirmware(bytes, release);
     return bytes;
   };
 
-  try {
-    return await download(firmwareProxyUrl(release), { signal: AbortSignal.timeout(20_000) });
-  } catch {
-    return download(firmwarePath(release));
+  const releaseUrl = firmwareReleaseUrl(release);
+  const sampleSize = Math.min(release.bytes, MIRROR_SAMPLE_BYTES);
+  const probes = await Promise.all(
+    FIRMWARE_MIRRORS.map((mirror) => probeMirror(`${mirror}/${releaseUrl}`, sampleSize, request)),
+  );
+  const ranked = probes.filter(Boolean).sort((first, second) => first.elapsed - second.elapsed);
+  for (const { url } of ranked) {
+    onSource(new URL(url).hostname);
+    try {
+      return await download(url, { signal: AbortSignal.timeout(MIRROR_DOWNLOAD_TIMEOUT_MS) });
+    } catch {
+      // A full transfer can fail even after a successful probe.
+    }
   }
+  onSource('GitHub Pages');
+  return download(firmwarePath(release));
 }
 
 export async function validateFirmware(bytes, release) {
-  const chip = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (
     bytes.length !== release.bytes ||
-    bytes[0] !== 0xe9 ||
-    chip.getUint16(12, true) !== 9 ||
+    !hasEsp32S3Header(bytes) ||
     (await sha256(bytes)) !== release.sha256
   ) {
     throw new Error('固件大小、芯片型号或 SHA-256 校验失败。');

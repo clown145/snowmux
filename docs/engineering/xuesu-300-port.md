@@ -49,7 +49,7 @@ PYTHONUTF8=1 pio run -e xuesu_300
 3. 在 **Releases** 保存形如 `xuesu-v0.1.1` 的草稿，写好更新说明并按需勾选预览版。从默认分支手动运行[发版工作流](../../.github/workflows/xuesu-pages.yml)，填写 `release_tag`。工作流以该版本号构建一次固件并回写编译缓存。它将镜像、SHA-256 文件和许可附到草稿，随后发布 Release，并用同一工件部署网页和更新清单。已有标签须指向本次构建的提交。[波形数据的许可说明](../../licenses/README.md#third-party-material)
 4. 只改刷机页时，从默认分支运行发版工作流，留空 `release_tag`。工作流从当前更新清单对应的 Release 下载镜像，校验 SHA-256 后重新部署网页。要演练带版本号的构建和打包，填写 `release_tag` 并勾选 `dry_run`，可在同一分支连续运行以验证缓存复用。
 
-刷机页提供 GitHub Release 附件的代理下载和直连入口。网页刷机先通过 `gh-proxy.com` 读取同一附件并核对 SHA-256，超时、下载失败或校验不符时改从 Pages 下载。
+网页刷机和「加速下载应用镜像」会并行向 `gh.dpik.top`、`gh-proxy.com`、`hk.gh-proxy.org`、`edgeone.gh-proxy.org` 请求当前 GitHub Release 附件的前 64 KiB，每个源最多等 4 秒。只给浏览器能读取且样本头为 ESP32-S3 镜像的源排序，从最先完成样本下载的源读取完整镜像，并核对 SHA-256。超时、下载失败或校验不符时依次尝试其余通过测速的源，最后回退到 Pages。页面会显示当前下载源，并提供 GitHub 直连入口。复测时可在浏览器的网络面板确认四个 Range 请求和之后的完整镜像请求。
 
 电脑上的 Chrome 或 Edge 使用 Web Serial。安卓 Chrome 使用 WebUSB，通过 `web-serial-polyfill` 连接雪酥的 CDC 串口（`303A:1001`），无需依赖 Android 17 的有线 Web Serial。手机需要支持 USB 主机模式和数据传输。用安卓 Chrome 打开 HTTPS 刷机页，连接并唤醒雪酥，点「连接设备」并允许 USB 访问。若选择备份，等读取完成后点「下载 Flash 备份」，在下载列表确认文件已保存。iPhone 和 iPad 可下载固件。
 

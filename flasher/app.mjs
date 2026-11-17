@@ -2,7 +2,6 @@ import { ESPLoader, Transport } from 'esptool-js';
 import {
   backupFlash,
   downloadFirmware,
-  firmwareProxyUrl,
   firmwareReleaseUrl,
   inspectDevice,
   installFirmware,
@@ -17,6 +16,7 @@ const connectButton = byId('connect');
 const backupButton = byId('backup');
 const installButton = byId('install');
 const backupDownload = byId('backup-download');
+const downloadButton = byId('download');
 const androidUsb = usesAndroidUsb(navigator);
 const supported = window.isSecureContext && (androidUsb || Boolean(navigator.serial));
 let release;
@@ -30,10 +30,18 @@ function message(text, error = false) {
   status.dataset.error = String(error);
 }
 
+function downloadMessage(text, error = false) {
+  const status = byId('download-status');
+  status.hidden = false;
+  status.textContent = text;
+  status.dataset.error = String(error);
+}
+
 function renderButtons() {
   connectButton.disabled = !ready || !supported || busy;
   backupButton.disabled = busy || !session;
   installButton.disabled = busy || !release || !session;
+  downloadButton.disabled = busy || !release;
   installButton.classList.toggle('dark', !installButton.disabled);
   installButton.classList.toggle('light', installButton.disabled);
   connectButton.textContent = session ? '断开设备' : '连接设备 ↗';
@@ -50,14 +58,14 @@ function progress(stage, percent) {
   byId('progress').value = value;
 }
 
-async function operation(work) {
+async function operation(work, report = message) {
   busy = true;
   renderButtons();
   try {
     await work();
   } catch (error) {
     const cancelled = error?.name === 'NotFoundError';
-    message(
+    report(
       cancelled ? '未选择设备。若列表为空，请检查数据线并唤醒雪酥。' : (error?.message ?? String(error)),
       !cancelled,
     );
@@ -65,6 +73,13 @@ async function operation(work) {
     busy = false;
     renderButtons();
   }
+}
+
+function fetchFirmware(report) {
+  report('正在测试四个下载源…');
+  return downloadFirmware(release, {
+    onSource: (source) => report(`正在从 ${source} 下载并校验固件…`),
+  });
 }
 
 function serialLog(text) {
@@ -165,14 +180,26 @@ backupDownload.addEventListener('click', () => {
   if (!busy) message('请在浏览器的下载列表确认备份文件已保存。');
 });
 
+downloadButton.addEventListener('click', () =>
+  operation(async () => {
+    const bytes = await fetchFirmware(downloadMessage);
+    const file = byId('download-file');
+    file.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    file.download = `${release.releaseTag}-ota1.bin`;
+    file.hidden = false;
+    downloadButton.hidden = true;
+    downloadMessage('固件已校验，请在下载列表确认，或点「保存固件」。');
+    file.click();
+  }, downloadMessage),
+);
+
 installButton.addEventListener('click', () => {
   const current = session;
   if (!current || !release) return;
   if (!window.confirm(`将 v${release.version} 写入 ${current.bootPlan.target.label}。开始后请保持 USB 连接。`)) return;
   operation(async () => {
-    message('正在下载并校验固件…');
     progress('下载固件', 0);
-    const bytes = await downloadFirmware(release);
+    const bytes = await fetchFirmware(message);
     if (session !== current) throw new Error('USB 连接已断开，请重新连接设备。');
     message('正在刷机，请勿拔出 USB 数据线。');
     await installFirmware(current.loader, bytes, release, current.bootPlan, progress);
@@ -223,9 +250,7 @@ async function loadRelease() {
     byId('date').textContent = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(
       new Date(release.publishedAt),
     );
-    const download = byId('download');
-    download.href = firmwareProxyUrl(release);
-    download.hidden = false;
+    downloadButton.hidden = false;
     const directDownload = byId('download-direct');
     directDownload.href = firmwareReleaseUrl(release);
     directDownload.hidden = false;
