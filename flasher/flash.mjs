@@ -25,6 +25,12 @@ const MIRROR_DOWNLOAD_TIMEOUT_MS = 20_000;
 export const FLASH_SIZE = 16 * 1024 * 1024;
 export const RELEASE_MANIFEST = './api/v1/firmware/latest.json';
 
+export class UnconfirmedBootError extends Error {
+  constructor() {
+    super('当前固件的启动记录尚未确认。');
+  }
+}
+
 export async function sha256(bytes) {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -199,7 +205,7 @@ function planBootSelection(selectors) {
   const second = readSelector(selectors.subarray(SECTOR), SECOND_SELECTOR);
   const active = second && (!first || second.sequence > first.sequence) ? second : first;
   if (active && active.state < OTA_STATE_VALID) {
-    throw new Error('当前固件的启动记录尚未确认，请先启动当前固件再重试。');
+    throw new UnconfirmedBootError();
   }
   // With two app slots, odd sequences select OTA0 and even sequences select OTA1.
   const currentSlot = active ? (active.sequence - 1) % APP_SLOTS.length : 0;

@@ -7,6 +7,7 @@ import {
   installFirmware,
   RELEASE_MANIFEST,
   resetToFirmware,
+  UnconfirmedBootError,
   validateRelease,
 } from './flash.mjs';
 import { requestXuesuPort, usesAndroidUsb } from './ports.mjs';
@@ -148,8 +149,17 @@ connectButton.addEventListener('click', () =>
       session = { port, usbDevice, transport, loader, bootPlan };
       message(`将写入 ${bootPlan.target.label}。`);
     } catch (error) {
-      await close(transport, usbDevice);
-      throw error;
+      try {
+        if (!(error instanceof UnconfirmedBootError)) throw error;
+        try {
+          await resetToFirmware(loader);
+        } catch {
+          throw new Error('启动记录尚未确认。请重新插拔 USB，短按确认键，等设备进入首页后再连接。');
+        }
+        message('启动记录尚未确认，已发送重启命令。请等设备进入首页后再连接。');
+      } finally {
+        await close(transport, usbDevice);
+      }
     }
   }),
 );

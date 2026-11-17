@@ -12,6 +12,7 @@ import {
   inspectDevice,
   installFirmware,
   sha256,
+  UnconfirmedBootError,
   validateRelease,
 } from './flash.mjs';
 
@@ -229,11 +230,17 @@ test('preserves the second record if it selects factory OTA0', async () => {
   });
 });
 
-test('rejects damaged and pending startup records and skips aborted slots', async () => {
+test('distinguishes damaged and unconfirmed startup records and skips aborted slots', async () => {
   const damaged = restoredStock.slice();
   damaged[28] ^= 1;
   await assert.rejects(inspectDevice(mockLoader({ bootData: selectors(damaged, ota1) })), /校验异常/);
-  await assert.rejects(inspectDevice(mockLoader({ bootData: selectors(selector(3, 1), ota1) })), /尚未确认/);
+  for (const state of [0, 1]) {
+    const loader = mockLoader({ bootData: selectors(selector(13, state), selector(12, 2)) });
+    await assert.rejects(inspectDevice(loader), UnconfirmedBootError);
+    assert.equal(loader.writes.length, 0);
+  }
+  const confirmed = mockLoader({ bootData: selectors(selector(13, 2), selector(12, 2)) });
+  assert.equal((await inspectDevice(confirmed)).target.label, 'OTA1');
   const aborted = mockLoader({ bootData: selectors(restoredStock, selector(4, 4)) });
   assert.equal((await inspectDevice(aborted)).target.label, 'OTA1');
 });
