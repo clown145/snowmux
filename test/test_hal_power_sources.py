@@ -255,10 +255,12 @@ struct HalPowerManager {
   std::atomic<uint16_t> _batteryCachedPercent{0};
   unsigned long _batteryLastPollMs = 0;
   uint16_t _batteryFullReferenceMv = 0;
+  uint16_t _batteryLastCorrectedMv = 0;
   BatteryCalibrationResult sampleFullBatteryReference(uint16_t& fullMv) const;
   void setFullBatteryReference(uint16_t fullMv);
   bool pollBattery();
   uint16_t getBatteryPercentage() const;
+  uint16_t getBatteryPercentageForSleepWifi() const;
 };
 """ + "\n".join(function(source, signature) for signature in (
         "bool validFullBatteryReference(",
@@ -267,57 +269,71 @@ struct HalPowerManager {
         "void HalPowerManager::setFullBatteryReference(",
         "bool HalPowerManager::pollBattery()",
         "uint16_t HalPowerManager::getBatteryPercentage() const",
+        "uint16_t HalPowerManager::getBatteryPercentageForSleepWifi() const",
     )) + r"""
 int main() {
   constexpr auto& board = BoardConfig::XUESU_300;
   static_assert(board.batteryAdc == 14 && board.batteryChargeStatus == 16);
   static_assert(!board.batteryChargeStatusActiveHigh && board.batteryDividerMultiplier == 4.3f);
-  static_assert(xuesu300::batteryPercentFromMillivolts(3200) == 0);
-  static_assert(xuesu300::batteryPercentFromMillivolts(3810) == 45);
-  static_assert(xuesu300::batteryPercentFromMillivolts(4200) == 100);
+  using xuesu300::batteryPercentFromMillivolts;
+  constexpr auto& discharge = xuesu300::dischargeBatteryCurve;
+  static_assert(batteryPercentFromMillivolts(2500, discharge) == 0);
+  static_assert(batteryPercentFromMillivolts(2973, discharge) == 1);
+  static_assert(batteryPercentFromMillivolts(3300, discharge) == 4);
+  static_assert(batteryPercentFromMillivolts(3669, discharge) == 50);
+  static_assert(batteryPercentFromMillivolts(4191, discharge) == 100);
+  static_assert(batteryPercentFromMillivolts(4200, discharge) == 100);
 
   HalPowerManager manager;
+  assert(manager.getBatteryPercentageForSleepWifi() == 0);
   hostMillis = 1;
   input.fill(3830);
   input[1] = 2500; input[6] = 3000; input[9] = 4400; input[14] = 4500;
-  assert(manager.pollBattery() && manager.getBatteryPercentage() == 50 && reads == 16);
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 70 && reads == 16);
   assert(!manager.pollBattery() && reads == 16);
   for (const uint16_t invalid : {0, 5000}) {
     input.fill(invalid);
     hostMillis += 15000;
-    assert(!manager.pollBattery() && manager.getBatteryPercentage() == 50);
+    assert(!manager.pollBattery() && manager.getBatteryPercentage() == 70 && manager.getBatteryPercentageForSleepWifi() == 50);
   }
-  input.fill(3920);
+  // The existing Wi-Fi reserve changes at 3676 mV even when the displayed percentage stays the same.
+  input.fill(3675);
   hostMillis += 15000;
-  assert(manager.pollBattery() && manager.getBatteryPercentage() == 70);
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 51 && manager.getBatteryPercentageForSleepWifi() == 19);
+  input.fill(3676);
   hostMillis += 15000;
-  assert(!manager.pollBattery() && manager.getBatteryPercentage() == 70);
+  assert(!manager.pollBattery() && manager.getBatteryPercentage() == 51 && manager.getBatteryPercentageForSleepWifi() == 20);
 
   using Result = HalPowerManager::BatteryCalibrationResult;
   uint16_t fullMv = 0;
   charging = true;
+  hostMillis += 15000;
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 20 && manager.getBatteryPercentageForSleepWifi() == 20);
   unsigned readsBefore = reads;
   assert(manager.sampleFullBatteryReference(fullMv) == Result::Charging && reads == readsBefore && fullMv == 0);
   charging = false;
+  hostMillis += 15000;
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 51);
   assert(manager.sampleFullBatteryReference(fullMv) == Result::OutOfRange && fullMv == 0);
   input.fill(0);
   assert(manager.sampleFullBatteryReference(fullMv) == Result::ReadFailed && fullMv == 0);
-  assert(manager.getBatteryPercentage() == 70);
+  assert(manager.getBatteryPercentage() == 51);
 
   input.fill(4183);
   hostMillis += 15000;
-  assert(manager.pollBattery() && manager.getBatteryPercentage() == 98);
+  assert(manager.pollBattery() && manager.getBatteryPercentage() == 100);
   readsBefore = reads;
   assert(manager.sampleFullBatteryReference(fullMv) == Result::Ready && fullMv == 4183 && reads == readsBefore + 160);
-  assert(manager.getBatteryPercentage() == 98);
+  assert(manager.getBatteryPercentage() == 100);
   manager.setFullBatteryReference(fullMv);
   assert(manager.getBatteryPercentage() == 100);
 
   HalPowerManager restarted;
+  input.fill(3662);  // Corrects to 3677 mV with the saved full reference.
   restarted.setFullBatteryReference(fullMv);
-  assert(restarted.getBatteryPercentage() == 100);
+  assert(restarted.getBatteryPercentage() == 51 && restarted.getBatteryPercentageForSleepWifi() == 20);
   restarted.setFullBatteryReference(3800);
-  assert(restarted.getBatteryPercentage() == 98);
+  assert(restarted.getBatteryPercentage() == 48 && restarted.getBatteryPercentageForSleepWifi() == 18);
 }
 """
     hardware = ROOT / "freeink-sdk/libs/hardware"

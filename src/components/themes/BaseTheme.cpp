@@ -95,7 +95,16 @@ constexpr int bookmarkStatusIconTopCrop = 2;
 constexpr int bluetoothStatusIconWidth = UiHighDpiProfile::enabled ? UiHighDpiProfile::readerStatusIconSize : 16;
 constexpr int bluetoothStatusIconHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::readerStatusIconSize : 16;
 
-#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+#if FREEINK_DEVICE_XUESU_300
+const freeink::Icon& xuesuChargingBolt() {
+  // Five columns, MSB first. A clear bit draws ink on the empty battery.
+  static constexpr uint8_t bits[]{0xE7, 0xCF, 0x9F, 0x07, 0xCF, 0x9F, 0x3F, 0x7F};
+  static constexpr freeink::Icon bolt{5, 8, 4, bits};
+  return bolt;
+}
+#endif
+
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI) || FREEINK_DEVICE_XUESU_300
 // Plot only ink pixels; the white bits are transparent. No render-time buffers.
 void drawTransparentBitmap(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y,
                            const bool black) {
@@ -181,8 +190,23 @@ void BaseTheme::drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX,
   renderer.drawLine(boltX + 1, boltY + 7, boltX + 2, boltY + 7, false);
 }
 
+#if FREEINK_DEVICE_XUESU_300
+void BaseTheme::drawXuesuChargingBolt(const GfxRenderer& renderer, Rect rect) {
+  const auto& bolt = xuesuChargingBolt();
+  // The two rightmost columns of the legacy icon are the terminal.
+  drawTransparentBitmap(renderer, bolt, rect.x + (rect.width - 1 - bolt.w) / 2, rect.y + (rect.height - bolt.h) / 2,
+                        true);
+}
+#endif
+
 void BaseTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const {
   const bool charging = gpio.isUsbConnected();
+#if FREEINK_DEVICE_XUESU_300
+  if (charging) {
+    drawXuesuChargingBolt(renderer, rect);
+    return;
+  }
+#endif
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   if (rect.width == UiHighDpiProfile::batteryWidth && rect.height == UiHighDpiProfile::batteryHeight) {
     constexpr int cavityWidth = 17;
@@ -637,6 +661,12 @@ void BaseTheme::applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::Head
   const uint16_t percentage = powerManager.getBatteryPercentage();
   status.battery.percent = static_cast<uint8_t>(percentage > 100 ? 100 : percentage);
   status.battery.charging = gpio.isUsbConnected();
+#if FREEINK_DEVICE_XUESU_300
+  if (status.battery.charging) {
+    status.battery.chargingIcon = freeink::ui::bitmapFromIcon(xuesuChargingBolt());
+    status.battery.percent = 0;  // Empty glyph behind the bolt. The label uses the measured percentage below.
+  }
+#endif
   // Static label buffers: headers draw on the single render task, and the
   // strings only need to outlive the fui::header() call that consumes them.
   static char percentText[8];

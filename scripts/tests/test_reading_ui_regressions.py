@@ -2541,6 +2541,7 @@ int main() {
     def test_inx_top_status_uses_shared_sdk_ink_alignment(self):
         source = (ROOT / 'src/components/themes/BaseTheme.cpp').read_text()
         methods = '\n'.join(method(source, name) for name in (
+            'const freeink::Icon& xuesuChargingBolt(',
             'int BaseTheme::headerStatusInset(', 'int BaseTheme::headerStatusHeight(',
             'void BaseTheme::applyHeaderStatus(', 'freeink::ui::Rect BaseTheme::headerBand(',
             'void BaseTheme::drawHeaderStatus('))
@@ -2553,6 +2554,7 @@ int main() {
 #include <vector>
 #include "components/Rect.h"
 #include <FreeInkUI.h>
+#include <FreeInkUIIcon.h>
 constexpr int SMALL_FONT_ID=7, batteryPercentSpacing=4;
 struct CrossPointSettings { enum HIDE_BATTERY_PERCENTAGE { SHOW,HIDE_ALWAYS }; };
 struct { int hideBatteryPercentage=0,clockShowInHeader=1,clockFormat=0; } SETTINGS;
@@ -2619,7 +2621,9 @@ struct GfxRendererTarget : DrawTarget {
     if (st.align==TextAlign::Right) x=rect.right()-w;
     r.ops.push_back({{static_cast<int16_t>(x),static_cast<int16_t>(rect.y+ink.y),static_cast<int16_t>(w),ink.height},text,false});
   }
-  void bitmap(Rect,BitmapRef,BitmapMode,Paint,Rotation) override {}
+  void bitmap(Rect rect,BitmapRef,BitmapMode,Paint paint,Rotation) override {
+    if (paint.color==Color::Black) r.ops.push_back({rect,"bolt",false});
+  }
 };
 template <size_t N> struct GfxRendererFrame {
   GfxRendererTarget target;DeviceContext device;InputSnapshot input;InteractionBuffer<N> interactions;Frame<N> frame;
@@ -2657,6 +2661,18 @@ int main() {
       assert(op.rect.y>=slot.y+offset && op.rect.bottom()<=slot.y+slot.height);
     }
     assert(battery && date && bool(time)==(forceClock||(clock&&valid)) && bool(label)==!hide);
+    if (label) assert(label->text==std::to_string(percent)+"%");
+#if FREEINK_DEVICE_XUESU_300
+    int bolts=0;
+    for (const auto& op:r.ops) {
+      if (op.text=="bolt") {
+        ++bolts;
+        assert(op.rect.width==5 && op.rect.height==8 && battery->rect.contains(op.rect.x,op.rect.y));
+      }
+      if (charging && !op.stroke && op.text.empty()) assert(!battery->rect.contains(op.rect.x,op.rect.y));
+    }
+    assert(bolts==(charging?1:0));
+#endif
     if (time) assert((time->text=="--:--")==!valid);
     assert(battery->rect.x==width-inset-(22+std::max(0,BoardConfig::ACTIVE.cornerRadius-inset))-metrics.batteryWidth-2);
     if (time) {
@@ -2669,8 +2685,9 @@ int main() {
 }
 '''
         sdk = ROOT / 'freeink-sdk/libs/ui/FreeInkUI'
-        for defines in ((), ('CROSSMUX_UI_PROFILE_HIGH_DPI',)):
-            run_cpp(program, include_dirs=(ROOT / 'src', sdk / 'include'), defines=defines,
+        for defines in ((), ('CROSSMUX_UI_PROFILE_HIGH_DPI',), ('FREEINK_DEVICE_XUESU_300=1',)):
+            run_cpp(program, include_dirs=(ROOT / 'src',), defines=defines,
+                    system_include_dirs=(sdk / 'include', ROOT / 'freeink-sdk/libs/assets/Icons/include'),
                     extra_sources=(sdk / 'src/FreeInkUI.cpp',))
 
 

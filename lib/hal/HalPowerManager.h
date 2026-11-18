@@ -24,6 +24,7 @@ class HalPowerManager {
   std::atomic<uint16_t> _batteryCachedPercent{0};  // Sampled on the main task, read by the render task.
   unsigned long _batteryLastPollMs = 0;
   uint16_t _batteryFullReferenceMv = 0;  // Main task only. Zero uses the nominal scale.
+  uint16_t _batteryLastCorrectedMv = 0;  // Last valid sample for the main-task sleep Wi-Fi check.
 #else
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
@@ -77,6 +78,7 @@ class HalPowerManager {
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
 #if FREEINK_DEVICE_XUESU_300
+  uint16_t getBatteryPercentageForSleepWifi() const;
   bool armXuesuDeepSleep() const;
   bool isXuesuClockTimerWake() const;
   bool armXuesuClockTimer(uint64_t delayUs) const;

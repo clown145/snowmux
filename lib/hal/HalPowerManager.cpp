@@ -593,11 +593,18 @@ bool HalPowerManager::pollBattery() {
   const uint16_t reference = _batteryFullReferenceMv;
   const uint16_t correctedMv =
       reference ? (uint32_t{rawMv} * xuesu300::batteryFullMillivolts + reference / 2) / reference : rawMv;
-  const uint16_t percent = xuesu300::batteryPercentFromMillivolts(correctedMv);
+  _batteryLastCorrectedMv = correctedMv;
+  const bool charging = battery.isCharging();
+  const uint16_t percent = charging
+                               ? xuesu300::batteryPercentFromMillivolts(correctedMv, xuesu300::stockBatteryCurve)
+                               : xuesu300::batteryPercentFromMillivolts(correctedMv, xuesu300::dischargeBatteryCurve);
   const uint16_t previous = _batteryCachedPercent.exchange(percent, std::memory_order_relaxed);
-  LOG_DBG("PWR", "Xuesu battery %u mV, %u%%, charging=%d (corrected %u mV)", rawMv, percent, battery.isCharging(),
-          correctedMv);
+  LOG_DBG("PWR", "Xuesu battery %u mV, %u%%, charging=%d (corrected %u mV)", rawMv, percent, charging, correctedMv);
   return previous != percent;
+}
+
+uint16_t HalPowerManager::getBatteryPercentageForSleepWifi() const {
+  return xuesu300::batteryPercentFromMillivolts(_batteryLastCorrectedMv, xuesu300::stockBatteryCurve);
 }
 #endif
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace xuesu300 {
@@ -50,34 +51,43 @@ inline constexpr int8_t batteryChargeStatusPin = 16;
 inline constexpr float batteryDividerMultiplier = 4.3f;
 inline constexpr uint16_t batteryFullMillivolts = 4200;
 
-constexpr uint16_t batteryPercentFromMillivolts(uint16_t millivolts) {
-  struct Point {
-    uint16_t mv;
-    uint8_t percent;
-  };
-  // Voltage/percentage points used by the stock estimator (0x3C187838).
-  constexpr Point curve[]{{3300, 0},
-                          {3450, 5},
-                          {3600, 10},
-                          {3680, 20},
-                          {3740, 30},
-                          {3790, 40},
-                          {3830, 50},
-                          {3870, 60},
-                          {3920, 70},
-                          {3980, 80},
-                          {4060, 90},
-                          {4150, 95},
-                          {batteryFullMillivolts, 100}};
-  if (millivolts <= curve[0].mv) return 0;
-  for (unsigned i = 1; i < sizeof(curve) / sizeof(curve[0]); ++i) {
+struct BatteryCurvePoint {
+  uint16_t mv;
+  uint8_t percent;
+};
+
+// Stock estimator (0x3C187838), retained for active charging and the sleep Wi-Fi reserve.
+inline constexpr BatteryCurvePoint stockBatteryCurve[]{{3300, 0},
+                                                       {3450, 5},
+                                                       {3600, 10},
+                                                       {3680, 20},
+                                                       {3740, 30},
+                                                       {3790, 40},
+                                                       {3830, 50},
+                                                       {3870, 60},
+                                                       {3920, 70},
+                                                       {3980, 80},
+                                                       {4060, 90},
+                                                       {4150, 95},
+                                                       {batteryFullMillivolts, 100}};
+
+// Remaining runtime at one page per 5 s, on the full-reference-corrected voltage scale.
+// The lowest point is the last logged sample, not a power-off threshold.
+inline constexpr BatteryCurvePoint dischargeBatteryCurve[]{
+    {2598, 0},  {2973, 1},  {3141, 2},  {3249, 3},  {3328, 4},  {3371, 5},  {3454, 10}, {3535, 20}, {3591, 30},
+    {3627, 40}, {3669, 50}, {3737, 60}, {3829, 70}, {3938, 80}, {4048, 90}, {4110, 95}, {4191, 100}};
+
+template <size_t N>
+constexpr uint16_t batteryPercentFromMillivolts(uint16_t millivolts, const BatteryCurvePoint (&curve)[N]) {
+  if (millivolts <= curve[0].mv) return curve[0].percent;
+  for (size_t i = 1; i < N; ++i) {
     const auto& low = curve[i - 1];
     const auto& high = curve[i];
     if (millivolts > high.mv) continue;
     const int span = high.mv - low.mv;
     return low.percent + ((millivolts - low.mv) * (high.percent - low.percent) + span / 2) / span;
   }
-  return 100;
+  return curve[N - 1].percent;
 }
 
 struct SdPins {

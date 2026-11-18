@@ -583,7 +583,12 @@ static void deliverSleepPluginEvents(const bool allowNetwork) {
   // sleep.enter: reader.session is queued while reading and delivered on this
   // same sleep, and a progress-sync plugin usually subscribes to it alone.
   if (!pluginevents::wantsConnectAny()) return;
-  if (powerManager.getBatteryPercentage() < 20) return;
+#if FREEINK_DEVICE_XUESU_300
+  const auto batteryPercent = powerManager.getBatteryPercentageForSleepWifi();
+#else
+  const auto batteryPercent = powerManager.getBatteryPercentage();
+#endif
+  if (batteryPercent < 20) return;
   // Sleep can be the first WiFi use since boot or deep-sleep wake.
   WIFI_STORE.loadFromFile();
   const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());

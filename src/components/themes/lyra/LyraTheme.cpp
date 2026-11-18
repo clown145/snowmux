@@ -158,9 +158,13 @@ void LyraTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t
   const bool charging = gpio.isUsbConnected();
 
   if (charging) {
+#if FREEINK_DEVICE_XUESU_300
+    drawXuesuChargingBolt(renderer, rect);
+#else
     // Solid fill when charging so lightning bolt is visible
     renderer.fillRect(rect.x + 2, rect.y + 2, rect.width - 5, rect.height - 4);
     drawBatteryLightningBolt(renderer, rect.x + 4, rect.y + 2);
+#endif
   } else {
     if (percentage > 10) {
       renderer.fillRect(rect.x + 2, rect.y + 2, 3, rect.height - 4);

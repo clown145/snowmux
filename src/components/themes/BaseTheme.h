@@ -459,6 +459,7 @@ class BaseTheme {
 
  protected:
 #if FREEINK_DEVICE_XUESU_300
+  static void drawXuesuChargingBolt(const GfxRenderer& renderer, Rect rect);
   enum class CompactHomeStyle { Classic, Lyra, RoundedRaff };
   static void drawCompactHomeText(const GfxRenderer& renderer, Rect bounds, int fontId, const char* text,
                                   int maxLines = 1, bool bold = false, bool centered = false, bool black = true);

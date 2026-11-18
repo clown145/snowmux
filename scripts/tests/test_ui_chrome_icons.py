@@ -141,6 +141,54 @@ int main() {
 ''', include_dirs=(ROOT / 'src', ROOT / 'freeink-sdk/libs/assets/Icons/include'),
                 defines=('CROSSMUX_UI_PROFILE_HIGH_DPI',))
 
+    def test_xuesu_reader_charging_bolt(self):
+        base = (ROOT / 'src/components/themes/BaseTheme.cpp').read_text()
+        lyra = (ROOT / 'src/components/themes/lyra/LyraTheme.cpp').read_text()
+        drawing = '\n'.join(method(base, name) for name in (
+            'const freeink::Icon& xuesuChargingBolt(', 'void drawTransparentBitmap(',
+            'void BaseTheme::drawXuesuChargingBolt(', 'void BaseTheme::fillBatteryIcon('))
+        run_cpp(r'''
+#include <algorithm>
+#include <cassert>
+#include <Icon.h>
+struct Rect { int x, y, width, height; };
+struct { bool charging = true; bool isUsbConnected() const { return charging; } } gpio;
+struct GfxRenderer {
+  mutable bool pixels[12][16]{};
+  void drawPixel(int x,int y,bool ink) const { assert(x>=0 && x<16 && y>=0 && y<12); pixels[y][x]=ink; }
+  void fillRect(int x,int y,int w,int h) const {
+    for (int dy=0;dy<h;++dy) for (int dx=0;dx<w;++dx) drawPixel(x+dx,y+dy,true);
+  }
+};
+struct BaseTheme {
+  static void drawXuesuChargingBolt(const GfxRenderer&,Rect);
+  static void drawBatteryLightningBolt(const GfxRenderer&,int,int) { assert(false); }
+  void fillBatteryIcon(const GfxRenderer&,Rect,uint16_t) const;
+};
+struct LyraTheme : BaseTheme { void fillBatteryIcon(const GfxRenderer&,Rect,uint16_t) const; };
+''' + drawing + method(lyra, 'void LyraTheme::fillBatteryIcon(') + r'''
+int main() {
+  constexpr unsigned char expected[]{0x18,0x30,0x60,0xF8,0x30,0x60,0xC0,0x80};
+  for (int width : {15,16}) for (bool lyra : {false,true}) for (int percent : {0,25,50,99,100}) {
+    gpio.charging=true;
+    GfxRenderer r;
+    const Rect rect{0,0,width,12};
+    if (lyra) LyraTheme{}.fillBatteryIcon(r,rect,percent);
+    else BaseTheme{}.fillBatteryIcon(r,rect,percent);
+    for (int y=0;y<12;++y) for (int x=0;x<16;++x) {
+      const int dx=x-(width-1-5)/2, dy=y-2;
+      const bool bolt=dx>=0 && dx<5 && dy>=0 && dy<8 && (expected[dy] & (0x80>>dx));
+      assert(r.pixels[y][x]==bolt);
+    }
+    gpio.charging=false;
+    GfxRenderer unplugged;
+    if (lyra) LyraTheme{}.fillBatteryIcon(unplugged,rect,percent);
+    else BaseTheme{}.fillBatteryIcon(unplugged,rect,percent);
+    assert(unplugged.pixels[2][10]==(lyra ? percent>70 : percent*(width-5)/100>=8));
+  }
+}
+''', include_dirs=(ROOT / 'freeink-sdk/libs/assets/Icons/include',), defines=('FREEINK_DEVICE_XUESU_300=1',))
+
     def test_footer_descenders_and_estimate_fit_the_status_line(self):
         faces = {}
         directory = ROOT / 'lib/EpdFont/builtinFonts'
