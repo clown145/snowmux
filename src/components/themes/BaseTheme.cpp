@@ -191,11 +191,11 @@ void BaseTheme::drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX,
 }
 
 #if FREEINK_DEVICE_XUESU_300
-void BaseTheme::drawXuesuChargingBolt(const GfxRenderer& renderer, Rect rect) {
+void BaseTheme::drawXuesuChargingBolt(const GfxRenderer& renderer, Rect rect, const bool black) {
   const auto& bolt = xuesuChargingBolt();
   // The two rightmost columns of the legacy icon are the terminal.
   drawTransparentBitmap(renderer, bolt, rect.x + (rect.width - 1 - bolt.w) / 2, rect.y + (rect.height - bolt.h) / 2,
-                        true);
+                        black);
 }
 #endif
 

@@ -239,15 +239,22 @@ def xuesu_battery():
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <optional>
 #include <BoardConfig.h>
 
 unsigned reads = 0;
 bool charging = false;
 std::array<uint16_t, 16> input;
+constexpr int ADC_2_5db = 1;
+int adcAttenuation = -1;
+void analogSetAttenuation(int attenuation) { adcAttenuation = attenuation; }
 #define LOG_DBG(...) ((void)0)
 #define LOG_INF(...) ((void)0)
 struct BatteryMonitor {
-  uint16_t readMillivolts() const { return input[reads++ % input.size()]; }
+  uint16_t readMillivolts() const {
+    assert(adcAttenuation == ADC_2_5db);
+    return input[reads++ % input.size()];
+  }
   bool isCharging() const { return charging; }
 };
 struct HalPowerManager {
@@ -258,16 +265,20 @@ struct HalPowerManager {
   uint16_t _batteryLastCorrectedMv = 0;
   BatteryCalibrationResult sampleFullBatteryReference(uint16_t& fullMv) const;
   void setFullBatteryReference(uint16_t fullMv);
+  struct BatterySample { uint16_t percent, correctedMv; };
+  std::optional<BatterySample> sampleBattery(uint16_t fullReferenceMv) const;
   bool pollBattery();
   uint16_t getBatteryPercentage() const;
   uint16_t getBatteryPercentageForSleepWifi() const;
 };
 """ + "\n".join(function(source, signature) for signature in (
         "bool validFullBatteryReference(",
+        "const BatteryMonitor& xuesuBatteryMonitor(",
         "uint16_t sampleXuesuBatteryMillivolts(",
         "HalPowerManager::BatteryCalibrationResult HalPowerManager::sampleFullBatteryReference(",
         "void HalPowerManager::setFullBatteryReference(",
         "bool HalPowerManager::pollBattery()",
+        "std::optional<HalPowerManager::BatterySample> HalPowerManager::sampleBattery(",
         "uint16_t HalPowerManager::getBatteryPercentage() const",
         "uint16_t HalPowerManager::getBatteryPercentageForSleepWifi() const",
     )) + r"""
@@ -286,6 +297,16 @@ int main() {
 
   HalPowerManager manager;
   assert(manager.getBatteryPercentageForSleepWifi() == 0);
+  // Clock-only boots sample directly, before the normal battery poll or SD settings load.
+  charging = true;
+  input.fill(3662);
+  const auto clockSample = manager.sampleBattery(4183);
+  assert(clockSample && clockSample->correctedMv == 3677 && clockSample->percent == 20);
+  assert(manager.getBatteryPercentage() == 0 && manager.getBatteryPercentageForSleepWifi() == 0);
+  input.fill(0);
+  assert(!manager.sampleBattery(4183));
+  charging = false;
+  reads = 0;
   hostMillis = 1;
   input.fill(3830);
   input[1] = 2500; input[6] = 3000; input[9] = 4400; input[14] = 4500;

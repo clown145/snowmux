@@ -20,6 +20,9 @@ namespace {
 using xuesu_sleep_clock::Frame;
 using xuesu_sleep_clock::Layout;
 
+constexpr int kChargingBoltWidth = 8;
+constexpr int kChargingBoltSpace = kChargingBoltWidth + BaseTheme::batteryPercentSpacing;
+
 constexpr StrId kWeekday[]{StrId::STR_CAL_WEEKDAY_SUN, StrId::STR_CAL_WEEKDAY_MON, StrId::STR_CAL_WEEKDAY_TUE,
                            StrId::STR_CAL_WEEKDAY_WED, StrId::STR_CAL_WEEKDAY_THU, StrId::STR_CAL_WEEKDAY_FRI,
                            StrId::STR_CAL_WEEKDAY_SAT};
@@ -116,7 +119,15 @@ void stats(const GfxRenderer& r, const Rect& box, const Frame& frame, const bool
     const Rect cell(box.x + i * column, box.y, column, box.height);
     if (i) r.fillRect(cell.x, cell.y + 4, 1, std::max(1, cell.height - 8), black);
     centered(r, band(cell, 0, 50), I18N.get(labels[i]), xuesu_sleep_clock::fontSmall, black);
-    centered(r, band(cell, 50, 100), values[i], xuesu_sleep_clock::fontSmall, black, EpdFontFamily::BOLD);
+    auto value = band(cell, 50, 100);
+    if (labels[i] == StrId::STR_SLEEP_CLOCK_BATTERY && frame.charging) {
+      const int textWidth = r.getTextWidth(xuesu_sleep_clock::fontSmall, charge, EpdFontFamily::BOLD);
+      const int x = value.x + (value.width - kChargingBoltSpace - textWidth) / 2;
+      BaseTheme::drawXuesuChargingBolt(r, Rect(x, value.y, kChargingBoltWidth, value.height), black);
+      value.x += kChargingBoltSpace;
+      value.width -= kChargingBoltSpace;
+    }
+    centered(r, value, values[i], xuesu_sleep_clock::fontSmall, black, EpdFontFamily::BOLD);
   }
 }
 
@@ -160,10 +171,10 @@ void drawLandscapeTime(const GfxRenderer& r, const Rect& box, const Frame& frame
 }
 
 // Center the status text together with its 16-pixel icon and return the icon bounds.
-Rect landscapeStatusText(const GfxRenderer& r, const Rect& box, const char* text) {
+Rect landscapeStatusText(const GfxRenderer& r, const Rect& box, const char* text, const int extraIconSpace = 0) {
   constexpr int iconSize = 16;
   constexpr int iconGap = 5;
-  constexpr int iconSpace = iconSize + iconGap;
+  const int iconSpace = iconSize + iconGap + extraIconSpace;
   const int font = r.getTextWidth(xuesu_sleep_clock::fontBody, text) + iconSpace <= box.width - 4
                        ? xuesu_sleep_clock::fontBody
                        : xuesu_sleep_clock::fontSmall;
@@ -189,10 +200,15 @@ void landscapeClock(const GfxRenderer& r, const Rect& page, const Frame& frame) 
 
   char date[56];
   formatDate(date, sizeof(date), frame);
-  const Rect battery = landscapeStatusText(r, Rect(row.x, row.y, dateWidth, row.height), date);
+  const Rect battery =
+      landscapeStatusText(r, Rect(row.x, row.y, dateWidth, row.height), date, frame.charging ? kChargingBoltSpace : 0);
   r.drawRect(battery.x, battery.y + 4, 14, 8);
   r.fillRect(battery.x + 14, battery.y + 6, 2, 4);
   r.fillRect(battery.x + 2, battery.y + 6, std::min<int>(100, frame.battery) / 10, 4);
+  if (frame.charging) {
+    const int boltX = battery.x + battery.width + BaseTheme::batteryPercentSpacing;
+    BaseTheme::drawXuesuChargingBolt(r, Rect(boltX, battery.y, kChargingBoltWidth, battery.height));
+  }
 
   const auto environment = formatEnvironment(frame.environment);
   const Rect temp = landscapeStatusText(r, Rect(tempX, row.y, sensorWidth, row.height), environment.temperature);

@@ -76,6 +76,7 @@ class StockClockFace final : public StandbyFace {
                                    .environment = environment_};
 #if CROSSPOINT_EMULATED == 0
     frame.battery = static_cast<uint8_t>(powerManager.getBatteryPercentage());
+    frame.charging = gpio.isUsbConnected();
 #endif
     const uint32_t now = TimeUtils::getCurrentValidTimestamp();
     if (now && TimeUtils::getLocalDateTime(now, frame.date)) {

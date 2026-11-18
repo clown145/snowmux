@@ -22,7 +22,7 @@
 namespace xuesu_sleep_clock {
 namespace {
 
-constexpr uint32_t kFrameMagic = 0x58534334;  // XSC4
+constexpr uint32_t kFrameMagic = 0x58534336;  // XSC6
 constexpr uint8_t kFirstMode = CrossPointSettings::CLOCK_MONTH_GRID;
 constexpr uint8_t kModeCount = static_cast<uint8_t>(Layout::Count);
 static_assert(kFirstMode + kModeCount - 1 == CrossPointSettings::CLOCK_LANDSCAPE);
@@ -41,9 +41,11 @@ struct RetainedFrame {
   uint8_t timezone;
   uint8_t dstMode;
   uint8_t battery;
+  bool charging;
   bool twelveHour;
   bool inverse;
   bool fromStandby;
+  uint16_t batteryFullReferenceMv;
   time_t environmentSampledAt;
   int16_t temperature;
   uint16_t humidity;
@@ -60,6 +62,7 @@ bool makeFrame(const time_t epoch, const RetainedFrame& params, Frame& frame) {
   frame = {.date = {},
            .layout = params.layout,
            .battery = params.battery,
+           .charging = params.charging,
            .twelveHour = params.twelveHour,
            .styleSeed = params.styleSeed,
            .environment = {params.temperature, params.humidity}};
@@ -159,9 +162,11 @@ bool drawBeforeSleep(GfxRenderer& renderer, const std::optional<FaceState>& stan
                        .timezone = timezones::activeIndex(),
                        .dstMode = SETTINGS.clockDst,
                        .battery = static_cast<uint8_t>(powerManager.getBatteryPercentage()),
+                       .charging = showsEnvironment(face.layout) && gpio.isUsbConnected(),
                        .twelveHour = SETTINGS.clockFormat == 1,
                        .inverse = face.inverse,
                        .fromStandby = standby.has_value(),
+                       .batteryFullReferenceMv = SETTINGS.xuesuBatteryFullMv,
                        .environmentSampledAt = 0,
                        .temperature = 0,
                        .humidity = hal_environment::Reading::missing};
@@ -211,6 +216,14 @@ void refreshAfterTimerWake(GfxRenderer& renderer) {
     if (!makeFrame(retained.epoch, retained, previous) || !makeFrame(next.epoch, next, current)) {
       gpio.endXuesuClockWakeWatch();
       return;
+    }
+    if (showsEnvironment(next.layout)) {
+      if (const auto battery = powerManager.sampleBattery(next.batteryFullReferenceMv)) {
+        current.battery = static_cast<uint8_t>(battery->percent);
+        next.battery = current.battery;
+      }
+      current.charging = gpio.isUsbConnected();
+      next.charging = current.charging;
     }
     refreshEnvironment(next, current);
     if (gpio.xuesuClockWakeKeyPending()) {

@@ -456,10 +456,12 @@ class BaseTheme {
   static void drawDitherMask(const GfxRenderer& renderer, int x, int y, int width, int height);
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
+#if FREEINK_DEVICE_XUESU_300
+  static void drawXuesuChargingBolt(const GfxRenderer& renderer, Rect rect, bool black = true);
+#endif
 
  protected:
 #if FREEINK_DEVICE_XUESU_300
-  static void drawXuesuChargingBolt(const GfxRenderer& renderer, Rect rect);
   enum class CompactHomeStyle { Classic, Lyra, RoundedRaff };
   static void drawCompactHomeText(const GfxRenderer& renderer, Rect bounds, int fontId, const char* text,
                                   int maxLines = 1, bool bold = false, bool centered = false, bool black = true);

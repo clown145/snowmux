@@ -47,6 +47,15 @@ namespace {
 #if FREEINK_DEVICE_XUESU_300
 bool validFullBatteryReference(uint16_t millivolts) { return millivolts >= 4100 && millivolts <= 4300; }
 
+const BatteryMonitor& xuesuBatteryMonitor() {
+  static const BatteryMonitor battery = [] {
+    // Configure the only ADC input on this board before the first read, even on a clock-only wake.
+    analogSetAttenuation(ADC_2_5db);
+    return BatteryMonitor{};
+  }();
+  return battery;
+}
+
 uint16_t sampleXuesuBatteryMillivolts(const BatteryMonitor& battery) {
   std::array<uint16_t, 16> samples;
   for (auto& sample : samples) {
@@ -200,9 +209,6 @@ void HalPowerManager::begin() {
     pinMode(BoardConfig::ACTIVE.batteryAdc, INPUT);
   }
 #if FREEINK_DEVICE_XUESU_300
-  // The divider is the only ADC input on this board. Set the Arduino default
-  // before the first read so channel setup and its calibration use the same gain.
-  analogSetAttenuation(ADC_2_5db);
   pollBattery();
 #endif
   // Board charger setup (Picco SGM41562: stock charge voltage and limits); a
@@ -555,7 +561,7 @@ bool HalPowerManager::holdWhileUsbPowered(HalGPIO& gpio, void (*onStatus)(bool c
 
 #if FREEINK_DEVICE_XUESU_300
 HalPowerManager::BatteryCalibrationResult HalPowerManager::sampleFullBatteryReference(uint16_t& fullMv) const {
-  static const BatteryMonitor battery;
+  const auto& battery = xuesuBatteryMonitor();
   fullMv = 0;
   constexpr unsigned sampleCount = 10;
   uint32_t sum = 0;
@@ -587,20 +593,25 @@ bool HalPowerManager::pollBattery() {
   if (_batteryLastPollMs != 0 && now - _batteryLastPollMs < pollIntervalMs) return false;
   _batteryLastPollMs = now;
 
-  static const BatteryMonitor battery;
+  const auto sample = sampleBattery(_batteryFullReferenceMv);
+  if (!sample) return false;
+  _batteryLastCorrectedMv = sample->correctedMv;
+  return _batteryCachedPercent.exchange(sample->percent, std::memory_order_relaxed) != sample->percent;
+}
+
+std::optional<HalPowerManager::BatterySample> HalPowerManager::sampleBattery(const uint16_t fullReferenceMv) const {
+  const auto& battery = xuesuBatteryMonitor();
   const uint16_t rawMv = sampleXuesuBatteryMillivolts(battery);
-  if (rawMv == 0) return false;
-  const uint16_t reference = _batteryFullReferenceMv;
+  if (rawMv == 0) return std::nullopt;
+  const uint16_t reference = validFullBatteryReference(fullReferenceMv) ? fullReferenceMv : 0;
   const uint16_t correctedMv =
       reference ? (uint32_t{rawMv} * xuesu300::batteryFullMillivolts + reference / 2) / reference : rawMv;
-  _batteryLastCorrectedMv = correctedMv;
   const bool charging = battery.isCharging();
   const uint16_t percent = charging
                                ? xuesu300::batteryPercentFromMillivolts(correctedMv, xuesu300::stockBatteryCurve)
                                : xuesu300::batteryPercentFromMillivolts(correctedMv, xuesu300::dischargeBatteryCurve);
-  const uint16_t previous = _batteryCachedPercent.exchange(percent, std::memory_order_relaxed);
   LOG_DBG("PWR", "Xuesu battery %u mV, %u%%, charging=%d (corrected %u mV)", rawMv, percent, charging, correctedMv);
-  return previous != percent;
+  return BatterySample{percent, correctedMv};
 }
 
 uint16_t HalPowerManager::getBatteryPercentageForSleepWifi() const {

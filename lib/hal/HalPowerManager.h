@@ -9,6 +9,7 @@
 #include <cassert>
 #if FREEINK_DEVICE_XUESU_300
 #include <atomic>
+#include <optional>
 #endif
 
 #include "HalGPIO.h"
@@ -87,6 +88,12 @@ class HalPowerManager {
   // Main task, after the user confirms a full charge.
   BatteryCalibrationResult sampleFullBatteryReference(uint16_t& fullMv) const;
   void setFullBatteryReference(uint16_t fullMv);
+  struct BatterySample {
+    uint16_t percent;
+    uint16_t correctedMv;
+  };
+  // Main-task sample, also usable on a clock-only wake before settings load.
+  std::optional<BatterySample> sampleBattery(uint16_t fullReferenceMv) const;
   bool pollBattery();  // Returns true when a valid sample changes the displayed percentage.
 #endif
 

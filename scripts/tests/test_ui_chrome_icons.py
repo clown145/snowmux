@@ -161,7 +161,7 @@ struct GfxRenderer {
   }
 };
 struct BaseTheme {
-  static void drawXuesuChargingBolt(const GfxRenderer&,Rect);
+  static void drawXuesuChargingBolt(const GfxRenderer&,Rect,bool black = true);
   static void drawBatteryLightningBolt(const GfxRenderer&,int,int) { assert(false); }
   void fillBatteryIcon(const GfxRenderer&,Rect,uint16_t) const;
 };
@@ -185,6 +185,15 @@ int main() {
     if (lyra) LyraTheme{}.fillBatteryIcon(unplugged,rect,percent);
     else BaseTheme{}.fillBatteryIcon(unplugged,rect,percent);
     assert(unplugged.pixels[2][10]==(lyra ? percent>70 : percent*(width-5)/100>=8));
+  }
+  // The fireworks sleep face needs the same transparent glyph in white ink.
+  GfxRenderer dark;
+  dark.fillRect(0,0,16,12);
+  BaseTheme::drawXuesuChargingBolt(dark,{0,0,8,12},false);
+  for (int y=0;y<12;++y) for (int x=0;x<16;++x) {
+    const int dx=x-1, dy=y-2;
+    const bool bolt=dx>=0 && dx<5 && dy>=0 && dy<8 && (expected[dy] & (0x80>>dx));
+    assert(dark.pixels[y][x] == !bolt);
   }
 }
 ''', include_dirs=(ROOT / 'freeink-sdk/libs/assets/Icons/include',), defines=('FREEINK_DEVICE_XUESU_300=1',))

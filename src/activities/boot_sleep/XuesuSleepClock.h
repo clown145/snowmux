@@ -36,6 +36,7 @@ struct Frame {
   tm date;
   Layout layout;
   uint8_t battery;
+  bool charging = false;
   bool twelveHour;
   uint32_t styleSeed = 1;
   hal_environment::Reading environment{};

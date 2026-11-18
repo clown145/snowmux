@@ -12,6 +12,7 @@ class XuesuSleepClockTest(unittest.TestCase):
         run_cpp(r'''
 #include <cassert>
 #include <cstdlib>
+#include <optional>
 #include <type_traits>
 #include <vector>
 #include "activities/boot_sleep/XuesuSleepClock.h"
@@ -26,6 +27,7 @@ struct CrossPointSettings {
          CLOCK_LANDSCAPE };
   uint8_t sleepScreen = CLOCK_MONTH_GRID;
   uint8_t clockDst = 0, clockFormat = 0;
+  uint16_t xuesuBatteryFullMv = 4183;
 } SETTINGS;
 struct { Language language = Language::ZH;
   Language getLanguage() const { return language; }
@@ -96,13 +98,23 @@ struct GfxRenderer {
 } renderer;
 struct {
   bool key = false;
+  bool charging = false;
   int watchEnds = 0;
   bool xuesuClockWakeKeyPending() const { return key; }
   bool endXuesuClockWakeWatch() { ++watchEnds; return key; }
+  bool isUsbConnected() const { return charging; }
 } gpio;
+struct BatterySample { uint16_t percent; };
 struct {
   uint64_t firstDelay = 0, laterDelay = 0;
+  int batterySamples = 0;
+  std::optional<BatterySample> nextBattery = BatterySample{77};
   unsigned getBatteryPercentage() const { return 77; }
+  std::optional<BatterySample> sampleBattery(uint16_t fullReferenceMv) {
+    assert(fullReferenceMv == 4183);
+    ++batterySamples;
+    return nextBattery;
+  }
   bool armXuesuClockTimer(uint64_t delay) { firstDelay = delay; return true; }
   void continueXuesuClockSleep(decltype(gpio)& keyWatch, uint64_t delay) {
     if (!keyWatch.endXuesuClockWakeWatch()) laterDelay = delay;
@@ -146,15 +158,22 @@ int main() {
   assert(hal_environment::sampleCount == 4);
   clear();
   SETTINGS.sleepScreen = CrossPointSettings::CLOCK_FIREWORKS;
+  gpio.charging = true;
   assert(drawBeforeSleep(renderer));
+  assert(UITheme::paints.back().charging);
   armFirstTimer();
   assert(powerManager.firstDelay == 650000);
   UITheme::paints.clear();
   renderer.updates.clear();
 
-  // An early wake in the same minute must not repaint the panel.
+  // Timer boots must use the retained settings before the SD card is mounted.
+  SETTINGS.xuesuBatteryFullMv = 0;
+  powerManager.nextBattery = BatterySample{66};
+  gpio.charging = false;
+  // An early wake in the same minute must not repaint the panel or sample the ADC.
   refreshAfterTimerWake(renderer);
   assert(UITheme::paints.empty() && powerManager.laterDelay == 650000);
+  assert(powerManager.batterySamples == 0);
   ++epoch;
   refreshAfterTimerWake(renderer);
   assert(display.begins == 1 && display.seeds == 1 && display.naps == 1);
@@ -162,12 +181,21 @@ int main() {
   assert(renderer.updates.back() == HalDisplay::HALF_REFRESH);
   assert(UITheme::paints[0].date.tm_mday == 31 && UITheme::paints[0].date.tm_min == 59);
   assert(UITheme::paints[1].date.tm_mday == 1 && UITheme::paints[1].date.tm_min == 0);
+  assert(UITheme::paints[0].battery == 77 && UITheme::paints[1].battery == 66);
+  assert(UITheme::paints[0].charging && !UITheme::paints[1].charging);
+  assert(powerManager.batterySamples == 1);
   assert(UITheme::paints[0].environment.temperature == 231 && UITheme::paints[1].environment.temperature == 231);
   assert(powerManager.laterDelay == 59650000);
+  // Reconnecting changes the icon even if the ADC read fails.
+  gpio.charging = true;
+  powerManager.nextBattery = std::nullopt;
   epoch += 60;
   refreshAfterTimerWake(renderer);
   assert(renderer.updates.back() == HalDisplay::FAST_REFRESH);
   assert(UITheme::paints[2].date.tm_min == 0 && UITheme::paints[3].date.tm_min == 1);
+  assert(UITheme::paints[2].battery == 66 && UITheme::paints[3].battery == 66);
+  assert(!UITheme::paints[2].charging && UITheme::paints[3].charging);
+  assert(powerManager.batterySamples == 2);
   assert(hal_environment::sampleCount == 5);
 
   // A confirm held at boot returns to the calling normal-resume code.
@@ -176,6 +204,7 @@ int main() {
   epoch += 60;
   refreshAfterTimerWake(renderer);
   assert(UITheme::paints.size() == 4 && powerManager.laterDelay == 0);
+  assert(powerManager.batterySamples == 2);
 
   // Refresh only when due, preserving exactly the previously displayed numbers
   // for the old plane. A failed measurement becomes missing, not a made-up value.
@@ -196,9 +225,13 @@ int main() {
   epoch += 300;
   display.committed = false;
   hal_environment::nextReading = {284, 530};
+  powerManager.nextBattery = BatterySample{51};
+  gpio.charging = false;
   refreshAfterTimerWake(renderer);
   assert(powerManager.laterDelay == 0);
   assert(retained.humidity == hal_environment::Reading::missing);
+  assert(UITheme::paints.back().battery == 51 && retained.battery == 66);
+  assert(!UITheme::paints.back().charging && retained.charging);
   clear();
   epoch = 0;
   assert(!drawBeforeSleep(renderer));
@@ -247,21 +280,25 @@ int main() {
   refreshAfterTimerWake(renderer);
   assert(renderer.inversions == firstInversion + 2);
   assert(UITheme::paints.back().styleSeed == sketch.styleSeed);
+  assert(powerManager.batterySamples == 5);
   assert(!takeStandbyResume(false));  // An ordinary boot clears retained state.
 
   // A face selected in the standby app stays authoritative after timer wakes,
   // including reconstruction of the old frame and a fresh sensor sample.
   SETTINGS.sleepScreen = CrossPointSettings::CLOCK_SLOPPY;
+  SETTINGS.xuesuBatteryFullMv = 4183;
   hal_environment::nextReading = {247, 402};
   assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Landscape}));
   UITheme::paints.clear();
   hal_environment::nextReading = {249, 399};
+  powerManager.nextBattery = BatterySample{0};
   for (int minute = 1; minute <= 5; ++minute) {
     epoch += 60;
     refreshAfterTimerWake(renderer);
   }
   assert(UITheme::paints.size() == 10);
   for (const auto& paint : UITheme::paints) assert(paint.layout == Layout::Landscape);
+  assert(UITheme::paints[0].battery == 77 && UITheme::paints[1].battery == 0);
   assert(UITheme::paints[8].environment.humidity == 402 && UITheme::paints[9].environment.humidity == 399);
   assert(renderer.getOrientation() == GfxRenderer::Orientation::Portrait);
   assert(SETTINGS.sleepScreen == CrossPointSettings::CLOCK_SLOPPY);
@@ -293,7 +330,7 @@ int main() {
 
   // An older firmware's retained bytes cannot serve as a differential baseline.
   assert(drawBeforeSleep(renderer, FaceState{.layout=Layout::Newspaper}));
-  retained.magic = 0x58534333;
+  retained.magic = 0x58534335;
   UITheme::paints.clear();
   powerManager.laterDelay = 0;
   epoch += 60;
